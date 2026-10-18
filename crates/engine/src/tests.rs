@@ -7254,6 +7254,7 @@ fn a_japanese_region_starts_from_words_japanese_normal_template() {
     let grid = d.last_section.doc_grid.expect("line grid");
     assert_eq!((grid.kind, grid.line_pitch), (DocGridType::Lines, 18.0));
     assert!((d.last_section.header - 42.55).abs() < 0.01 && (d.last_section.footer - 49.6).abs() < 0.01);
+    assert!((d.last_section.columns.space - 21.25).abs() < 0.01, "425 twips between columns");
     assert_eq!((d.last_section.page_w, d.last_section.page_h), (595.28, 841.89), "A4 in Japan");
     assert_eq!(d.settings.east_asian_font(false, None, "漢字"), Some("游明朝"), "Han text follows the theme font language");
     // Typing Japanese into it lays out and saves without trouble; the new document command uses it.

@@ -363,12 +363,13 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let scale = parse_scale_arg("run", &rest)?;
             let mut s = match (arg_value(&rest, "--file"), arg_value(&rest, "--template")) {
                 (Some(f), _) => open(&f)?,
-                (None, Some(t)) => {
+                // No file: the Normal template for the region, as File › New gives it (a
+                // Japanese region's is 10.5 pt on an 18 pt grid, not the bare document).
+                (None, t) => {
                     let mut s = session(wordcraft_doc::Document::new());
-                    s.run("file.new", &json!({"template": t})).map_err(|e| e.to_string())?;
+                    s.run("file.new", &json!({"template": t.unwrap_or_else(|| "blank".into())})).map_err(|e| e.to_string())?;
                     s
                 }
-                _ => session(wordcraft_doc::Document::new()),
             };
             if let Some(name) = arg_value(&rest, "--author") {
                 set_author(&mut s, &name)?;
