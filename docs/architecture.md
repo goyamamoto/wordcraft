@@ -1,6 +1,6 @@
 # WordCraft architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (`proof` is per language: English and Polish; previously major: first committed version; `plan/architecture.md` is local-only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-19 · **Change:** trivial (`vendor/winit`: winit 0.30.13 with the macOS input-method patch; previously minor: `proof` is per language: English and Polish; previously major: first committed version; `plan/architecture.md` is local-only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 How WordCraft is built today (origin/main `40c5d51`). The longer design notes in
 `plan/architecture.md` are gitignored and local to the original author's machine; this file is the
@@ -11,6 +11,12 @@ committed, current summary. Rules for working in the code are in [`AGENTS.md`](.
 ~85,600 lines of Rust, 15 crates, 3 apps and `xtask`. Layering is enforced by `cargo xtask layers`:
 a crate may only depend on crates in lower layers, and nothing below L6 depends on egui, eframe,
 winit or rfd.
+
+winit itself comes from `vendor/winit` (`vendor/README.md`): the published 0.30.13 crate with one
+narrow macOS patch (`vendor/patches/winit/01-macos-ime-surrounding-text.md`) so the input method
+can read the caret's paragraph and reconvert committed text. The workspace manifest patches
+crates.io to it and excludes the directory from the workspace; `apps/wordcraft/tests/winit_*.rs`
+guard the override and the patch.
 
 | Layer | Crate | Lines | Job |
 |---|---|---|---|
@@ -64,5 +70,6 @@ winit or rfd.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | trivial | `vendor/winit`: winit 0.30.13 vendored with the macOS input-method patch (surrounding text, 再変換), guarded by `apps/wordcraft/tests/winit_*.rs` |
 | 2026-10-10 | minor | `proof`: proofing languages (English, Polish), affix engine, Polish patterns; layout and engine route each run by its language |
 | 2026-10-10 | major | First committed architecture doc, from the crates' sources and `AGENTS.md` |

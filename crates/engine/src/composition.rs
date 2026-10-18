@@ -8,8 +8,15 @@
 //! previous composition), [`Session::clear_composition`] takes it out, and every non-pure command
 //! takes it out before it runs (a committed composition arrives as `text.insert`, which goes
 //! through typing: AutoCorrect, tracked changes, the undo step).
+//!
+//! A selection within one paragraph is replaced by the composition — as the input method expects
+//! (its marked text takes the selection's place; on macOS, 再変換 of committed text selects it and
+//! marks it) and as Word shows it. The selected text is put back when the composition goes, so a
+//! dismissed composition leaves the document untouched, and the commit's `text.insert` replaces
+//! the selection for good.
 
 use wordcraft_doc::Pos;
+use wordcraft_doc::edit::Fragment;
 use wordcraft_doc::props::Underline;
 
 use crate::{CmdError, Selection, Session};
@@ -18,7 +25,7 @@ use crate::{CmdError, Selection, Session};
 pub const MAX_COMPOSITION: usize = 1024;
 
 /// Where the composition sits.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Composition {
     /// Its first character.
     pub start: Pos,
@@ -30,6 +37,9 @@ pub struct Composition {
     sel_before: Selection,
     /// Whether the document was dirty before (the composition never dirties it).
     dirty_before: bool,
+    /// The selected text the composition took the place of (a selection within one paragraph),
+    /// put back at `start` when the composition goes.
+    replaced: Option<Fragment>,
 }
 
 impl Session {
@@ -56,8 +66,20 @@ impl Session {
             self.bump_rev();
             return Ok(());
         }
-        // Where typing would go: the focus end of the selection, past any field end there.
-        let start = self.doc.past_field_ends(&sel_before.focus);
+        // Where typing would go: the focus end of the selection, past any field end there — or,
+        // for a selection within one paragraph, its start, in place of the selected text.
+        let (a, b) = sel_before.ordered();
+        let one_para = a != b && a.story == b.story && a.path == b.path;
+        let start = if one_para { a.clone() } else { self.doc.past_field_ends(&sel_before.focus) };
+        let replaced = if one_para {
+            let frag = self.doc.copy_range(&a, &b);
+            match self.doc.delete_range(&a, &b) {
+                Ok(_) => Some(frag),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
         let mut props = self.typing_props();
         props.fmt_change = None;
         props.ins = None;
@@ -90,7 +112,7 @@ impl Session {
                     None => end.clone(),
                 };
                 self.sel = Selection::caret(caret);
-                self.composition = Some(Composition { start, end, text, sel_before, dirty_before });
+                self.composition = Some(Composition { start, end, text, sel_before, dirty_before, replaced });
                 self.dirty = dirty_before;
                 self.bump_rev();
                 Ok(())
@@ -99,6 +121,9 @@ impl Session {
                 // Put back what went in before the failure, so nothing provisional stays.
                 if at != start {
                     let _ = self.doc.delete_range(&start, &at);
+                }
+                if let Some(frag) = &replaced {
+                    let _ = self.doc.insert_fragment(&start, frag);
                 }
                 self.sel = sel_before;
                 self.dirty = dirty_before;
@@ -121,6 +146,9 @@ impl Session {
 
     fn remove_composition(&mut self, c: &Composition) {
         let _ = self.doc.delete_range(&c.start, &c.end);
+        if let Some(frag) = &c.replaced {
+            let _ = self.doc.insert_fragment(&c.start, frag);
+        }
     }
 
     /// A new document revision for the layout, without dirtying the document.
@@ -178,6 +206,55 @@ mod tests {
         assert_eq!(text(&s), "ab");
     }
 
+    /// A selection within one paragraph is replaced by the composition (the input method's marked
+    /// text takes its place: 再変換 selects committed text and marks its reading), put back when
+    /// the composition is dismissed, and replaced for good by the committed text.
+    #[test]
+    fn composition_takes_the_place_of_a_selection() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("a日本語b"));
+        run(&mut s, "select.text", json!({"text": "日本語"}));
+        s.dirty = false;
+        s.set_composition("にほんご", Some(0..4)).unwrap();
+        assert_eq!(text(&s), "aにほんごb", "the selected text is gone while the composition shows");
+        assert_eq!(s.sel.focus.off, "aにほんご".len());
+        assert!(!s.dirty);
+        assert!(!s.can_undo());
+        s.set_composition("日本", None).unwrap();
+        assert_eq!(text(&s), "a日本b");
+        // Dismissed: the selected text and the selection are back.
+        s.set_composition("", None).unwrap();
+        assert_eq!(text(&s), "a日本語b");
+        assert_eq!(s.selected_text(), "日本語");
+        assert!(!s.dirty);
+        // Committed: the selection is replaced through typing (one undo step).
+        s.set_composition("にっぽんご", None).unwrap();
+        s.clear_composition();
+        run(&mut s, "text.insert", json!({"text": "日本"}));
+        assert_eq!(text(&s), "a日本b");
+        assert!(s.dirty);
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(text(&s), "a日本語b");
+        // A selection holding an object (a field) comes back whole.
+        let mut s = Session::new(wordcraft_doc::Document::from_text("x y"));
+        run(&mut s, "select.text", json!({"text": "y"}));
+        run(&mut s, "insert.field", json!({"instr": "PAGE", "result": "1"}));
+        run(&mut s, "select.all", json!({}));
+        let before = s.doc.para_at(&s.sel.focus).unwrap().clone();
+        s.set_composition("あ", None).unwrap();
+        assert_eq!(text(&s), "あ");
+        s.set_composition("", None).unwrap();
+        assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, before.text);
+        assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().objects.len(), before.objects.len(), "the field is back");
+        // A selection across paragraphs is left alone: the composition goes at the focus.
+        let mut s = Session::new(wordcraft_doc::Document::from_text("ab\ncd"));
+        run(&mut s, "caret.right", json!({}));
+        run(&mut s, "caret.down", json!({"extend": true}));
+        s.set_composition("あ", None).unwrap();
+        assert_eq!(text(&s), "ab\ncあd");
+        s.set_composition("", None).unwrap();
+        assert_eq!(text(&s), "ab\ncd");
+    }
+
     /// Typing's pending formatting (Bold pressed with nothing selected) shows on the composition
     /// and still applies to the committed text.
     #[test]
@@ -211,15 +288,16 @@ mod tests {
         assert!(!bytes.is_empty());
     }
 
-    /// With text selected the selection stays (the commit replaces it, as typing does); the
-    /// composition goes after its focus end.
+    /// With text selected the composition shows in its place; the selection is back for the
+    /// commit, which replaces it as typing does.
     #[test]
     fn composition_over_a_selection_keeps_it_for_the_commit() {
         let mut s = Session::new(wordcraft_doc::Document::from_text("abc"));
         run(&mut s, "select.all", json!({}));
         s.set_composition("あ", None).unwrap();
-        assert_eq!(text(&s), "abcあ");
+        assert_eq!(text(&s), "あ");
         s.clear_composition();
+        assert_eq!(text(&s), "abc");
         assert!(!s.sel.is_collapsed());
         run(&mut s, "text.insert", json!({"text": "亜"}));
         assert_eq!(text(&s), "亜");

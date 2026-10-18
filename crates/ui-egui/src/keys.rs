@@ -336,12 +336,22 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                 if !text.is_empty() {
                     crate::objects::enter_text_box(app);
                 }
+                // Reconversion (再変換): the input method names the committed text its
+                // composition replaces; that text is selected and the composition takes its place.
+                let replace = app.canvas.ime_replace.take();
+                if let Some(r) = replace
+                    && app.session.composition().is_none()
+                    && !text.is_empty()
+                {
+                    crate::ime::select_range(&mut app.session, r);
+                }
                 if let Err(e) = app.session.set_composition(&text, active_range_chars) {
                     app.status(e.to_string());
                 }
             }
             egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
                 app.canvas.ime_preedit.clear();
+                app.canvas.ime_replace = None;
                 app.session.clear_composition();
                 if !text.is_empty() {
                     crate::objects::enter_text_box(app);
