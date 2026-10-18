@@ -2234,3 +2234,7 @@
 # Reading Mode column widths (#1040)
 	Narrow	窄
 	Medium	中等
+	Half-width	半形
+	Full-width	全形
+	Hiragana	平假名
+	Katakana	片假名

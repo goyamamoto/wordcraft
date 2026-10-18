@@ -2240,3 +2240,7 @@
 # Reading Mode column widths (#1040)
 	Narrow	Étroite
 	Medium	Moyenne
+	Half-width	Demi-chasse
+	Full-width	Pleine chasse
+	Hiragana	Hiragana
+	Katakana	Katakana
