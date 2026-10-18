@@ -7263,3 +7263,122 @@ fn row_nil_overrides_style() {
     d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
     assert_eq!(rules_on_page0(&lay(&d)), vec![2.0]);
 }
+
+/// Cluster advances of a paragraph's text, in order.
+fn cluster_advances(d: &Document) -> Vec<f32> {
+    let l = lay(d);
+    for p in &l.pages {
+        for it in &p.items {
+            if let Placed::Lines { para, .. } = it {
+                return para
+                    .clusters
+                    .iter()
+                    .filter(|c| matches!(c.kind, crate::para::ClKind::Text | crate::para::ClKind::Space))
+                    .map(|c| c.adv)
+                    .collect();
+            }
+        }
+    }
+    Vec::new()
+}
+
+#[test]
+fn auto_space_adds_a_quarter_em_between_east_asian_letters_and_latin() {
+    // Measured in Word for Mac (Japanese Normal template, 10.5 pt): 漢字Latin漢字123漢字 has a 1/4
+    // em gap at each of the four boundaries; ＰＯＰ (full-width) and 。 before Latin get none.
+    let text = "漢字Latin漢字123漢字ＰＯＰ。end";
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(10.5), ..Default::default() };
+    let with = |de: bool, dn: bool| {
+        let mut d = Document::from_text("");
+        let mut p = wordcraft_doc::Paragraph::with_text(text, chr.clone());
+        p.props = ParaProps { auto_space_de: Some(de), auto_space_dn: Some(dn), ..Default::default() };
+        d.body = vec![wordcraft_doc::para_block(p)];
+        cluster_advances(&d)
+    };
+    let off = with(false, false);
+    let on = with(true, true);
+    assert_eq!(off.len(), text.chars().count());
+    let gaps: Vec<usize> = on.iter().zip(&off).enumerate().filter(|(_, (a, b))| (*a - *b).abs() > 0.01).map(|(i, _)| i).collect();
+    // 字→L (1), n→漢 (6), 字→1 (8), 3→漢 (11); not 字→Ｐ, Ｐ→。 or 。→e.
+    assert_eq!(gaps, vec![1, 6, 8, 11], "on {on:?} off {off:?}");
+    for i in gaps {
+        assert!((on[i] - off[i] - 10.5 / 4.0).abs() < 0.01, "a quarter em at {i}: {} vs {}", on[i], off[i]);
+    }
+    // Letters only: the digit boundaries keep their width; numbers only: the letter ones do.
+    let letters = with(true, false);
+    let digits = with(false, true);
+    let changed = |v: &[f32]| v.iter().zip(&off).enumerate().filter(|(_, (a, b))| (*a - *b).abs() > 0.01).map(|(i, _)| i).collect::<Vec<_>>();
+    assert_eq!(changed(&letters), vec![1, 6]);
+    assert_eq!(changed(&digits), vec![8, 11]);
+}
+
+#[test]
+fn compress_punctuation_halves_consecutive_full_width_marks() {
+    // Measured in Word for Mac (Japanese Normal template): in 「括弧」と（丸括弧）、句読点。。。、、、
+    // the ） before 、, every 。 and the first two 、 take half an em; the 、 before 句 and the
+    // last 、 keep their full width, as does 」 before と.
+    let text = "「括弧」と（丸括弧）、句読点。。。、、、";
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(10.5), ..Default::default() };
+    let with = |compress: bool| {
+        let mut d = Document::from_text("");
+        d.settings.punct_compression = if compress {
+            wordcraft_doc::east_asian::PunctCompression::CompressPunctuation
+        } else {
+            wordcraft_doc::east_asian::PunctCompression::DoNotCompress
+        };
+        d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, chr.clone()))];
+        cluster_advances(&d)
+    };
+    let off = with(false);
+    let on = with(true);
+    assert_eq!(off.len(), text.chars().count());
+    let halved: Vec<usize> = (0..off.len()).filter(|&i| (on[i] - off[i] / 2.0).abs() < 0.01 && off[i] > 0.0).collect();
+    let same: Vec<usize> = (0..off.len()).filter(|&i| (on[i] - off[i]).abs() < 0.01).collect();
+    let n = off.len();
+    // ） (9), 。(14, 15, 16), 、(17, 18) halved; everything else unchanged, including 、 (10)
+    // before 句, 」 (3) before と and the last 、 (19).
+    assert_eq!(halved, vec![9, 14, 15, 16, 17, 18], "on {on:?} off {off:?}");
+    assert_eq!(same.len(), n - 6, "on {on:?} off {off:?}");
+    assert!(same.contains(&3) && same.contains(&10) && same.contains(&(n - 1)));
+}
+
+#[test]
+fn east_asian_text_takes_the_theme_script_font_for_its_language() {
+    // Word draws Japanese in an Aptos paragraph with the theme's Jpan minor font (游明朝) and
+    // Chinese (zh-CN) with its Hans one; a run's own `w:eastAsia` font wins. The faces are
+    // whatever this machine has for them (游明朝 itself, or a substitute such as Hiragino
+    // Mincho); without any CJK font the check is moot.
+    let mincho = wordcraft_fonts::word::resolve("游明朝", false, false).face;
+    let hei = wordcraft_fonts::word::resolve("等线", false, false).face;
+    if !mincho.covers('語') || !hei.covers('语') {
+        return;
+    }
+    let face_of = |lang_ea: Option<&str>, font_ea: Option<&str>, text: &str| {
+        let chr = wordcraft_doc::CharProps {
+            font: Some("Source Sans 3".into()),
+            size: Some(12.0),
+            lang_ea: lang_ea.map(String::from),
+            font_ea: font_ea.map(String::from),
+            ..Default::default()
+        };
+        let mut d = Document::from_text("");
+        d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, chr))];
+        let l = lay(&d);
+        for p in &l.pages {
+            for it in &p.items {
+                if let Placed::Lines { para, .. } = it {
+                    let c = para.clusters.iter().find(|c| c.kind == crate::para::ClKind::Text).unwrap();
+                    return para.styles[c.style as usize].face.id();
+                }
+            }
+        }
+        u32::MAX
+    };
+    assert_eq!(face_of(Some("ja-JP"), None, "日本語"), mincho.id(), "Japanese: the Jpan minor font");
+    assert_eq!(face_of(None, None, "にほんご"), mincho.id(), "kana name the script without a language");
+    assert_eq!(face_of(Some("zh-CN"), None, "汉语"), hei.id(), "Chinese: the Hans minor font");
+    let gothic = wordcraft_fonts::word::resolve("ＭＳ ゴシック", false, false).face;
+    if gothic.covers('語') && gothic.id() != mincho.id() {
+        assert_eq!(face_of(Some("ja-JP"), Some("ＭＳ ゴシック"), "日本語"), gothic.id(), "the run's East Asian font, substituted, wins");
+    }
+}

@@ -737,15 +737,55 @@ impl Reader<'_> {
             let cs = |n: &str| fs.child(n).and_then(|f| f.child("a:cs")).and_then(|c| c.attr("typeface")).unwrap_or_default().to_string();
             self.pc.major_cs = cs("a:majorFont");
             self.pc.minor_cs = cs("a:minorFont");
+            // East Asian fonts: one for the slot (`a:ea`, usually empty) and one per script
+            // (`a:font script="Jpan"`…), bounded like everything read from a file.
+            let font_name = |v: Option<&str>| v.filter(|t| !t.is_empty() && t.len() <= 128).unwrap_or_default().to_string();
+            let ea = |n: &str| font_name(fs.child(n).and_then(|f| f.child("a:ea")).and_then(|c| c.attr("typeface")));
+            self.doc.settings.major_ea = ea("a:majorFont");
+            self.doc.settings.minor_ea = ea("a:minorFont");
+            let mut scripts: Vec<wordcraft_doc::east_asian::ScriptFonts> = Vec::new();
+            for (slot, major) in [("a:majorFont", true), ("a:minorFont", false)] {
+                let Some(f) = fs.child(slot) else { continue };
+                for font in f.children("a:font").take(64) {
+                    let Some(script) = font.attr("script").filter(|s| !s.is_empty() && s.len() <= 8) else { continue };
+                    let face = font_name(font.attr("typeface"));
+                    let at = match scripts.iter().position(|s| s.script == script) {
+                        Some(i) => i,
+                        None => {
+                            scripts.push(wordcraft_doc::east_asian::ScriptFonts { script: script.to_string(), ..Default::default() });
+                            scripts.len().saturating_sub(1)
+                        }
+                    };
+                    if let Some(entry) = scripts.get_mut(at) {
+                        if major { entry.major = face } else { entry.minor = face }
+                    }
+                }
+            }
+            // A theme without script fonts keeps the Office ones: Word draws its East Asian text
+            // with them when a theme names none.
+            if !scripts.is_empty() {
+                self.doc.settings.script_fonts = scripts;
+            }
+            self.pc.major_ea = self.doc.settings.major_ea.clone();
+            self.pc.minor_ea = self.doc.settings.minor_ea.clone();
+            self.pc.script_fonts = self.doc.settings.script_fonts.clone();
         }
         self.pc.major_font = self.doc.settings.major_font.clone();
         self.pc.minor_font = self.doc.settings.minor_font.clone();
         self.pc.theme = self.doc.settings.theme_colors.clone();
     }
 
-    /// `w:settings/w:clrSchemeMapping`: which scheme colour text1, background1… stand for.
+    /// What the styles need from the settings before they are read: `w:themeFontLang` (the
+    /// languages the theme fonts were chosen for, which pick the East Asian script font) and
+    /// `w:clrSchemeMapping` (which scheme colour text1, background1… stand for).
     fn read_color_mapping(&mut self, path: &str) {
         let Ok(Some(root)) = self.xml(path) else { return };
+        if let Some(l) = root.child("w:themeFontLang") {
+            let tag = |a: &str| l.attr(a).filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string);
+            self.doc.settings.theme_font_lang = tag("w:val");
+            self.doc.settings.theme_font_lang_ea = tag("w:eastAsia");
+            self.pc.theme_font_lang_ea = self.doc.settings.theme_font_lang_ea.clone();
+        }
         let Some(m) = root.child("w:clrSchemeMapping") else { return };
         let names = [
             "dark1",
@@ -1083,6 +1123,11 @@ impl Reader<'_> {
                     s.sum_paragraph_spacing = k.children("w:doNotUseHTMLParagraphAutoSpacing").any(on_off);
                 }
                 "w:trackRevisions" => s.track_changes = on_off(k),
+                "w:characterSpacingControl" => {
+                    if let Some(v) = k.attr("w:val").and_then(wordcraft_doc::east_asian::PunctCompression::parse) {
+                        s.punct_compression = v;
+                    }
+                }
                 "w:defaultTabStop" => {
                     if let Some(v) = tw(k, "w:val").filter(|v| *v > 0.0) {
                         s.default_tab = v.clamp(1.0, 1584.0);

@@ -1,0 +1,142 @@
+//! East Asian text in OOXML: the theme's fonts per script (`a:font script="Jpan"`), the
+//! `…EastAsia` theme slots, the East Asian language (`w:lang/@w:eastAsia`, `w:themeFontLang`)
+//! and punctuation compression (`w:characterSpacingControl`). Fixtures are hand-written from
+//! ECMA-376 Part 1 §17.3.2.26 (rFonts), §17.3.2.20 (lang), §17.15.1.11 (characterSpacingControl),
+//! §17.15.1.88 (themeFontLang) and Part 1 §20.1.4.1.16 (font scheme), after what Word for Mac
+//! writes with Japanese as its East Asian editing language.
+
+use std::io::{Read, Write};
+
+use wordcraft_doc::east_asian::{PunctCompression, ScriptFonts};
+use wordcraft_doc::props::CharProps;
+use wordcraft_doc::{Document, Paragraph, para_block};
+
+fn zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, bytes) in entries {
+        zw.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+        zw.write_all(bytes).unwrap();
+    }
+    zw.finish().unwrap().into_inner()
+}
+
+fn part(bytes: &[u8], name: &str) -> String {
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut s = String::new();
+    z.by_name(name).unwrap().read_to_string(&mut s).unwrap();
+    s
+}
+
+const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+const A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+
+/// A package as Word writes it for a Japanese document: the Office theme with script fonts, the
+/// document defaults in the `minorEastAsia` slot with `ja-JP` East Asian text, settings with the
+/// theme font languages and punctuation compression.
+fn japanese_docx() -> Vec<u8> {
+    let root = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+    let rels = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/></Relationships>"#;
+    let theme = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><a:theme xmlns:a="{A}" name="Office Theme"><a:themeElements><a:fontScheme name="Office"><a:majorFont><a:latin typeface="Aptos Display"/><a:ea typeface=""/><a:cs typeface=""/><a:font script="Jpan" typeface="游ゴシック Light"/><a:font script="Hang" typeface="맑은 고딕"/><a:font script="Hans" typeface="等线 Light"/><a:font script="Hant" typeface="新細明體"/></a:majorFont><a:minorFont><a:latin typeface="Aptos"/><a:ea typeface=""/><a:cs typeface=""/><a:font script="Jpan" typeface="游明朝"/><a:font script="Hang" typeface="맑은 고딕"/><a:font script="Hans" typeface="等线"/><a:font script="Hant" typeface="新細明體"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>"#
+    );
+    let styles = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><w:styles xmlns:w="{W}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:asciiTheme="minorHAnsi" w:eastAsiaTheme="minorEastAsia" w:hAnsiTheme="minorHAnsi" w:cstheme="minorBidi"/><w:kern w:val="2"/><w:sz w:val="21"/><w:szCs w:val="24"/><w:lang w:val="en-JP" w:eastAsia="ja-JP" w:bidi="ar-SA"/></w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:rPr><w:rFonts w:asciiTheme="majorHAnsi" w:eastAsiaTheme="majorEastAsia" w:hAnsiTheme="majorHAnsi"/></w:rPr></w:style></w:styles>"#
+    );
+    let settings = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><w:settings xmlns:w="{W}"><w:defaultTabStop w:val="840"/><w:characterSpacingControl w:val="compressPunctuation"/><w:themeFontLang w:val="en-JP" w:eastAsia="ja-JP"/></w:settings>"#
+    );
+    let doc = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="{W}"><w:body><w:p><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>漢字</w:t></w:r><w:r><w:rPr><w:rFonts w:eastAsiaTheme="minorEastAsia"/><w:lang w:eastAsia="zh-CN"/></w:rPr><w:t>汉字</w:t></w:r><w:r><w:rPr><w:rFonts w:eastAsiaTheme="majorEastAsia"/></w:rPr><w:t>見出し</w:t></w:r><w:r><w:rPr><w:rFonts w:eastAsia="ＭＳ 明朝" w:eastAsiaTheme="minorEastAsia"/></w:rPr><w:t>明朝</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>章</w:t></w:r></w:p></w:body></w:document>"#
+    );
+    zip(&[
+        ("_rels/.rels", root.as_bytes()),
+        ("word/_rels/document.xml.rels", rels.as_bytes()),
+        ("word/document.xml", doc.as_bytes()),
+        ("word/styles.xml", styles.as_bytes()),
+        ("word/settings.xml", settings.as_bytes()),
+        ("word/theme/theme1.xml", theme.as_bytes()),
+    ])
+}
+
+#[test]
+fn word_japanese_document_reads_its_theme_fonts_language_and_compression() {
+    let d = wordcraft_docx::read(&japanese_docx()).unwrap();
+    let s = &d.settings;
+    assert_eq!((s.major_font.as_str(), s.minor_font.as_str()), ("Aptos Display", "Aptos"));
+    assert_eq!((s.major_ea.as_str(), s.minor_ea.as_str()), ("", ""), "the theme names no single East Asian font");
+    let jpan = s.script_fonts.iter().find(|f| f.script == "Jpan").expect("Jpan fonts");
+    assert_eq!((jpan.major.as_str(), jpan.minor.as_str()), ("游ゴシック Light", "游明朝"));
+    assert_eq!(s.script_fonts.iter().map(|f| f.script.as_str()).collect::<Vec<_>>(), ["Jpan", "Hang", "Hans", "Hant"]);
+    assert_eq!((s.theme_font_lang.as_deref(), s.theme_font_lang_ea.as_deref()), (Some("en-JP"), Some("ja-JP")));
+    assert_eq!(s.punct_compression, PunctCompression::CompressPunctuation);
+    assert_eq!(s.default_tab, 42.0);
+    // Document defaults: the minor East Asian slot is 游明朝 for ja-JP text; the sizes as given.
+    let def = &d.styles.default_chr;
+    assert_eq!(def.font_ea.as_deref(), Some("游明朝"));
+    assert_eq!((def.lang.as_deref(), def.lang_ea.as_deref(), def.lang_bidi.as_deref()), (Some("en-JP"), Some("ja-JP"), Some("ar-SA")));
+    assert_eq!((def.size, def.size_cs), (Some(10.5), Some(12.0)));
+    // Heading 1 names the major slot: 游ゴシック Light through the document's East Asian language.
+    let h1 = d.styles.get("Heading1").expect("Heading1");
+    assert_eq!(h1.chr.font_ea.as_deref(), Some("游ゴシック Light"));
+    assert_eq!(h1.chr.font.as_deref(), Some("Aptos Display"));
+    let p = d.body[0].as_para().unwrap();
+    assert_eq!(p.runs[0].props.font_ea, None, "a hint alone inherits the default's font");
+    assert_eq!(p.runs[1].props.font_ea.as_deref(), Some("等线"), "the run's own East Asian language picks its script");
+    assert_eq!(p.runs[1].props.lang_ea.as_deref(), Some("zh-CN"));
+    assert_eq!(p.runs[2].props.font_ea.as_deref(), Some("游ゴシック Light"), "the major slot through the document's language");
+    assert_eq!(p.runs[3].props.font_ea.as_deref(), Some("游明朝"), "the theme slot wins over the named font beside it");
+    let h = d.body[1].as_para().unwrap();
+    assert_eq!(h.props.style.as_deref(), Some("Heading1"));
+    let resolved = d.styles.resolve_char(Some("Heading1"), &h.runs[0].props);
+    assert_eq!(resolved.font_ea.as_deref(), Some("游ゴシック Light"));
+    assert_eq!(resolved.lang_ea.as_deref(), Some("ja-JP"));
+}
+
+#[test]
+fn east_asian_theme_fonts_language_and_compression_round_trip() {
+    let mut d = Document::new();
+    d.settings.script_fonts = vec![
+        ScriptFonts { script: "Jpan".into(), major: "游ゴシック Light".into(), minor: "游明朝".into() },
+        ScriptFonts { script: "Hans".into(), major: "等线 Light".into(), minor: "等线".into() },
+    ];
+    d.settings.minor_ea = "SimSun".into();
+    d.settings.theme_font_lang = Some("en-US".into());
+    d.settings.theme_font_lang_ea = Some("ja-JP".into());
+    d.settings.punct_compression = PunctCompression::CompressPunctuationAndJapaneseKana;
+    d.styles.default_chr.lang_ea = Some("ja-JP".into());
+    let run = CharProps { lang: Some("en-US".into()), lang_ea: Some("ko-KR".into()), lang_bidi: Some("ar-SA".into()), ..Default::default() };
+    d.body = vec![para_block(Paragraph::with_text("한국어", run.clone()))];
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let theme = part(&bytes, "word/theme/theme1.xml");
+    assert!(theme.contains(r#"<a:font script="Jpan" typeface="游明朝"/>"#), "{theme}");
+    assert!(theme.contains(r#"<a:font script="Hans" typeface="等线 Light"/>"#), "{theme}");
+    assert!(theme.contains(r#"<a:ea typeface="SimSun"/>"#), "{theme}");
+    let settings = part(&bytes, "word/settings.xml");
+    assert!(settings.contains(r#"<w:characterSpacingControl w:val="compressPunctuationAndJapaneseKana"/>"#), "{settings}");
+    assert!(settings.contains(r#"<w:themeFontLang w:val="en-US" w:eastAsia="ja-JP"/>"#), "{settings}");
+    let document = part(&bytes, "word/document.xml");
+    assert!(document.contains(r#"<w:lang w:val="en-US" w:eastAsia="ko-KR" w:bidi="ar-SA"/>"#), "{document}");
+    let r = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(r.settings.script_fonts, d.settings.script_fonts);
+    assert_eq!((r.settings.major_ea.as_str(), r.settings.minor_ea.as_str()), ("", "SimSun"));
+    assert_eq!((r.settings.theme_font_lang.as_deref(), r.settings.theme_font_lang_ea.as_deref()), (Some("en-US"), Some("ja-JP")));
+    assert_eq!(r.settings.punct_compression, PunctCompression::CompressPunctuationAndJapaneseKana);
+    assert_eq!(r.styles.default_chr.lang_ea.as_deref(), Some("ja-JP"));
+    let p = r.body[0].as_para().unwrap();
+    assert_eq!(p.runs[0].props.lang_ea.as_deref(), Some("ko-KR"));
+    assert_eq!(p.runs[0].props.lang_bidi.as_deref(), Some("ar-SA"));
+}
+
+#[test]
+fn a_document_without_theme_script_fonts_keeps_the_office_ones() {
+    // A new document carries Word's Office script fonts, and a file whose theme names none
+    // keeps them (Word draws East Asian text with them in that case).
+    let d = Document::new();
+    assert_eq!(d.settings.east_asian_font(false, Some("ja-JP"), "漢字"), Some("游明朝"));
+    assert_eq!(d.settings.punct_compression, PunctCompression::DoNotCompress);
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let r = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(r.settings.script_fonts, d.settings.script_fonts);
+    assert_eq!(r.settings.east_asian_font(false, None, "かな"), Some("游明朝"));
+    assert_eq!(r.settings.east_asian_font(false, None, "漢字"), None, "Han alone names no script");
+}

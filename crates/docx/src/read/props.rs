@@ -46,6 +46,13 @@ pub struct PropCtx {
     /// The theme's complex-script fonts (`a:cs`), which the `…Bidi` theme slots name.
     pub major_cs: String,
     pub minor_cs: String,
+    /// The theme's East Asian fonts (`a:ea`, usually empty) and its fonts per script, which the
+    /// `…EastAsia` theme slots name through the run's East Asian language (else the document's
+    /// `w:themeFontLang`).
+    pub major_ea: String,
+    pub minor_ea: String,
+    pub script_fonts: Vec<wordcraft_doc::east_asian::ScriptFonts>,
+    pub theme_font_lang_ea: Option<String>,
     /// The theme's colour scheme (dk1, lt1, dk2, lt2, accent1..6, hlink, folHlink); empty when the
     /// package has none, and then `w:themeColor` falls back to the fixed colour.
     pub theme_colors: Vec<Rgb>,
@@ -144,6 +151,8 @@ impl PropCtx {
 
     pub fn rpr(&self, e: &El) -> CharProps {
         let mut c = CharProps::default();
+        // `w:eastAsiaTheme`: the slot (major?) resolved once the run's language is known.
+        let mut ea_theme: Option<bool> = None;
         for k in e.els() {
             match k.name.as_str() {
                 "w:rStyle" => c.style = k.attr("w:val").filter(|v| !v.is_empty()).map(|v| self.style_id(v)),
@@ -171,9 +180,15 @@ impl PropCtx {
                     // The complex-script font (Persian, Arabic, Hebrew text). A `w:cstheme` font is
                     // left to inherit: the theme's per-script fonts aren't read.
                     c.font_cs = k.attr("w:cs").filter(|f| !f.is_empty() && f.len() < 256).map(str::to_string);
-                    // The East Asian font (Chinese, Japanese, Korean text). A `w:eastAsiaTheme` font
-                    // is left to inherit, like `w:cstheme`.
+                    // The East Asian font (Chinese, Japanese, Korean text). A `w:eastAsiaTheme`
+                    // slot names the theme's font for the text's East Asian script (resolved below);
+                    // a named `w:eastAsia` beside it is what Word falls back to.
                     c.font_ea = k.attr("w:eastAsia").filter(|f| !f.is_empty() && f.len() < 256).map(str::to_string);
+                    ea_theme = match k.attr("w:eastAsiaTheme") {
+                        Some("majorEastAsia") => Some(true),
+                        Some("minorEastAsia") => Some(false),
+                        _ => None,
+                    };
                 }
                 "w:b" => c.bold = Some(on_off(k)),
                 "w:bCs" => c.bold_cs = Some(on_off(k)),
@@ -227,6 +242,7 @@ impl PropCtx {
                 "w:lang" => {
                     c.lang = k.attr("w:val").filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string);
                     c.lang_bidi = k.attr("w:bidi").filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string);
+                    c.lang_ea = k.attr("w:eastAsia").filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string);
                 }
                 n if n.starts_with("w14:") => {
                     let fx = c.text_effects.get_or_insert_with(Default::default);
@@ -236,6 +252,17 @@ impl PropCtx {
                     }
                 }
                 _ => {}
+            }
+        }
+        if let Some(major) = ea_theme {
+            // The theme font for the run's East Asian language (or the document's). Text whose
+            // language neither gives is left to the layout, which picks the script from the
+            // characters (kana, Hangul) through the same theme fonts.
+            let ea = if major { &self.major_ea } else { &self.minor_ea };
+            if let Some(f) =
+                wordcraft_doc::east_asian::theme_font(ea, &self.script_fonts, major, c.lang_ea.as_deref(), self.theme_font_lang_ea.as_deref(), "")
+            {
+                c.font_ea = Some(f.to_string());
             }
         }
         c

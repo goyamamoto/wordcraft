@@ -372,6 +372,10 @@ pub struct CharProps {
     /// BCP 47 language of complex-script text (`w:lang/@w:bidi`, e.g. `fa-IR`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lang_bidi: Option<String>,
+    /// BCP 47 language of East Asian text (`w:lang/@w:eastAsia`, e.g. `ja-JP`): which script's
+    /// theme font Chinese, Japanese and Korean characters take, and their proofing language.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lang_ea: Option<String>,
     /// Hyperlink target: a URL, or `#bookmark` for an internal link.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
@@ -442,7 +446,7 @@ impl CharProps {
     pub fn minus(mut self, base: &CharProps) -> CharProps {
         drop_same_fields!(self, base; style, font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
             shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl,
-            cs, font_cs, size_cs, bold_cs, italic_cs, lang_bidi, link, ins, del);
+            cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, link, ins, del);
         self
     }
 
@@ -453,7 +457,7 @@ impl CharProps {
     pub fn overlay(&mut self, patch: &CharProps) {
         overlay_fields!(self, patch; style, font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
             shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl,
-            cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, link, ins, del, fmt_change);
+            cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, link, ins, del, fmt_change);
         if let Some(p) = &patch.text_effects {
             self.text_effects.get_or_insert_with(Default::default).overlay(p);
         }

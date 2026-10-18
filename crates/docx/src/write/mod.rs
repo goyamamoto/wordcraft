@@ -1036,7 +1036,7 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, template_rel: O
             w.val(tag, &crate::units::twips(v.clamp(0.5, 1584.0)));
         }
     }
-    w.val("w:characterSpacingControl", "doNotCompress");
+    w.val("w:characterSpacingControl", s.punct_compression.as_str());
     for (tag, fmt, pr, used, el) in [
         ("w:footnotePr", s.footnote_format, &s.footnote_pr, footnotes, "w:footnote"),
         ("w:endnotePr", s.endnote_format, &s.endnote_pr, endnotes, "w:endnote"),
@@ -1066,6 +1066,14 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, template_rel: O
     w.close("w:compat");
     if let Some(m) = &s.math {
         math::math_pr(&mut w, m);
+    }
+    // CT_Settings puts `w:themeFontLang` after `m:mathPr`.
+    let lang: Vec<(&str, &str)> = [("w:val", &s.theme_font_lang), ("w:eastAsia", &s.theme_font_lang_ea)]
+        .into_iter()
+        .filter_map(|(a, v)| v.as_deref().map(|v| (a, v)))
+        .collect();
+    if !lang.is_empty() {
+        w.empty("w:themeFontLang", &lang);
     }
     w.close("w:settings");
     w.into_bytes()
@@ -1157,11 +1165,18 @@ fn theme_xml(doc: &Document) -> Vec<u8> {
     }
     w.close("a:clrScheme");
     w.open("a:fontScheme", &[("name", name)]);
-    for (tag, face) in [("a:majorFont", &s.major_font), ("a:minorFont", &s.minor_font)] {
+    for (tag, face, ea, major) in [("a:majorFont", &s.major_font, &s.major_ea, true), ("a:minorFont", &s.minor_font, &s.minor_ea, false)] {
         w.open(tag, &[]);
         w.empty("a:latin", &[("typeface", face)]);
-        w.empty("a:ea", &[("typeface", "")]);
+        w.empty("a:ea", &[("typeface", ea)]);
         w.empty("a:cs", &[("typeface", "")]);
+        // The East Asian script fonts (Jpan, Hans, Hant, Hang…): what `…EastAsia` slots draw.
+        for sf in s.script_fonts.iter().take(64) {
+            let face = if major { &sf.major } else { &sf.minor };
+            if !sf.script.is_empty() && !face.is_empty() {
+                w.empty("a:font", &[("script", &sf.script), ("typeface", face)]);
+            }
+        }
         w.close(tag);
     }
     w.close("a:fontScheme");

@@ -7232,3 +7232,47 @@ fn vertical_align_command_sets_justified() {
         assert_eq!(serde_json::to_value(crate::cmd::page::sect(&s)).unwrap()["valign"], json!(name));
     }
 }
+
+#[test]
+fn a_japanese_region_starts_from_words_japanese_normal_template() {
+    use wordcraft_doc::props::LineSpacing;
+    use wordcraft_doc::section::DocGridType;
+    // Measured in Word for Mac with Japanese as the East Asian editing language (a fresh
+    // Normal.dotm): 10.5 pt, single spacing, no space after, no widow control, an 18 pt line
+    // grid, 42 pt tabs, header 851 / footer 992 twips, punctuation compression, ja-JP East Asian
+    // text and theme font language.
+    let mut s = s();
+    s.system_region = wordcraft_geom::Region::from_tag("ja-JP");
+    let d = s.blank_document();
+    let chr = &d.styles.default_chr;
+    assert_eq!((chr.size, chr.size_cs, chr.lang_ea.as_deref()), (Some(10.5), Some(12.0), Some("ja-JP")));
+    let para = &d.styles.default_para;
+    assert_eq!((para.line_spacing, para.space_after, para.widow_control), (Some(LineSpacing::Multiple(1.0)), Some(0.0), Some(false)));
+    assert_eq!(d.settings.theme_font_lang_ea.as_deref(), Some("ja-JP"));
+    assert_eq!(d.settings.punct_compression, wordcraft_doc::east_asian::PunctCompression::CompressPunctuation);
+    assert_eq!(d.settings.default_tab, 42.0);
+    let grid = d.last_section.doc_grid.expect("line grid");
+    assert_eq!((grid.kind, grid.line_pitch), (DocGridType::Lines, 18.0));
+    assert!((d.last_section.header - 42.55).abs() < 0.01 && (d.last_section.footer - 49.6).abs() < 0.01);
+    assert_eq!((d.last_section.page_w, d.last_section.page_h), (595.28, 841.89), "A4 in Japan");
+    assert_eq!(d.settings.east_asian_font(false, None, "漢字"), Some("游明朝"), "Han text follows the theme font language");
+    // Typing Japanese into it lays out and saves without trouble; the new document command uses it.
+    run(&mut s, "file.new", json!({}));
+    assert_eq!(s.doc.styles.default_chr.size, Some(10.5));
+    run(&mut s, "text.insert", json!({"text": "漢字Latin。"}));
+    let bytes = wordcraft_docx::write(&s.doc).unwrap();
+    let back = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(back.styles.default_chr.lang_ea.as_deref(), Some("ja-JP"));
+    assert_eq!(back.last_section.doc_grid.map(|g| g.kind), Some(DocGridType::Lines));
+    // Other regions keep the English Normal; Chinese and Korean ones only set the theme font language.
+    s.system_region = wordcraft_geom::Region::from_tag("en-US");
+    let us = s.blank_document();
+    assert_eq!((us.styles.default_chr.size, us.last_section.doc_grid, us.settings.theme_font_lang_ea), (Some(12.0), None, None));
+    s.system_region = wordcraft_geom::Region::from_tag("zh-TW");
+    assert_eq!(s.blank_document().settings.theme_font_lang_ea.as_deref(), Some("zh-TW"));
+    s.system_region = wordcraft_geom::Region::from_tag("zh-CN");
+    let cn = s.blank_document();
+    assert_eq!((cn.settings.theme_font_lang_ea.as_deref(), cn.styles.default_chr.size), (Some("zh-CN"), Some(12.0)));
+    s.system_region = wordcraft_geom::Region::from_tag("ko-KR");
+    assert_eq!(s.blank_document().settings.theme_font_lang_ea.as_deref(), Some("ko-KR"));
+}

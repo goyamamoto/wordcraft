@@ -67,6 +67,9 @@ fn substitutes(family: &str) -> &'static [&'static str] {
         "Source Serif 4",
     ];
     let f = family.to_ascii_lowercase();
+    if let Some(cjk) = cjk_substitutes(&f) {
+        return cjk;
+    }
     if is_hebrew(&f) {
         return HEBREW;
     }
@@ -98,6 +101,286 @@ fn substitutes(family: &str) -> &'static [&'static str] {
         _ if f.contains("serif") && !f.contains("sans") => SERIF,
         _ => SANS,
     }
+}
+
+/// Substitutes for the Chinese, Japanese and Korean document fonts Word's themes and templates
+/// name (游明朝, ＭＳ 明朝, Meiryo, 等线, 宋体, 新細明體, 맑은 고딕…), by their English or native
+/// names: the platform's own fonts of the same style first (Hiragino on macOS, the Windows fonts
+/// when running there), then the open pan-CJK families (Noto / Source Han, BIZ UD, IPAex, Nanum).
+/// `None` for a name that isn't one of them.
+fn cjk_substitutes(lower: &str) -> Option<&'static [&'static str]> {
+    const MINCHO: &[&str] = &[
+        "Yu Mincho",
+        "YuMincho",
+        "Hiragino Mincho ProN",
+        "Hiragino Mincho Pro",
+        "MS Mincho",
+        "MS PMincho",
+        "BIZ UDPMincho",
+        "BIZ UDMincho",
+        "Noto Serif CJK JP",
+        "Noto Serif JP",
+        "Source Han Serif JP",
+        "Source Han Serif",
+        "IPAexMincho",
+        "IPAMincho",
+        "Toppan Bunkyu Mincho",
+        "Hiragino Sans",
+        "Noto Sans CJK JP",
+    ];
+    const GOTHIC: &[&str] = &[
+        "Yu Gothic",
+        "YuGothic",
+        "Hiragino Sans",
+        "Hiragino Kaku Gothic ProN",
+        "Hiragino Kaku Gothic Pro",
+        "Meiryo",
+        "MS Gothic",
+        "MS PGothic",
+        "BIZ UDPGothic",
+        "BIZ UDGothic",
+        "Noto Sans CJK JP",
+        "Noto Sans JP",
+        "Source Han Sans JP",
+        "Source Han Sans",
+        "IPAexGothic",
+        "IPAGothic",
+        "VL Gothic",
+    ];
+    const SANS_SC: &[&str] = &[
+        "Microsoft YaHei",
+        "DengXian",
+        "PingFang SC",
+        "Hiragino Sans GB",
+        "Heiti SC",
+        "STHeiti",
+        "SimHei",
+        "Noto Sans CJK SC",
+        "Noto Sans SC",
+        "Source Han Sans SC",
+        "Source Han Sans CN",
+        "WenQuanYi Micro Hei",
+        "WenQuanYi Zen Hei",
+    ];
+    const SERIF_SC: &[&str] = &[
+        "SimSun",
+        "Songti SC",
+        "STSong",
+        "Noto Serif CJK SC",
+        "Noto Serif SC",
+        "Source Han Serif SC",
+        "Source Han Serif CN",
+        "AR PL UMing CN",
+        "PingFang SC",
+    ];
+    const SANS_TC: &[&str] = &[
+        "Microsoft JhengHei",
+        "PingFang TC",
+        "Heiti TC",
+        "PingFang HK",
+        "Noto Sans CJK TC",
+        "Noto Sans TC",
+        "Source Han Sans TC",
+        "Source Han Sans TW",
+    ];
+    const SERIF_TC: &[&str] = &[
+        "PMingLiU",
+        "MingLiU",
+        "Songti TC",
+        "LiSong Pro",
+        "Noto Serif CJK TC",
+        "Noto Serif TC",
+        "Source Han Serif TC",
+        "Source Han Serif TW",
+        "AR PL UMing TW",
+        "PingFang TC",
+    ];
+    const SANS_KR: &[&str] = &[
+        "Malgun Gothic",
+        "Apple SD Gothic Neo",
+        "AppleGothic",
+        "Noto Sans CJK KR",
+        "Noto Sans KR",
+        "Source Han Sans KR",
+        "Source Han Sans K",
+        "NanumGothic",
+        "Nanum Gothic",
+        "Gulim",
+        "Dotum",
+    ];
+    const SERIF_KR: &[&str] = &[
+        "Batang",
+        "AppleMyungjo",
+        "Noto Serif CJK KR",
+        "Noto Serif KR",
+        "Source Han Serif KR",
+        "Source Han Serif K",
+        "NanumMyeongjo",
+        "Nanum Myeongjo",
+        "Gungsuh",
+    ];
+    // Full-width ASCII (ＭＳ Ｐ明朝) as ASCII, lower case, single spaces.
+    let mut base = String::with_capacity(lower.len());
+    for c in lower.trim().chars() {
+        let c = match u32::from(c) {
+            0xFF01..=0xFF5E => char::from_u32(u32::from(c) - 0xFF01 + 0x21).unwrap_or(c),
+            0x3000 => ' ',
+            _ => c,
+        };
+        if c == ' ' && base.ends_with(' ') {
+            continue;
+        }
+        base.extend(c.to_lowercase());
+    }
+    let chain = match base.as_str() {
+        "游明朝"
+        | "yu mincho"
+        | "yumincho"
+        | "游明朝 demibold"
+        | "yu mincho demibold"
+        | "ms mincho"
+        | "ms 明朝"
+        | "ms pmincho"
+        | "ms p明朝"
+        | "hiragino mincho pron"
+        | "hiragino mincho pro"
+        | "ヒラギノ明朝 pron"
+        | "ヒラギノ明朝 pro"
+        | "biz udmincho"
+        | "biz udpmincho"
+        | "biz udmincho medium"
+        | "biz udpmincho medium"
+        | "ud デジタル 教科書体 n-r"
+        | "ud デジタル 教科書体 nk-r"
+        | "ud デジタル 教科書体 np-r"
+        | "ud digi kyokasho n-r"
+        | "ud digi kyokasho nk-r"
+        | "ud digi kyokasho np-r"
+        | "hgp明朝e"
+        | "hg明朝e"
+        | "hgs明朝e"
+        | "hgp明朝b"
+        | "hg明朝b"
+        | "hgs明朝b"
+        | "ipaexmincho"
+        | "ipamincho"
+        | "ipapmincho"
+        | "noto serif cjk jp"
+        | "noto serif jp"
+        | "source han serif jp" => MINCHO,
+        "游ゴシック"
+        | "yu gothic"
+        | "yugothic"
+        | "游ゴシック light"
+        | "yu gothic light"
+        | "游ゴシック medium"
+        | "yu gothic medium"
+        | "yu gothic ui"
+        | "ms gothic"
+        | "ms ゴシック"
+        | "ms pgothic"
+        | "ms pゴシック"
+        | "ms ui gothic"
+        | "meiryo"
+        | "メイリオ"
+        | "meiryo ui"
+        | "hiragino sans"
+        | "hiragino kaku gothic pron"
+        | "hiragino kaku gothic pro"
+        | "hiragino kaku gothic std"
+        | "hiragino kaku gothic stdn"
+        | "ヒラギノ角ゴ pron"
+        | "ヒラギノ角ゴ pro"
+        | "ヒラギノ角ゴシック"
+        | "biz udgothic"
+        | "biz udpgothic"
+        | "hggothice"
+        | "hgpgothice"
+        | "hgsgothice"
+        | "hggothicm"
+        | "hgpgothicm"
+        | "hgsgothicm"
+        | "ipaexgothic"
+        | "ipagothic"
+        | "ipapgothic"
+        | "noto sans cjk jp"
+        | "noto sans jp"
+        | "source han sans jp" => GOTHIC,
+        "等线" | "dengxian" | "等线 light" | "dengxian light" | "微软雅黑" | "microsoft yahei" | "microsoft yahei ui" | "黑体" | "simhei"
+        | "pingfang sc" | "苹方-简" | "hiragino sans gb" | "noto sans cjk sc" | "noto sans sc" | "source han sans sc" | "source han sans cn" => {
+            SANS_SC
+        }
+        "宋体"
+        | "simsun"
+        | "新宋体"
+        | "nsimsun"
+        | "仿宋"
+        | "fangsong"
+        | "楷体"
+        | "kaiti"
+        | "songti sc"
+        | "stsong"
+        | "华文宋体"
+        | "noto serif cjk sc"
+        | "noto serif sc"
+        | "source han serif sc"
+        | "source han serif cn" => SERIF_SC,
+        "微軟正黑體"
+        | "microsoft jhenghei"
+        | "microsoft jhenghei ui"
+        | "pingfang tc"
+        | "pingfang hk"
+        | "苹方-繁"
+        | "noto sans cjk tc"
+        | "noto sans tc"
+        | "source han sans tc"
+        | "source han sans tw" => SANS_TC,
+        "新細明體"
+        | "pmingliu"
+        | "細明體"
+        | "mingliu"
+        | "標楷體"
+        | "dfkai-sb"
+        | "songti tc"
+        | "noto serif cjk tc"
+        | "noto serif tc"
+        | "source han serif tc"
+        | "source han serif tw" => SERIF_TC,
+        "맑은 고딕"
+        | "malgun gothic"
+        | "굴림"
+        | "gulim"
+        | "돋움"
+        | "dotum"
+        | "apple sd gothic neo"
+        | "applegothic"
+        | "noto sans cjk kr"
+        | "noto sans kr"
+        | "source han sans kr"
+        | "source han sans k"
+        | "nanumgothic"
+        | "nanum gothic" => SANS_KR,
+        "바탕"
+        | "batang"
+        | "궁서"
+        | "gungsuh"
+        | "applemyungjo"
+        | "noto serif cjk kr"
+        | "noto serif kr"
+        | "source han serif kr"
+        | "source han serif k"
+        | "nanummyeongjo"
+        | "nanum myeongjo" => SERIF_KR,
+        _ => return None,
+    };
+    Some(chain)
+}
+
+/// Is `family` a Chinese, Japanese or Korean document font by name (one with CJK substitutes)?
+/// A run's East Asian font that isn't installed is then drawn with its substitute instead of the
+/// per-character fallback faces.
+pub fn is_cjk_family(family: &str) -> bool {
+    cjk_substitutes(&family.to_ascii_lowercase()).is_some()
 }
 
 /// The font a Windows 3.1-era charset name stands for: `Times New Roman Cyr`, `Arial CE`,
@@ -291,6 +574,26 @@ mod tests {
         // A negative gap adds nothing; the most negative descender doesn't overflow.
         assert_eq!(hhea_line(1000, -300, -50), (1000.0, 300.0));
         assert_eq!(hhea_line(1000, i16::MIN, 0), (1000.0, 32768.0));
+    }
+
+    #[test]
+    fn cjk_document_fonts_have_substitutes_by_either_name() {
+        // Word's theme and template fonts by their English or native names, Japanese Mincho and
+        // Gothic apart, and the Chinese and Korean families in their own chains.
+        let chain = |f: &str| substitutes(f);
+        assert_eq!(chain("游明朝"), chain("Yu Mincho"));
+        assert_eq!(chain("ＭＳ 明朝"), chain("MS PMincho"));
+        assert_ne!(chain("游明朝"), chain("游ゴシック"));
+        assert_eq!(chain("メイリオ"), chain("Meiryo UI"));
+        assert!(chain("游明朝").contains(&"Hiragino Mincho ProN") && chain("游明朝").contains(&"Noto Serif CJK JP"));
+        assert!(chain("Yu Gothic").contains(&"Hiragino Sans") && chain("Yu Gothic").contains(&"BIZ UDPGothic"));
+        assert_eq!(chain("等线"), chain("DengXian"));
+        assert_eq!(chain("宋体"), chain("SimSun"));
+        assert_eq!(chain("新細明體"), chain("PMingLiU"));
+        assert_eq!(chain("맑은 고딕"), chain("Malgun Gothic"));
+        assert!(is_cjk_family("ＭＳ 明朝") && is_cjk_family("yu gothic ui") && !is_cjk_family("Arial") && !is_cjk_family(""));
+        // A CJK name resolves to a face (installed, a substitute, or the last resort) without panicking.
+        let _ = resolve("游明朝", true, false);
     }
 
     #[test]

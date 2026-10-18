@@ -110,6 +110,7 @@ fn every_char_prop_round_trips() {
         bold_cs: Some(false),
         italic_cs: Some(true),
         lang_bidi: Some("fa-IR".into()),
+        lang_ea: Some("zh-CN".into()),
         link: None,
         ins: None,
         del: None,
