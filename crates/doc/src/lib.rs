@@ -486,6 +486,9 @@ pub struct Settings {
     /// Full-width punctuation compression (`w:characterSpacingControl`).
     #[serde(default)]
     pub punct_compression: east_asian::PunctCompression,
+    /// Custom kinsoku characters per language (`w:noLineBreaksBefore`/`After`); empty = Word's
+    /// standard lists.
+    pub kinsoku_chars: Vec<east_asian::KinsokuChars>,
     /// Theme colours: dk1 lt1 dk2 lt2 accent1..6 hlink folHlink.
     pub theme_colors: Vec<Rgb>,
     pub theme_name: String,
@@ -651,6 +654,7 @@ impl Default for Settings {
             theme_font_lang: None,
             theme_font_lang_ea: None,
             punct_compression: east_asian::PunctCompression::DoNotCompress,
+            kinsoku_chars: Vec::new(),
             theme_colors: THEME_COLORS.to_vec(),
             theme_name: "Craft".into(),
             footnote_format: section::NumFormat::Decimal,

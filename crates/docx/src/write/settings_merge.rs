@@ -32,6 +32,8 @@ const OWNED: &[&str] = &[
     "w:drawingGridHorizontalSpacing",
     "w:drawingGridVerticalSpacing",
     "w:characterSpacingControl",
+    "w:noLineBreaksAfter",
+    "w:noLineBreaksBefore",
     "w:footnotePr",
     "w:endnotePr",
     "m:mathPr",

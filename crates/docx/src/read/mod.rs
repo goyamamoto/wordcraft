@@ -1128,6 +1128,25 @@ impl Reader<'_> {
                         s.punct_compression = v;
                     }
                 }
+                "w:noLineBreaksBefore" | "w:noLineBreaksAfter" => {
+                    let lang = k.attr("w:lang").unwrap_or("").trim().to_string();
+                    let chars: String = k.attr("w:val").unwrap_or("").chars().take(wordcraft_doc::east_asian::MAX_KINSOKU_CHARS).collect();
+                    let entry = match s.kinsoku_chars.iter().position(|e| e.lang == lang) {
+                        Some(i) => s.kinsoku_chars.get_mut(i),
+                        None if s.kinsoku_chars.len() < 64 => {
+                            s.kinsoku_chars.push(wordcraft_doc::east_asian::KinsokuChars { lang, ..Default::default() });
+                            s.kinsoku_chars.last_mut()
+                        }
+                        None => None,
+                    };
+                    if let Some(e) = entry {
+                        if k.name == "w:noLineBreaksBefore" {
+                            e.no_start = chars;
+                        } else {
+                            e.no_end = chars;
+                        }
+                    }
+                }
                 "w:defaultTabStop" => {
                     if let Some(v) = tw(k, "w:val").filter(|v| *v > 0.0) {
                         s.default_tab = v.clamp(1.0, 1584.0);

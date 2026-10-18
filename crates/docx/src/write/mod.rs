@@ -1037,6 +1037,13 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, template_rel: O
         }
     }
     w.val("w:characterSpacingControl", s.punct_compression.as_str());
+    for k in s.kinsoku_chars.iter().filter(|k| !k.no_start.is_empty() || !k.no_end.is_empty()) {
+        for (tag, chars) in [("w:noLineBreaksAfter", &k.no_end), ("w:noLineBreaksBefore", &k.no_start)] {
+            if !chars.is_empty() {
+                w.empty(tag, &[("w:lang", k.lang.as_str()), ("w:val", chars.as_str())]);
+            }
+        }
+    }
     for (tag, fmt, pr, used, el) in [
         ("w:footnotePr", s.footnote_format, &s.footnote_pr, footnotes, "w:footnote"),
         ("w:endnotePr", s.endnote_format, &s.endnote_pr, endnotes, "w:endnote"),
