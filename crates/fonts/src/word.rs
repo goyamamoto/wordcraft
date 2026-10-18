@@ -174,118 +174,118 @@ pub fn cjk_font_names(family: &str) -> Option<(&'static str, &'static str, &'sta
     NAMES.iter().copied().find(|(e, n, _)| fold_cjk_name(e) == base || fold_cjk_name(n) == base)
 }
 
+const MINCHO: &[&str] = &[
+    "Yu Mincho",
+    "YuMincho",
+    "Hiragino Mincho ProN",
+    "Hiragino Mincho Pro",
+    "MS Mincho",
+    "MS PMincho",
+    "BIZ UDPMincho",
+    "BIZ UDMincho",
+    "Noto Serif CJK JP",
+    "Noto Serif JP",
+    "Source Han Serif JP",
+    "Source Han Serif",
+    "IPAexMincho",
+    "IPAMincho",
+    "Toppan Bunkyu Mincho",
+    "Hiragino Sans",
+    "Noto Sans CJK JP",
+];
+const GOTHIC: &[&str] = &[
+    "Yu Gothic",
+    "YuGothic",
+    "Hiragino Sans",
+    "Hiragino Kaku Gothic ProN",
+    "Hiragino Kaku Gothic Pro",
+    "Meiryo",
+    "MS Gothic",
+    "MS PGothic",
+    "BIZ UDPGothic",
+    "BIZ UDGothic",
+    "Noto Sans CJK JP",
+    "Noto Sans JP",
+    "Source Han Sans JP",
+    "Source Han Sans",
+    "IPAexGothic",
+    "IPAGothic",
+    "VL Gothic",
+];
+const SANS_SC: &[&str] = &[
+    "Microsoft YaHei",
+    "DengXian",
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Heiti SC",
+    "STHeiti",
+    "SimHei",
+    "Noto Sans CJK SC",
+    "Noto Sans SC",
+    "Source Han Sans SC",
+    "Source Han Sans CN",
+    "WenQuanYi Micro Hei",
+    "WenQuanYi Zen Hei",
+];
+const SERIF_SC: &[&str] = &[
+    "SimSun",
+    "Songti SC",
+    "STSong",
+    "Noto Serif CJK SC",
+    "Noto Serif SC",
+    "Source Han Serif SC",
+    "Source Han Serif CN",
+    "AR PL UMing CN",
+    "PingFang SC",
+];
+const SANS_TC: &[&str] =
+    &["Microsoft JhengHei", "PingFang TC", "Heiti TC", "PingFang HK", "Noto Sans CJK TC", "Noto Sans TC", "Source Han Sans TC", "Source Han Sans TW"];
+const SERIF_TC: &[&str] = &[
+    "PMingLiU",
+    "MingLiU",
+    "Songti TC",
+    "LiSong Pro",
+    "Noto Serif CJK TC",
+    "Noto Serif TC",
+    "Source Han Serif TC",
+    "Source Han Serif TW",
+    "AR PL UMing TW",
+    "PingFang TC",
+];
+const SANS_KR: &[&str] = &[
+    "Malgun Gothic",
+    "Apple SD Gothic Neo",
+    "AppleGothic",
+    "Noto Sans CJK KR",
+    "Noto Sans KR",
+    "Source Han Sans KR",
+    "Source Han Sans K",
+    "NanumGothic",
+    "Nanum Gothic",
+    "Gulim",
+    "Dotum",
+];
+const SERIF_KR: &[&str] = &[
+    "Batang",
+    "AppleMyungjo",
+    "Noto Serif CJK KR",
+    "Noto Serif KR",
+    "Source Han Serif KR",
+    "Source Han Serif K",
+    "NanumMyeongjo",
+    "Nanum Myeongjo",
+    "Gungsuh",
+];
+
+/// Is `family` a Chinese, Japanese or Korean serif family — a 明朝, 宋体/明體 or 바탕 face, Word's
+/// own (游明朝, ＭＳ 明朝, SimSun, PMingLiU, Batang) or a substitute for one? Word for Mac draws
+/// the Hangul such a font lacks in Batang (2026-10-19, see [`hangul_fallback`]).
+pub fn is_cjk_serif_family(family: &str) -> bool {
+    cjk_substitutes(&family.to_ascii_lowercase()).is_some_and(|c| [MINCHO, SERIF_SC, SERIF_TC, SERIF_KR].iter().any(|s| std::ptr::eq(c, *s)))
+}
+
 /// The substitute chain for a folded CJK font name.
 fn cjk_chain(base: &str) -> Option<&'static [&'static str]> {
-    const MINCHO: &[&str] = &[
-        "Yu Mincho",
-        "YuMincho",
-        "Hiragino Mincho ProN",
-        "Hiragino Mincho Pro",
-        "MS Mincho",
-        "MS PMincho",
-        "BIZ UDPMincho",
-        "BIZ UDMincho",
-        "Noto Serif CJK JP",
-        "Noto Serif JP",
-        "Source Han Serif JP",
-        "Source Han Serif",
-        "IPAexMincho",
-        "IPAMincho",
-        "Toppan Bunkyu Mincho",
-        "Hiragino Sans",
-        "Noto Sans CJK JP",
-    ];
-    const GOTHIC: &[&str] = &[
-        "Yu Gothic",
-        "YuGothic",
-        "Hiragino Sans",
-        "Hiragino Kaku Gothic ProN",
-        "Hiragino Kaku Gothic Pro",
-        "Meiryo",
-        "MS Gothic",
-        "MS PGothic",
-        "BIZ UDPGothic",
-        "BIZ UDGothic",
-        "Noto Sans CJK JP",
-        "Noto Sans JP",
-        "Source Han Sans JP",
-        "Source Han Sans",
-        "IPAexGothic",
-        "IPAGothic",
-        "VL Gothic",
-    ];
-    const SANS_SC: &[&str] = &[
-        "Microsoft YaHei",
-        "DengXian",
-        "PingFang SC",
-        "Hiragino Sans GB",
-        "Heiti SC",
-        "STHeiti",
-        "SimHei",
-        "Noto Sans CJK SC",
-        "Noto Sans SC",
-        "Source Han Sans SC",
-        "Source Han Sans CN",
-        "WenQuanYi Micro Hei",
-        "WenQuanYi Zen Hei",
-    ];
-    const SERIF_SC: &[&str] = &[
-        "SimSun",
-        "Songti SC",
-        "STSong",
-        "Noto Serif CJK SC",
-        "Noto Serif SC",
-        "Source Han Serif SC",
-        "Source Han Serif CN",
-        "AR PL UMing CN",
-        "PingFang SC",
-    ];
-    const SANS_TC: &[&str] = &[
-        "Microsoft JhengHei",
-        "PingFang TC",
-        "Heiti TC",
-        "PingFang HK",
-        "Noto Sans CJK TC",
-        "Noto Sans TC",
-        "Source Han Sans TC",
-        "Source Han Sans TW",
-    ];
-    const SERIF_TC: &[&str] = &[
-        "PMingLiU",
-        "MingLiU",
-        "Songti TC",
-        "LiSong Pro",
-        "Noto Serif CJK TC",
-        "Noto Serif TC",
-        "Source Han Serif TC",
-        "Source Han Serif TW",
-        "AR PL UMing TW",
-        "PingFang TC",
-    ];
-    const SANS_KR: &[&str] = &[
-        "Malgun Gothic",
-        "Apple SD Gothic Neo",
-        "AppleGothic",
-        "Noto Sans CJK KR",
-        "Noto Sans KR",
-        "Source Han Sans KR",
-        "Source Han Sans K",
-        "NanumGothic",
-        "Nanum Gothic",
-        "Gulim",
-        "Dotum",
-    ];
-    const SERIF_KR: &[&str] = &[
-        "Batang",
-        "AppleMyungjo",
-        "Noto Serif CJK KR",
-        "Noto Serif KR",
-        "Source Han Serif KR",
-        "Source Han Serif K",
-        "NanumMyeongjo",
-        "Nanum Myeongjo",
-        "Gungsuh",
-    ];
     let chain = match base {
         "游明朝"
         | "yu mincho"
@@ -583,6 +583,51 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
     r
 }
 
+/// The face for Hangul a run's fonts lack, as Word for Mac picks it (2026-10-19): Batang when
+/// the run's East Asian font (`w:eastAsia`, else its font) is an oldstyle serif (OS/2 family
+/// class 1: Times New Roman, Hiragino Mincho ProN) or one of Word's serif CJK families (游明朝,
+/// [`is_cjk_serif_family`]), Malgun Gothic otherwise (Arial, Aptos, Georgia, Cambria, Courier
+/// New, Baskerville, Palatino, Hiragino Sans, 游ゴシック). Both come with Office; the Korean faces
+/// installed stand in for them — AppleMyungjo and AppleGothic on a Mac, an em per syllable across
+/// a line and along a column like Word's. `None` when no Korean face is installed.
+pub fn hangul_fallback(serif: bool, bold: bool, italic: bool) -> Option<FaceRef> {
+    const SERIF: &[&str] = &[
+        "Batang",
+        "AppleMyungjo",
+        "Noto Serif CJK KR",
+        "Noto Serif KR",
+        "Source Han Serif KR",
+        "Source Han Serif K",
+        "NanumMyeongjo",
+        "Nanum Myeongjo",
+        "Gungsuh",
+    ];
+    const SANS: &[&str] = &[
+        "Malgun Gothic",
+        "AppleGothic",
+        "Noto Sans CJK KR",
+        "Noto Sans KR",
+        "Source Han Sans KR",
+        "Source Han Sans K",
+        "NanumGothic",
+        "Nanum Gothic",
+        "Gulim",
+        "Dotum",
+        "Apple SD Gothic Neo",
+    ];
+    let list = if serif { SERIF } else { SANS };
+    list.iter().map(|f| resolve(f, bold, italic)).find(|r| !r.substituted && r.face.covers('한')).map(|r| r.face)
+}
+
+/// The face for the Chinese and Japanese characters a run's fonts lack: Word for Mac draws them
+/// in ＭＳ 明朝 whatever the run's language (Times New Roman, Arial and Georgia text tagged ja-JP,
+/// zh-CN, zh-TW, ko-KR and en-US alike, 2026-10-19) — here its substitute, when it covers them
+/// all.
+pub fn han_fallback(chars: &[char], bold: bool, italic: bool) -> Option<FaceRef> {
+    let r = resolve("MS Mincho", bold, italic);
+    (r.face.is_east_asian() && chars.iter().all(|c| r.face.covers(*c))).then_some(r.face)
+}
+
 /// A line's (ascent, descent) from hhea values, both positive: the line gap goes above the ascent.
 fn hhea_line(ascender: i16, descender: i16, line_gap: i16) -> (f64, f64) {
     (f64::from(ascender) + f64::from(line_gap.max(0)), f64::from(descender).abs())
@@ -831,6 +876,64 @@ mod tests {
     /// Mincho's metrics by name, their underlines 0.7 of the descent + 0.53 pt down and MS
     /// Mincho's strikethrough 0.258 em up; Latin faces keep the gap above the ascent and their
     /// `post` underline.
+    #[test]
+    fn hangul_fallback_is_batang_for_oldstyle_serifs_and_malgun_gothic_otherwise() {
+        if let (Some(s), Some(g)) = (hangul_fallback(true, false, false), hangul_fallback(false, false, false)) {
+            assert!(s.covers('한') && g.covers('한'));
+            if !resolve("AppleMyungjo", false, false).substituted {
+                assert_eq!(s.family, "AppleMyungjo");
+            }
+            if !resolve("AppleGothic", false, false).substituted {
+                assert_eq!(g.family, "AppleGothic");
+            }
+        }
+        let times = resolve("Times New Roman", false, false);
+        if !times.substituted {
+            assert!(times.face.is_oldstyle_serif());
+        }
+        let hira = resolve("Hiragino Mincho ProN", false, false);
+        if !hira.substituted {
+            assert!(hira.face.is_oldstyle_serif());
+        }
+        for f in ["Arial", "Georgia", "Courier New", "Hiragino Sans", "Baskerville"] {
+            let r = resolve(f, false, false);
+            if !r.substituted {
+                assert!(!r.face.is_oldstyle_serif(), "{f}");
+            }
+        }
+        for f in ["Yu Mincho", "游明朝", "MS Mincho", "ＭＳ 明朝", "Batang", "SimSun", "PMingLiU", "Hiragino Mincho ProN"] {
+            assert!(is_cjk_serif_family(f), "{f}");
+        }
+        for f in ["Yu Gothic", "游ゴシック", "Malgun Gothic", "Meiryo", "Arial", "Times New Roman"] {
+            assert!(!is_cjk_serif_family(f), "{f}");
+        }
+        if let Some(f) = han_fallback(&['日', '本'], false, false) {
+            assert!(f.is_east_asian() && f.covers('語'));
+        }
+    }
+
+    #[test]
+    fn vertical_origins_and_advances_come_from_the_font_tables() {
+        // Word for Mac hangs an upright glyph from its vertical origin — VORG, else yMax + the
+        // vmtx top side bearing — and moves the column on by its vmtx advance (vt6/vt7, 2026-10-19).
+        for (family, c, vadv, origin) in [
+            ("Apple SD Gothic Neo", '글', 1200.0, 900.0),
+            ("AppleMyungjo", '글', 1025.0, 887.0),
+            ("AppleGothic", '글', 1004.0, 847.0),
+            ("Songti SC", '漢', 1000.0, 800.0),
+            ("Hiragino Mincho ProN", '縦', 1000.0, 880.0),
+        ] {
+            let r = resolve(family, false, false);
+            if r.substituted || !r.face.covers(c) {
+                continue;
+            }
+            let f = r.face.get();
+            let gid = f.glyph_for(c);
+            assert_eq!(f.vertical_advance(gid), Some(vadv), "{family} {c}");
+            assert!((f.vertical_origin(gid) - origin).abs() < 0.5, "{family} {c}: {}", f.vertical_origin(gid));
+        }
+    }
+
     #[test]
     fn east_asian_faces_take_words_for_mac_line_and_underline() {
         let r = resolve("Hiragino Mincho ProN", false, false);
