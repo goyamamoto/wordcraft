@@ -338,12 +338,17 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                 }
                 // Reconversion (再変換): the input method names the committed text its
                 // composition replaces; that text is selected and the composition takes its place.
-                let replace = app.canvas.ime_replace.take();
-                if let Some(r) = replace
-                    && app.session.composition().is_none()
-                    && !text.is_empty()
-                {
-                    crate::ime::select_range(&mut app.session, r);
+                // Named while a composition shows (live conversion marks the words before its
+                // marked text again), the range counts that composition, which goes first
+                // (`committed_range`). A dismissal naming a range is a commit's first half: the
+                // range, mapped, waits for the commit.
+                if let Some(r) = app.canvas.ime_replace.take() {
+                    let r = crate::ime::committed_range(&mut app.session, r);
+                    if text.is_empty() {
+                        app.canvas.ime_replace = Some(r);
+                    } else {
+                        crate::ime::select_range(&mut app.session, r);
+                    }
                 }
                 if let Err(e) = app.session.set_composition(&text, active_range_chars) {
                     app.status(e.to_string());
@@ -351,10 +356,15 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
             }
             egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
                 app.canvas.ime_preedit.clear();
-                app.canvas.ime_replace = None;
+                // A commit naming the committed text it replaces (`insertText:replacementRange:`
+                // with a range): that text is selected and the committed text replaces it.
+                let replace = app.canvas.ime_replace.take().map(|r| crate::ime::committed_range(&mut app.session, r));
                 app.session.clear_composition();
                 if !text.is_empty() {
                     crate::objects::enter_text_box(app);
+                    if let Some(r) = replace {
+                        crate::ime::select_range(&mut app.session, r);
+                    }
                     let _ = app.run("text.insert", json!({"text": text}));
                 }
             }

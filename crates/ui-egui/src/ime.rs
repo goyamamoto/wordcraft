@@ -59,6 +59,38 @@ pub fn select_range(session: &mut Session, range: Range<usize>) -> bool {
     true
 }
 
+/// The committed text a `range` the input method named stands for, with the composition taken
+/// out of the document. The input method counts in the text it was shown, composition included;
+/// while one is shown it may name a range reaching into committed text — live conversion marks
+/// the words before its marked text again to convert them together, and a commit may name the
+/// text it replaces — so the range is mapped through the composition: what lies before it keeps
+/// its place, the composition itself stands for the text it replaced (a reconverted selection,
+/// put back), what follows moves by the difference. Without a composition the range is as given.
+pub fn committed_range(session: &mut Session, range: Range<usize>) -> Range<usize> {
+    let Some(c) = session.composition().cloned() else { return range };
+    let Some(para) = session.doc.para_at(&c.start) else { return range };
+    let m = byte_to_utf16(&para.text, c.start.off);
+    let l = byte_to_utf16(&para.text, c.end.off).saturating_sub(m);
+    session.clear_composition();
+    // The selection is back to what the composition replaced (within one paragraph), or the caret.
+    let (a, b) = session.sel.ordered();
+    let r = match session.doc.para_at(&a) {
+        Some(p) if a.story == b.story && a.path == b.path => byte_to_utf16(&p.text, b.off).saturating_sub(byte_to_utf16(&p.text, a.off)),
+        _ => 0,
+    };
+    let map = |x: usize| {
+        if x <= m {
+            x
+        } else if x < m.saturating_add(l) {
+            m.saturating_add(r)
+        } else {
+            x.saturating_sub(l).saturating_add(r)
+        }
+    };
+    let start = map(range.start);
+    start..map(range.end).max(start)
+}
+
 /// UTF-16 code units before byte offset `byte` of `text` (clamped to the text, and to a
 /// character boundary).
 pub fn byte_to_utf16(text: &str, byte: usize) -> usize {
@@ -128,5 +160,85 @@ mod tests {
         assert_eq!(s.selected_text(), "日本語", "unchanged");
         assert!(select_range(&mut s, 5..5));
         assert!(s.sel.is_collapsed());
+    }
+
+    #[test]
+    fn the_input_method_reads_the_whole_paragraph_in_every_story() {
+        // A long committed paragraph is reported whole, with the caret counted in UTF-16 units
+        // (an object placeholder and a surrogate pair each as the platform counts them).
+        let long: String = "日本語の長い文章です".repeat(300);
+        let mut s = Session::new(wordcraft_doc::Document::from_text(&long));
+        s.run("caret.docEnd", &json!({})).unwrap();
+        let r = surrounding(&s).unwrap();
+        assert_eq!(r.text, long);
+        assert_eq!(r.selected, 3000..3000);
+        s.run("caret.left", &json!({})).unwrap();
+        assert_eq!(surrounding(&s).unwrap().selected, 2999..2999);
+        // A table cell.
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("insert.table", &json!({"rows": 2, "cols": 2})).unwrap();
+        s.run("text.insert", &json!({"text": "セルの文"})).unwrap();
+        assert!(s.sel.focus.path != wordcraft_doc::Path::top(0), "in a cell: {:?}", s.sel.focus);
+        assert_eq!(surrounding(&s), Some(ImeSurrounding { text: "セルの文".into(), selected: 4..4 }));
+        s.run("select.text", &json!({"text": "の文"})).unwrap();
+        assert_eq!(surrounding(&s).unwrap().selected, 2..4);
+        // A header.
+        let mut s = Session::new(wordcraft_doc::Document::from_text("本文"));
+        s.run("insert.header", &json!({"text": "ヘッダーの文"})).unwrap();
+        assert!(matches!(s.sel.focus.story, wordcraft_doc::StoryRef::Part(_)), "{:?}", s.sel.focus);
+        let r = surrounding(&s).unwrap();
+        assert_eq!(r.text, "ヘッダーの文");
+        assert!(r.selected.is_empty() && r.selected.start <= 6);
+        // A text box, and the body paragraph holding its anchor (an object placeholder: one unit).
+        let mut s = Session::new(wordcraft_doc::Document::from_text("𠮷野家"));
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("insert.textBox", &json!({"text": "箱の中の文"})).unwrap();
+        if matches!(s.sel.focus.story, wordcraft_doc::StoryRef::Part(_)) {
+            let r = surrounding(&s).unwrap();
+            assert_eq!(r.text, "箱の中の文");
+            assert!(r.selected.end <= 5);
+        }
+        s.run("caret.set", &json!({"pos": wordcraft_doc::Pos::body(0, 0)})).unwrap();
+        s.run("caret.end", &json!({})).unwrap();
+        let r = surrounding(&s).unwrap();
+        assert!(r.text.starts_with("𠮷野家") && r.text.contains('\u{FFFC}'), "{:?}", r.text);
+        assert_eq!(r.selected.start, r.text.encode_utf16().count(), "the caret counts the pair as two units and the anchor as one");
+        assert!(select_range(&mut s, 0..2), "the pair");
+        assert_eq!(s.selected_text(), "𠮷");
+        // Editing an equation: nothing (the input method types into it directly).
+        let mut s = Session::new(wordcraft_doc::Document::from_text("x"));
+        s.run("insert.equation", &json!({})).unwrap();
+        assert!(s.math.is_some());
+        assert_eq!(surrounding(&s), None);
+    }
+
+    #[test]
+    fn a_range_named_while_composing_maps_through_the_composition() {
+        // "a日本b", the caret before b: the composition ご shows as a日本ごb (the input method's
+        // text); a range it names there stands for committed text once the composition is out.
+        let mut s = Session::new(wordcraft_doc::Document::from_text("a日本b"));
+        s.run("caret.set", &json!({"pos": wordcraft_doc::Pos::body(0, 7)})).unwrap();
+        assert_eq!(committed_range(&mut s, 1..3), 1..3, "no composition: as given");
+        s.set_composition("ご", None).unwrap();
+        assert_eq!(s.doc.plain_text(wordcraft_doc::StoryRef::Body), "a日本ごb");
+        let r = surrounding(&s).unwrap();
+        assert_eq!((r.text.as_str(), r.selected), ("a日本ごb", 4..4), "the composition is in the text the input method reads");
+        // Live conversion marks 日本ご (1..4) again: 日本 (1..3) is the committed text it stands for.
+        assert_eq!(committed_range(&mut s, 1..4), 1..3);
+        assert!(s.composition().is_none() && s.doc.plain_text(wordcraft_doc::StoryRef::Body) == "a日本b");
+        // After the composition: moved back by its length. Inside it: the (empty) text it replaced.
+        s.set_composition("ご", None).unwrap();
+        assert_eq!(committed_range(&mut s, 4..5), 3..4);
+        s.set_composition("ごはん", None).unwrap();
+        assert_eq!(committed_range(&mut s, 3..5), 3..3);
+        // A composition that replaced a selection (再変換): it stands for that text, put back.
+        s.run("select.text", &json!({"text": "日本"})).unwrap();
+        s.set_composition("にほん", Some(0..3)).unwrap();
+        assert_eq!(s.doc.plain_text(wordcraft_doc::StoryRef::Body), "aにほんb");
+        assert_eq!(committed_range(&mut s, 0..4), 0..3, "a + the composition = a日本");
+        assert_eq!(s.doc.plain_text(wordcraft_doc::StoryRef::Body), "a日本b");
+        s.set_composition("にほん", Some(0..3)).unwrap();
+        assert_eq!(committed_range(&mut s, 4..5), 3..4, "b after it");
+        assert_eq!(s.selected_text(), "日本", "the selection it replaced is back");
     }
 }
