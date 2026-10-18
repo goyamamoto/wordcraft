@@ -4747,6 +4747,53 @@ mod tests {
     /// fcitx drops every later key. Those keys still type, and they must not set
     /// `should_interrupt_composition`. A real pointer click still does, so a composition
     /// commits when the caret moves.
+    /// The input method's composition shows inline in the document (underlined, the typing font)
+    /// and is provisional: a new preedit replaces it, an empty one dismisses it, the commit types
+    /// the text through `text.insert` — as Word draws 変換前の文字.
+    #[test]
+    fn ime_composition_shows_inline_and_commits_as_typing() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("document.setText", json!({"text": "ab"})).unwrap();
+        app.run("caret.right", json!({})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for _ in 0..8 {
+            h.step();
+        }
+        let text = |h: &egui_kittest::Harness<'_, WordApp>| h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+        h.state_mut().session.dirty = false;
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "にほんご".into(), active_range_chars: Some(0..2) }));
+        h.step();
+        assert_eq!(text(&h), "aにほんごb");
+        assert!(h.state().session.composition().is_some());
+        assert!(h.state().canvas.ime_preedit.is_empty(), "not drawn beside the caret any more");
+        assert!(!h.state().session.dirty);
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "日本語".into(), active_range_chars: None }));
+        h.step();
+        assert_eq!(text(&h), "a日本語b");
+        h.event(egui::Event::Ime(egui::ImeEvent::Commit("日本語".into())));
+        h.step();
+        assert_eq!(text(&h), "a日本語b");
+        assert!(h.state().session.composition().is_none());
+        assert!(h.state().session.dirty, "the committed text is typed");
+        let _ = h.state_mut().run("edit.undo", json!({}));
+        assert_eq!(text(&h), "ab");
+        // Dismissed without a commit: nothing typed.
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "あ".into(), active_range_chars: None }));
+        h.step();
+        assert_eq!(text(&h), "aあb");
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None }));
+        h.step();
+        assert_eq!(text(&h), "ab");
+        assert!(h.state().session.composition().is_none());
+    }
+
     #[test]
     fn space_and_enter_on_the_canvas_do_not_interrupt_ime() {
         let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());

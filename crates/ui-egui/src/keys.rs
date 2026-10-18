@@ -301,6 +301,14 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                     }
                     continue;
                 }
+                egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => {
+                    // Drawn beside the caret in the interface font: Japanese needs the CJK one.
+                    if text.chars().any(wordcraft_fonts::is_cjk) {
+                        app.want_system_cjk = true;
+                    }
+                    app.canvas.ime_preedit = text.clone();
+                    continue;
+                }
                 egui::Event::Paste(t) => {
                     let _ = app.run("equation.type", json!({"text": t}));
                     continue;
@@ -321,10 +329,22 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                     let _ = app.run("text.insert", json!({"text": t}));
                 }
             }
-            egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => app.canvas.ime_preedit = text,
-            egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
+            // The composition shows inline in the document, as Word draws it (the typing font,
+            // underlined); the committed text is typed.
+            egui::Event::Ime(egui::ImeEvent::Preedit { text, active_range_chars }) => {
                 app.canvas.ime_preedit.clear();
                 if !text.is_empty() {
+                    crate::objects::enter_text_box(app);
+                }
+                if let Err(e) = app.session.set_composition(&text, active_range_chars) {
+                    app.status(e.to_string());
+                }
+            }
+            egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
+                app.canvas.ime_preedit.clear();
+                app.session.clear_composition();
+                if !text.is_empty() {
+                    crate::objects::enter_text_box(app);
                     let _ = app.run("text.insert", json!({"text": text}));
                 }
             }
