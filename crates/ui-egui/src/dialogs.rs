@@ -28,6 +28,14 @@ pub struct FindExtra {
     pub suffix: bool,
     pub ignore_punct: bool,
     pub ignore_space: bool,
+    /// Word's East Asian options are shown (a CJK interface, or a document whose East Asian
+    /// language is Chinese, Japanese or Korean — Word shows them with an East Asian editing
+    /// language enabled).
+    pub asian: bool,
+    /// Match half/full-width forms (Word's `match byte`).
+    pub match_byte: bool,
+    /// あいまい検索 — Sounds like (Japanese); Word's default is on with Japanese text.
+    pub fuzzy: bool,
     /// The search options are shown.
     pub more: bool,
     /// Special ▾ inserts into Replace with (it last had the focus), not Find what.
@@ -967,11 +975,21 @@ impl Dialog {
                     suffix: app.session.find.match_suffix,
                     ignore_punct: app.session.find.ignore_punct,
                     ignore_space: app.session.find.ignore_space,
+                    asian: crate::i18n::current().uses_cjk()
+                        || app.session.doc.styles.default_chr.lang_ea.as_deref().is_some_and(|l| {
+                            l.len() >= 2
+                                && l.get(..2)
+                                    .is_some_and(|p| p.eq_ignore_ascii_case("ja") || p.eq_ignore_ascii_case("zh") || p.eq_ignore_ascii_case("ko"))
+                        }),
+                    match_byte: app.session.find.match_byte,
+                    fuzzy: app.session.find.fuzzy.unwrap_or_else(|| wordcraft_engine::cmd::edit::fuzzy_default(&app.session)),
                     more: app.session.find.wildcards
                         || app.session.find.match_prefix
                         || app.session.find.match_suffix
                         || app.session.find.ignore_punct
-                        || app.session.find.ignore_space,
+                        || app.session.find.ignore_space
+                        || app.session.find.match_byte
+                        || app.session.find.fuzzy.is_some_and(|f| f != wordcraft_engine::cmd::edit::fuzzy_default(&app.session)),
                     to_replace: false,
                 },
                 tab: match name {
@@ -1779,6 +1797,10 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         Dialog::Tabs { form } => crate::dialogs_para::tabs(app, ui, form),
         Dialog::Borders { form } => crate::dialogs_para::borders(app, ui, form),
         Dialog::Find { query, replace, match_case, whole_word, regex, extra, tab, goto_what, goto_target, message, focus } => {
+            // Japanese (or other CJK) search text needs the CJK interface font (else □).
+            if extra.asian || query.chars().chain(replace.chars()).any(wordcraft_fonts::is_cjk) {
+                app.want_system_cjk = true;
+            }
             ui.horizontal(|ui| {
                 for (t, label) in [(FindTab::Find, "Find"), (FindTab::Replace, "Replace"), (FindTab::GoTo, "Go To")] {
                     if ui.selectable_label(*tab == t, tl!(label)).clicked() && *tab != t {
@@ -1832,6 +1854,13 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                     ui.add_enabled(plain, egui::Checkbox::new(&mut extra.ignore_punct, tl!("Ignore punctuation characters")));
                     ui.add_enabled(plain, egui::Checkbox::new(&mut extra.ignore_space, tl!("Ignore white-space characters")));
                 });
+                if extra.asian {
+                    // As in Word: Match half/full-width forms greys あいまい検索 out.
+                    ui.horizontal(|ui| {
+                        ui.add_enabled(plain, egui::Checkbox::new(&mut extra.match_byte, tl!("Match half/full-width forms")));
+                        ui.add_enabled(plain && !extra.match_byte, egui::Checkbox::new(&mut extra.fuzzy, tl!("Sounds like (Japanese)")));
+                    });
+                }
                 ui.horizontal(|ui| {
                     ui.checkbox(regex, tl!("Regular expressions"));
                     if let Some(code) = special_menu(ui, extra) {
@@ -1850,6 +1879,8 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 "matchSuffix": extra.suffix,
                 "ignorePunct": extra.ignore_punct,
                 "ignoreSpace": extra.ignore_space,
+                "matchByte": extra.match_byte,
+                "fuzzy": extra.fuzzy,
             });
             if !replace_mode {
                 ui.horizontal(|ui| {
@@ -3751,6 +3782,28 @@ mod tests {
         assert!(h.state().dialog.is_none());
         let _ = h.state_mut().run("edit.undo", json!({}));
         assert_eq!(h.state().session.doc.bookmarks().len(), 3, "one undo step");
+    }
+
+    /// Word's East Asian find options: Match half/full-width forms and Sounds like (Japanese) —
+    /// あいまい検索, on by default on Japanese text — appear for a Japanese document and reach
+    /// `edit.find` (their folding is pinned in the engine's tests).
+    #[test]
+    fn find_dialog_has_words_japanese_options_on_japanese_text() {
+        let mut app = app_with("ワープロ わーぷろ");
+        let _ = app.run("ui.dialog", json!({"name": "find"}));
+        let Some(Dialog::Find { extra, .. }) = &app.dialog else { panic!("no Find dialog") };
+        assert!(!extra.asian, "an English document has no East Asian options");
+        assert!(!extra.fuzzy);
+        let mut app = app_with("ワープロ わーぷろ");
+        app.session.doc.styles.default_chr.lang_ea = Some("ja-JP".into());
+        let _ = app.run("ui.dialog", json!({"name": "find"}));
+        let Some(Dialog::Find { extra, .. }) = &app.dialog else { panic!("no Find dialog") };
+        assert!(extra.asian && extra.fuzzy && !extra.match_byte, "{extra:?}");
+        assert_eq!(app.run("edit.find", json!({"text": "ワープロ"})).unwrap()["count"], 2, "あいまい検索 by default");
+        assert_eq!(app.run("edit.find", json!({"text": "ワープロ", "fuzzy": false})).unwrap()["count"], 1);
+        let _ = app.run("ui.dialog", json!({"name": "find"}));
+        let Some(Dialog::Find { extra, .. }) = &app.dialog else { panic!("no Find dialog") };
+        assert!(!extra.fuzzy, "the dialog shows the choice made");
     }
 
     /// Find, Replace and Go To are one dialog with three tabs (#712).

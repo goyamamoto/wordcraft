@@ -268,6 +268,11 @@ pub struct FindState {
     pub match_suffix: bool,
     pub ignore_punct: bool,
     pub ignore_space: bool,
+    /// Word's Match half/full-width forms (`match byte`).
+    pub match_byte: bool,
+    /// Word's あいまい検索 (`match fuzzy`); unset = Word's default (on when the document's East
+    /// Asian language is Japanese).
+    pub fuzzy: Option<bool>,
     /// Matches from the last search: (start, end).
     #[serde(skip)]
     pub results: Vec<(Pos, Pos)>,
