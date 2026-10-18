@@ -908,7 +908,13 @@ fn lines(
                 out.push(Draw::Art { path, fx: fx.clone(), color, alpha });
             }
             if !glyphs.is_empty() {
-                out.push(Draw::Glyphs {
+                // A vertical column: lying text sits on a baseline (ascent − descent) / 2 from
+                // the column's centre line (`base`), standing characters centre on it.
+                let lying = if pl.vertical { (st.ascent - st.descent) / 2.0 } else { 0.0 };
+                for g in &mut glyphs {
+                    g.2 += lying;
+                }
+                let item = Draw::Glyphs {
                     face: st.face,
                     size: st.size,
                     glyphs,
@@ -920,7 +926,12 @@ fn lines(
                     link: rc.link.clone(),
                     ranges,
                     text_bg,
-                });
+                };
+                if pl.vertical {
+                    stand_up(item, Some(base - st.shift - dy), out);
+                } else {
+                    out.push(item);
+                }
             }
             // 縦中横: the run's glyphs centred in the cluster's box, turned a quarter anticlockwise
             // about its centre. A turned (`tbRl`) page turns them back upright, reading left to
@@ -937,8 +948,11 @@ fn lines(
                     None => (para.and_then(|p| p.text.get(c.start..c.end)).unwrap_or("").to_string(), None),
                 };
                 let cx = x + left + (c.adv - natural) / 2.0;
-                let cy = base - st.shift - dy - (st.ascent - st.descent) / 2.0;
-                let glyphs: Vec<(u32, f32, f32)> = cg.iter().map(|g| (g.gid, cx + g.dx, base - st.shift - dy - g.dy)).collect();
+                // The run's line box (ascent + descent) turns about its centre: on a vertical
+                // column's centre line (`base`), else about the baseline's line box.
+                let lying = if pl.vertical { (st.ascent - st.descent) / 2.0 } else { 0.0 };
+                let cy = base - st.shift - dy + lying - (st.ascent - st.descent) / 2.0;
+                let glyphs: Vec<(u32, f32, f32)> = cg.iter().map(|g| (g.gid, cx + g.dx, base - st.shift - dy + lying - g.dy)).collect();
                 let ranges: Vec<std::ops::Range<usize>> = match shown.filter(|r| r.len() == cg.len()) {
                     Some(r) => r.iter().map(|r| r.start.min(text.len())..r.end.min(text.len())).collect(),
                     None => cg.iter().map(|_| 0..text.len()).collect(),
@@ -1128,6 +1142,8 @@ fn lines(
                 continue;
             }
             let cx = x + line.cl_left(r.cluster).unwrap_or(0.0);
+            // The ruby's baseline `raise` above the base text's — in a vertical column, the
+            // ruby's centre line that far to the right of the base's.
             let y = base - bst.shift - pl.align_dy.get(r.cluster).copied().unwrap_or(0.0) - r.raise;
             let mut i = 0;
             while let Some(&(style, _)) = r.glyphs.get(i) {
@@ -1136,10 +1152,11 @@ fn lines(
                 let ranges = r.ranges.get(i..i + n).map(<[_]>::to_vec).unwrap_or_default();
                 i += n;
                 let Some(st) = pl.styles.get(style as usize) else { continue };
-                out.push(Draw::Glyphs {
+                let lying = if pl.vertical { (st.ascent - st.descent) / 2.0 } else { 0.0 };
+                let item = Draw::Glyphs {
                     face: st.face,
                     size: st.size,
-                    glyphs: run.iter().map(|(_, g)| (g.gid, cx + g.dx, y - g.dy)).collect(),
+                    glyphs: run.iter().map(|(_, g)| (g.gid, cx + g.dx, y + lying - g.dy)).collect(),
                     color: text_color(&st.rc.color, st.rc.shading.or(st.rc.highlight)),
                     alpha,
                     synth_bold: st.synth_bold,
@@ -1148,7 +1165,12 @@ fn lines(
                     link: None,
                     ranges,
                     text_bg: st.rc.highlight.or(st.rc.shading),
-                });
+                };
+                if pl.vertical {
+                    stand_up(item, Some(y), out);
+                } else {
+                    out.push(item);
+                }
             }
         }
         // Formatting marks.
@@ -1781,69 +1803,90 @@ fn emphasis_mark(em: wordcraft_doc::props::EmphasisMark, x: f32, y: f32, size: f
 fn upright_east_asian(items: Vec<Draw>) -> Vec<Draw> {
     let mut out = Vec::with_capacity(items.len());
     for d in items {
-        let Draw::Glyphs { face, size, mut glyphs, color, alpha, synth_bold, synth_italic, text, link, ranges, text_bg } = d else {
-            out.push(d);
-            continue;
-        };
-        let char_at = |k: usize| ranges.get(k).and_then(|r| text.get(r.clone())).and_then(|t| t.chars().next());
-        // A vertical alternate: the glyph is not the character's horizontal one.
-        let alternate = |k: usize, gid: u32| char_at(k).is_some_and(|c| !c.is_whitespace() && face.glyph_for(c) != gid && gid != 0);
-        let lies = |c: char| matches!(c, '\u{2010}'..='\u{2027}');
-        if ranges.len() == glyphs.len() {
-            for k in 0..glyphs.len() {
-                if let Some(c) = char_at(k)
-                    && lies(c)
-                    && let Some(g) = glyphs.get_mut(k)
-                    && alternate(k, g.0)
-                {
-                    g.0 = face.glyph_for(c);
-                }
-            }
-        }
-        let up = |k: usize| char_at(k).is_some_and(|c| upright_in_vertical(c) || (!lies(c) && glyphs.get(k).is_some_and(|g| alternate(k, g.0))));
-        if ranges.len() != glyphs.len() || !(0..glyphs.len()).any(up) {
-            out.push(Draw::Glyphs { face, size, glyphs, color, alpha, synth_bold, synth_italic, text, link, ranges, text_bg });
-            continue;
-        }
-        let piece = |k0: usize, k1: usize| -> Draw {
-            let gs = glyphs.get(k0..k1).unwrap_or(&[]).to_vec();
-            let rs = ranges.get(k0..k1).unwrap_or(&[]);
-            let (b0, b1) = (rs.iter().map(|r| r.start).min().unwrap_or(0), rs.iter().map(|r| r.end).max().unwrap_or(0));
-            let t = text.get(b0..b1).unwrap_or("").to_string();
-            let rs = rs.iter().map(|r| r.start.saturating_sub(b0)..r.end.saturating_sub(b0)).collect();
-            Draw::Glyphs { face, size, glyphs: gs, color, alpha, synth_bold, synth_italic, text: t, link: link.clone(), ranges: rs, text_bg }
-        };
-        let mut k0 = 0;
-        while k0 < glyphs.len() {
-            let u = up(k0);
-            let k1 = (k0 + 1..glyphs.len()).find(|&k| up(k) != u).unwrap_or(glyphs.len());
-            if !u {
-                out.push(piece(k0, k1));
-            } else {
-                for k in k0..k1 {
-                    let Some(&(gid, gx, base)) = glyphs.get(k) else { continue };
-                    // The em square: one em along the line (the advance to the next glyph when
-                    // known), from about 0.88 em above the baseline to 0.12 em below it.
-                    let adv = glyphs.get(k + 1).map(|g| g.1 - gx).filter(|a| *a > 0.0 && *a < size * 2.0).unwrap_or(size);
-                    let (cx, cy) = (gx + adv / 2.0, base - size * 0.38);
-                    let mut g = piece(k, k + 1);
-                    // The ideographic comma and full stop sit in the upper right of their square in
-                    // vertical text (lower left in horizontal): moved there before standing up —
-                    // unless the font's vertical form (which sits there already) was used.
-                    if let Draw::Glyphs { text, glyphs, .. } = &mut g
-                        && matches!(text.chars().next(), Some('\u{3001}' | '\u{3002}' | '\u{FF0C}' | '\u{FF0E}'))
-                        && !alternate(k, gid)
-                    {
-                        for (_, x, y) in glyphs.iter_mut() {
-                            *x += size * 0.55;
-                            *y -= size * 0.55;
-                        }
-                    }
-                    out.push(Draw::Rotated { cx, cy, spin: Spin::new(-90.0, false, false), items: vec![g] });
-                }
-            }
-            k0 = k1;
-        }
+        stand_up(d, None, &mut out);
     }
     out
+}
+
+/// Stands the East Asian characters of a glyph run `d` up (see [`upright_east_asian`]) into
+/// `out`. With `centre` — the centre line of a vertical column, in the run's unturned frame
+/// (`ParaLayout::vertical`) — each standing character's em square is centred on it whatever its
+/// size, as Word lays a vertical column out; without it the run lies on a horizontal baseline
+/// turned onto its side, and each em square stands about its own centre, 0.38 em above that
+/// baseline. Other draws pass through.
+fn stand_up(d: Draw, centre: Option<f32>, out: &mut Vec<Draw>) {
+    let Draw::Glyphs { face, size, mut glyphs, color, alpha, synth_bold, synth_italic, text, link, ranges, text_bg } = d else {
+        out.push(d);
+        return;
+    };
+    let char_at = |k: usize| ranges.get(k).and_then(|r| text.get(r.clone())).and_then(|t| t.chars().next());
+    // A vertical alternate: the glyph is not the character's horizontal one.
+    let alternate = |k: usize, gid: u32| char_at(k).is_some_and(|c| !c.is_whitespace() && face.glyph_for(c) != gid && gid != 0);
+    let lies = |c: char| matches!(c, '\u{2010}'..='\u{2027}');
+    if ranges.len() == glyphs.len() {
+        for k in 0..glyphs.len() {
+            if let Some(c) = char_at(k)
+                && lies(c)
+                && let Some(g) = glyphs.get_mut(k)
+                && alternate(k, g.0)
+            {
+                g.0 = face.glyph_for(c);
+            }
+        }
+    }
+    let up = |k: usize| char_at(k).is_some_and(|c| upright_in_vertical(c) || (!lies(c) && glyphs.get(k).is_some_and(|g| alternate(k, g.0))));
+    if ranges.len() != glyphs.len() || !(0..glyphs.len()).any(up) {
+        out.push(Draw::Glyphs { face, size, glyphs, color, alpha, synth_bold, synth_italic, text, link, ranges, text_bg });
+        return;
+    }
+    let piece = |k0: usize, k1: usize| -> Draw {
+        let gs = glyphs.get(k0..k1).unwrap_or(&[]).to_vec();
+        let rs = ranges.get(k0..k1).unwrap_or(&[]);
+        let (b0, b1) = (rs.iter().map(|r| r.start).min().unwrap_or(0), rs.iter().map(|r| r.end).max().unwrap_or(0));
+        let t = text.get(b0..b1).unwrap_or("").to_string();
+        let rs = rs.iter().map(|r| r.start.saturating_sub(b0)..r.end.saturating_sub(b0)).collect();
+        Draw::Glyphs { face, size, glyphs: gs, color, alpha, synth_bold, synth_italic, text: t, link: link.clone(), ranges: rs, text_bg }
+    };
+    let mut k0 = 0;
+    while k0 < glyphs.len() {
+        let u = up(k0);
+        let k1 = (k0 + 1..glyphs.len()).find(|&k| up(k) != u).unwrap_or(glyphs.len());
+        if !u {
+            out.push(piece(k0, k1));
+        } else {
+            for k in k0..k1 {
+                let Some(&(gid, gx, base)) = glyphs.get(k) else { continue };
+                // The em square: one em along the line (less when the glyph advances less, a
+                // compressed punctuation mark; never more: a gap to the next glyph — distributed
+                // ruby letters, expanded spacing — isn't the square's), from about 0.88 em above
+                // the baseline to 0.12 em below it.
+                let adv = glyphs.get(k + 1).map(|g| g.1 - gx).filter(|a| *a > 0.0 && *a < size).unwrap_or(size);
+                let (cx, cy) = (gx + adv / 2.0, centre.unwrap_or(base - size * 0.38));
+                let mut g = piece(k, k + 1);
+                // On a column's centre line the square stands centred: its baseline moves
+                // to 0.38 em below the centre first.
+                if let Some(c) = centre
+                    && let Draw::Glyphs { glyphs, .. } = &mut g
+                {
+                    for (_, _, y) in glyphs.iter_mut() {
+                        *y = c + size * 0.38;
+                    }
+                }
+                // The ideographic comma and full stop sit in the upper right of their square in
+                // vertical text (lower left in horizontal): moved there before standing up —
+                // unless the font's vertical form (which sits there already) was used.
+                if let Draw::Glyphs { text, glyphs, .. } = &mut g
+                    && matches!(text.chars().next(), Some('\u{3001}' | '\u{3002}' | '\u{FF0C}' | '\u{FF0E}'))
+                    && !alternate(k, gid)
+                {
+                    for (_, x, y) in glyphs.iter_mut() {
+                        *x += size * 0.55;
+                        *y -= size * 0.55;
+                    }
+                }
+                out.push(Draw::Rotated { cx, cy, spin: Spin::new(-90.0, false, false), items: vec![g] });
+            }
+        }
+        k0 = k1;
+    }
 }

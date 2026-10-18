@@ -7901,3 +7901,38 @@ fn emphasis_marks_take_a_third_of_an_em_and_draw_one_mark_per_character() {
         }
     }
 }
+
+/// Word lays its own Yu Mincho and Yu Gothic out with their Office builds' line metrics — a
+/// 1.43 em line, the baseline 1.051 em below its top — whatever face stands in for them here
+/// (the macOS 游明朝体 is a 1.5 em font): measured in Word for Mac at 10.5 pt, lines 15.0 pt
+/// apart with the first baseline 11.04 pt below the top margin.
+#[test]
+fn words_yu_fonts_keep_words_line_metrics_whatever_face_draws_them() {
+    for font in ["游明朝", "Yu Gothic", "游ゴシック Light"] {
+        let Some(d) = ja_doc(&[("漢字の行", wordcraft_doc::CharProps { font: Some(font.into()), font_ea: Some(font.into()), ..Default::default() })])
+        else {
+            return;
+        };
+        let l = lay(&d);
+        let p = first_para(&l);
+        let c = p.clusters.iter().find(|c| c.kind == crate::para::ClKind::Text).unwrap();
+        let st = &p.styles[c.style as usize];
+        assert!((st.ascent - 11.0355).abs() < 0.01 && (st.descent - 3.9795).abs() < 0.01, "{font}: {} {}", st.ascent, st.descent);
+        let line = &p.lines[0];
+        assert!((line.height - 15.015).abs() < 0.01 && (line.baseline - line.top - 11.0355).abs() < 0.01, "{font}: {line:?}");
+    }
+    // Other Japanese fonts keep their own metrics.
+    let Some(d) = ja_doc(&[(
+        "漢字の行",
+        wordcraft_doc::CharProps { font: Some("Hiragino Mincho ProN".into()), font_ea: Some("Hiragino Mincho ProN".into()), ..Default::default() },
+    )]) else {
+        return;
+    };
+    let l = lay(&d);
+    let p = first_para(&l);
+    let c = p.clusters.iter().find(|c| c.kind == crate::para::ClKind::Text).unwrap();
+    let st = &p.styles[c.style as usize];
+    let (a, dsc) = wordcraft_fonts::word::line_metrics(&st.face);
+    let k = 10.5 / st.face.upem;
+    assert!((st.ascent as f64 - a * k).abs() < 0.01 && (st.descent as f64 - dsc * k).abs() < 0.01, "{} {} vs {a} {dsc}", st.ascent, st.descent);
+}

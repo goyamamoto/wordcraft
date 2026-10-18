@@ -615,9 +615,57 @@ pub fn line_metrics(face: &crate::FontFace) -> (f64, f64) {
     v
 }
 
+/// The line metrics (ascent, descent) in font units Word lays its own Yu Mincho and Yu Gothic
+/// out with, for a document asking for one of them by its English or Japanese name (游明朝,
+/// 游ゴシック and their Demibold, Light, Medium and Bold weights): Office bundles its own builds
+/// of the Yu fonts, whose line is 1.43 em with the baseline 1.051 em below the line's top and
+/// 0.379 em above its bottom — measured in Word for Mac 16.114 on 2026-10-18 at 10.5 and 20 pt
+/// with single spacing (pitches 15.0 and 28.6 pt; the first baseline 11.04 pt below the top
+/// margin; 12.48 pt below the top of an 18-pt grid line; a 20-pt line 25.0 pt below a 10.5-pt
+/// one), the same for every weight. The macOS system 游明朝体/游ゴシック体 that stand in for them
+/// have other metrics (hhea 0.88/0.12 with a 0.5 em gap: 1.5 em), which would put every
+/// Japanese line 0.07 em further apart than Word. `None` for other families: their faces' own
+/// metrics apply ([`line_metrics`]).
+pub fn office_line_metrics(family: &str, face: &crate::FontFace) -> Option<(f64, f64)> {
+    const YU: &[&str] = &[
+        "Yu Mincho",
+        "Yu Mincho Demibold",
+        "Yu Mincho Light",
+        "Yu Gothic",
+        "Yu Gothic Light",
+        "Yu Gothic Medium",
+        "Yu Gothic Bold",
+        "游明朝",
+        "游明朝 Demibold",
+        "游明朝 Light",
+        "游ゴシック",
+        "游ゴシック Light",
+        "游ゴシック Medium",
+        "游ゴシック Bold",
+    ];
+    let base = fold_cjk_name(family);
+    let yu = YU.iter().any(|n| fold_cjk_name(n) == base);
+    yu.then_some((1.051 * face.upem, 0.379 * face.upem))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn words_own_yu_fonts_take_words_line_metrics() {
+        let db = FontDb::global();
+        let face = resolve("Yu Mincho", false, false).face;
+        let em = face.get().upem;
+        for name in ["游明朝", "Yu Mincho", "游ゴシック Medium", "Yu Gothic Light", "游明朝 Demibold", "Ｙｕ　Ｇｏｔｈｉｃ"] {
+            let (a, d) = office_line_metrics(name, face.get()).unwrap_or_else(|| panic!("{name}"));
+            assert!((a / em - 1.051).abs() < 1e-6 && (d / em - 0.379).abs() < 1e-6, "{name}: {a} {d}");
+        }
+        for name in ["ヒラギノ明朝 ProN", "MS Mincho", "Aptos", "Yu Gothic UI", ""] {
+            assert!(office_line_metrics(name, face.get()).is_none(), "{name}");
+        }
+        let _ = db;
+    }
 
     #[test]
     fn the_line_gap_goes_above_the_ascent() {
