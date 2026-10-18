@@ -366,6 +366,11 @@ pub struct ParaLayout {
     /// Clusters that are full-width opening brackets (「（『…), sorted: with `w:topLinePunct`
     /// one that starts a line takes half its cell (see `break_lines`).
     pub openings: Vec<u32>,
+    /// Snapping to characters (`snapToChars`): what each cluster is to the cell layout, and the
+    /// automatic space folded into each cluster's advance; empty otherwise (see
+    /// `distribute_cells`).
+    pub cell_classes: Vec<CellClass>,
+    pub cell_autos: Vec<f32>,
     /// Per cluster, how far above its line's baseline the cluster's own baseline sits for the
     /// paragraph's text alignment (`w:textAlignment` top, center or bottom); empty otherwise.
     pub align_dy: Vec<f32>,
@@ -434,16 +439,31 @@ pub struct ParaEnv<'a> {
 }
 
 /// The section's document grid as layout applies it (`w:docGrid`, ECMA-376 §17.6.5).
+///
+/// Measured in Word for Mac (10.5 pt 游明朝 and Aptos, 2026-10-19, `cg1`–`cg16` samples):
+/// **lines and characters** (`linesAndChars`, pitch = default size + `w:charSpace`): an East
+/// Asian character advances by its size plus the grid's gap (pitch − default size), its glyph at
+/// the start of that (a 14 pt character on a 14 pt pitch over 10.5 takes 17.5 pt; nothing is
+/// centred and nothing snaps back to the grid after Latin text); every Latin character and
+/// space advances by its own width plus half the gap; a space next to East Asian text takes
+/// half its size plus half the gap; the automatic space between East Asian and Latin letters
+/// is a quarter of (the size of the character before the boundary + the gap); a compressed
+/// mark takes half of (size + gap). **Snap to characters** (`snapToChars`): the text width is
+/// divided into whole cells (`cell`); an East Asian character takes as many cells as its size
+/// needs, centred; a run of Latin text takes whole cells, centred, and the line's leftover is
+/// shared out between the units (see `distribute_cells`).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Grid {
     /// Line pitch, points: line heights snap to multiples of it.
     pub line: Option<f32>,
-    /// Character pitch, points: East Asian characters advance by it.
+    /// Character pitch, points (the default size plus `w:charSpace`).
     pub chars: Option<f32>,
     /// The default font size the character pitch is based on, points.
     pub font_size: f32,
     /// `snapToChars`: all text snaps to the character grid, not just East Asian characters.
     pub snap_all: bool,
+    /// `snapToChars`: the width of a cell, the text width divided into whole pitches.
+    pub cell: Option<f32>,
 }
 
 impl Grid {
@@ -454,11 +474,36 @@ impl Grid {
         let font_size = if size.is_finite() { size.clamp(1.0, 1584.0) } else { 10.5 };
         let chars = s.grid_char_pitch(font_size);
         let snap_all = s.doc_grid.is_some_and(|g| g.kind == wordcraft_doc::section::DocGridType::SnapToChars);
-        Grid { line: Some(line), chars, font_size, snap_all }
+        let cell = if snap_all { s.grid_char_cell(font_size).filter(|c| c.is_finite() && *c > 0.0) } else { None };
+        Grid { line: Some(line), chars, font_size, snap_all, cell }
     }
     /// A cache key for paragraph layouts.
-    pub fn key(&self) -> (u32, u32, u32, bool) {
-        (self.line.map_or(0, f32::to_bits), self.chars.map_or(0, f32::to_bits), self.font_size.to_bits(), self.snap_all)
+    pub fn key(&self) -> (u32, u32, u32, bool, u32) {
+        (
+            self.line.map_or(0, f32::to_bits),
+            self.chars.map_or(0, f32::to_bits),
+            self.font_size.to_bits(),
+            self.snap_all,
+            self.cell.map_or(0, f32::to_bits),
+        )
+    }
+    /// The gap a lines-and-characters grid adds to every East Asian character: the pitch less
+    /// the default size (0 without a character grid or when snapping to characters).
+    pub fn gap(&self) -> f32 {
+        match (self.chars, self.cell) {
+            (Some(pitch), None) => (pitch - self.font_size).max(-self.font_size),
+            _ => 0.0,
+        }
+    }
+    /// The advance of an East Asian character of `size` points on the grid: its size plus the
+    /// gap (lines and characters), whole cells (snap to characters), its size (no grid).
+    pub fn ea_advance(&self, size: f32) -> f32 {
+        let size = if size.is_finite() { size.clamp(0.0, 1584.0) } else { 0.0 };
+        match (self.chars, self.cell) {
+            (Some(_), Some(cell)) => (size / cell - 0.001).ceil().clamp(1.0, 64.0) * cell,
+            (Some(_), None) => (size + self.gap()).max(0.0),
+            _ => size,
+        }
     }
     /// `h` rounded up to whole line pitches (unchanged without a line grid).
     pub fn snap_height(&self, h: f32) -> f32 {
@@ -470,12 +515,13 @@ impl Grid {
 }
 
 /// East Asian characters the character grid places on its pitch: CJK ideographs, kana, Hangul,
-/// CJK punctuation and full-width forms.
+/// CJK punctuation, full-width forms and half-width forms (ｱｲｳ: half a cell each in Word for
+/// Mac, centred in a whole one when snapping to characters).
 pub fn is_east_asian(c: char) -> bool {
     matches!(c as u32,
         0x1100..=0x11FF | 0x2E80..=0x2FDF | 0x2FF0..=0x303F | 0x3040..=0x30FF | 0x3100..=0x312F | 0x3130..=0x318F
         | 0x3190..=0x31FF | 0x3200..=0x4DBF | 0x4E00..=0x9FFF | 0xA960..=0xA97F | 0xAC00..=0xD7FF | 0xF900..=0xFAFF
-        | 0xFE30..=0xFE4F | 0xFF01..=0xFF60 | 0xFFE0..=0xFFE6 | 0x20000..=0x3FFFF)
+        | 0xFE30..=0xFE4F | 0xFF01..=0xFF60 | 0xFF61..=0xFFDC | 0xFFE0..=0xFFE6 | 0xFFE8..=0xFFEE | 0x20000..=0x3FFFF)
 }
 
 /// Character grid: East Asian characters (all text with `snapToChars`) take whole cells of the
@@ -552,27 +598,155 @@ fn fit_text_blocks(b: &mut Builder, text: &str) {
 /// marks above is 21.8 pt, not two grid lines).
 pub(crate) const EMPHASIS_ROOM: f32 = 0.33;
 
-fn snap_chars(b: &mut Builder, text: &str, grid: &Grid) {
-    let Some(pitch) = grid.chars else { return };
-    let base = grid.font_size.max(1.0);
-    for c in b.clusters.iter_mut() {
+/// Which spaces (U+0020) take the East Asian width — half their font size — as measured in Word
+/// for Mac (10.5 pt 游明朝 and Aptos, `cg7`/`cg10`/`cg15` samples, 2026-10-19): a space next to an
+/// East Asian character, through other spaces, and every space of a run of two or more (あ␣a,
+/// a␣あ, あ␣␣a, a␣␣あ, x␣␣y and ab␣␣cd all take 5.25 pt a space; x␣y takes Aptos's 2.14), with
+/// or without a lines-and-characters grid. Snapping to characters (`snap_all`) measures a single
+/// space after Latin text and before an East Asian character with the Latin font (a␣あ, Word␣文:
+/// the Latin block's cell padding says so) and, of two such, only the second as East Asian.
+fn ea_space_flags(b: &Builder, text: &str, snap_all: bool) -> Vec<bool> {
+    let n = b.clusters.len();
+    let mut flags = vec![false; n];
+    let char_at = |k: usize| b.clusters.get(k).and_then(|c| text.get(c.start..c.end)).and_then(|t| t.chars().next());
+    let is_space = |k: usize| b.clusters.get(k).is_some_and(|c| c.kind == ClKind::Space) && char_at(k) == Some(' ');
+    let is_marker = |k: usize| b.clusters.get(k).is_some_and(|c| c.kind == ClKind::Marker);
+    let ea_at = |k: usize| b.clusters.get(k).is_some_and(|c| matches!(c.kind, ClKind::Text | ClKind::Space)) && char_at(k).is_some_and(is_east_asian);
+    let mut i = 0;
+    while i < n {
+        if !is_space(i) {
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        while j < n && (is_space(j) || is_marker(j)) {
+            j += 1;
+        }
+        let spaces: Vec<usize> = (i..j).filter(|k| is_space(*k)).collect();
+        let left_ea = (0..i).rev().find(|k| !is_marker(*k)).is_some_and(ea_at);
+        let right_ea = (j..n).find(|k| !is_marker(*k)).is_some_and(ea_at);
+        let run = spaces.len();
+        for (q, k) in spaces.iter().enumerate() {
+            let ea = if snap_all { left_ea || (run >= 2 && (q > 0 || !right_ea)) } else { left_ea || right_ea || run >= 2 };
+            if let Some(f) = flags.get_mut(*k) {
+                *f = ea;
+            }
+        }
+        i = j;
+    }
+    flags
+}
+
+/// Gives the East Asian spaces their width: half the space's font size (plus its character spacing).
+fn space_widths(b: &mut Builder, ea_space: &[bool]) {
+    for (k, c) in b.clusters.iter_mut().enumerate() {
+        if ea_space.get(k).copied().unwrap_or(false)
+            && let Some(st) = b.styles.get(c.style as usize)
+            && st.size.is_finite()
+        {
+            c.adv = (st.size * 0.5 + spacing_for(st.rc.spacing, ' ')).max(0.0);
+        }
+    }
+}
+
+/// Character grid for paragraphs that snap to it (see [`Grid`] for the measurements). Lines and
+/// characters: an East Asian character advances by its own advance (its em, or half of it for a
+/// half-width form) plus the grid's gap, its glyph at the start; Latin text and spaces gain half
+/// the gap each. Snap to characters: an East Asian character takes whole cells with its advance
+/// centred in them (a half-width ｱ sits 3.2 pt into an 11.7 pt cell); a mark of a compressed
+/// chain (`chain`) keeps its em, and Latin text its advances: `distribute_cells` fits them to
+/// cells line by line.
+fn snap_chars(b: &mut Builder, text: &str, grid: &Grid, chain: &[bool]) {
+    if grid.chars.is_none() {
+        return;
+    }
+    let gap = grid.gap();
+    for (k, c) in b.clusters.iter_mut().enumerate() {
         if !matches!(c.kind, ClKind::Text | ClKind::Space) || c.adv <= 0.0 {
             continue;
         }
         let Some(ch) = text.get(c.start..).and_then(|t| t.chars().next()) else { continue };
-        let east_asian = is_east_asian(ch);
-        if !(east_asian || (grid.snap_all && c.kind == ClKind::Text)) {
-            continue;
+        let spacing = b.styles.get(c.style as usize).map_or(0.0, |st| spacing_for(st.rc.spacing, ch));
+        if is_east_asian(ch) {
+            if chain.get(k).copied().unwrap_or(false) {
+                continue;
+            }
+            let natural = (c.adv - spacing).max(0.0);
+            let adv = grid.ea_advance(natural) + spacing;
+            if grid.cell.is_some() {
+                let shift = (adv - spacing - natural) / 2.0;
+                for g in b.glyphs.get_mut(c.g0 as usize..c.g1 as usize).into_iter().flatten() {
+                    g.dx += shift;
+                }
+            }
+            c.adv = adv;
+        } else if grid.cell.is_none() {
+            c.adv += gap / 2.0;
         }
-        let size = b.styles.get(c.style as usize).map_or(base, |st| st.size);
-        let cells = if east_asian { (size / base).round() } else { (c.adv / pitch - 0.01).ceil() }.clamp(1.0, 64.0);
-        let adv = cells * pitch;
-        let shift = (adv - c.adv) / 2.0;
-        for g in b.glyphs.get_mut(c.g0 as usize..c.g1 as usize).into_iter().flatten() {
-            g.dx += shift;
-        }
-        c.adv = adv;
     }
+}
+
+/// What a cluster is to a snap-to-characters line (see `distribute_cells`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CellClass {
+    /// Takes no part: markers, tabs, breaks.
+    Other,
+    /// A unit of whole cells: an East Asian character (the ideographic space too) or an object.
+    Cell,
+    /// A Hangul character: a cell that stays beside the next Hangul cell.
+    Hangul,
+    /// A closing mark of a compressed chain (。、」… one after another): the chain is one unit.
+    Mark,
+    /// Latin text: part of a block that takes whole cells.
+    Latin,
+    /// A Latin-width space inside a block.
+    LatinSpace,
+    /// A space with the East Asian width (`ea_space_flags`) inside a block.
+    EastAsianSpace,
+}
+
+/// The marks of compressed chains (`cell_classes`, `snap_chars`): two or more closing marks one
+/// after another (Word for Mac, `cg17`: 。」, 。、。 and 」、。、 before 「; not 、「, 」「 or ・。).
+fn chain_flags(b: &Builder, text: &str) -> Vec<bool> {
+    let mut flags = vec![false; b.clusters.len()];
+    for i in 1..b.clusters.len() {
+        let (Some(prev), Some(next)) = (b.clusters.get(i - 1), b.clusters.get(i)) else { continue };
+        let (Some(pc), Some(nc)) = (cluster_char(text, prev), cluster_char(text, next)) else { continue };
+        if COMPRESSIBLE.contains(pc) && COMPRESSIBLE.contains(nc) {
+            for k in [i - 1, i] {
+                if let Some(f) = flags.get_mut(k) {
+                    *f = true;
+                }
+            }
+        }
+    }
+    flags
+}
+
+fn cell_classes(b: &Builder, text: &str, ea_space: &[bool], chain: &[bool]) -> Vec<CellClass> {
+    b.clusters
+        .iter()
+        .enumerate()
+        .map(|(k, c)| match c.kind {
+            ClKind::Object(_) => CellClass::Cell,
+            ClKind::Text | ClKind::Space => match text.get(c.start..c.end).and_then(|t| t.chars().next()) {
+                Some(_) if chain.get(k).copied().unwrap_or(false) => CellClass::Mark,
+                Some(ch) if is_hangul(ch) => CellClass::Hangul,
+                Some(ch) if is_east_asian(ch) => CellClass::Cell,
+                Some(' ') if c.kind == ClKind::Space => {
+                    if ea_space.get(k).copied().unwrap_or(false) {
+                        CellClass::EastAsianSpace
+                    } else {
+                        CellClass::LatinSpace
+                    }
+                }
+                Some(_) if c.kind == ClKind::Space => CellClass::LatinSpace,
+                Some(_) => CellClass::Latin,
+                None => CellClass::Other,
+            },
+            _ => CellClass::Other,
+        })
+        .collect()
 }
 
 /// The first character of a text cluster.
@@ -580,18 +754,31 @@ fn cluster_char(text: &str, c: &Cluster) -> Option<char> {
     (c.kind == ClKind::Text).then(|| text.get(c.start..c.end)).flatten().and_then(|t| t.chars().next())
 }
 
-/// An East Asian letter for the automatic spacing: an ideograph, kana, Hangul or a full-width
-/// letter or digit — not punctuation (Word adds no space after 。 before Latin text).
+/// An East Asian letter for the automatic spacing: an ideograph, kana (half-width too), Hangul
+/// — not punctuation (Word adds no space after 。 before Latin text) and not a full-width Latin
+/// letter or digit (measured in Word for Mac, `cg17`/`cg18`: ＡＢＣabc, １２３abc and abcＡＢＣ
+/// get none; ｱｲｳabc and 한글abc get the quarter em).
 fn ea_letter(c: char) -> bool {
-    (crate::kinsoku::is_east_asian(c) || is_east_asian(c)) && c.is_alphanumeric()
+    !matches!(c as u32, 0xFF01..=0xFF5E) && (crate::kinsoku::is_east_asian(c) || is_east_asian(c)) && c.is_alphanumeric()
+}
+
+/// A Hangul syllable or jamo: on a snap-to-characters line two of them stay together (Word for
+/// Mac spreads Korean text by its words, not its characters).
+fn is_hangul(c: char) -> bool {
+    matches!(c as u32, 0x1100..=0x11FF | 0x3130..=0x318F | 0xA960..=0xA97F | 0xAC00..=0xD7FF)
 }
 
 /// Word's "Adjust space between Asian and Latin text" and "… between Asian text and numbers"
 /// (`w:autoSpaceDE`, `w:autoSpaceDN`; both on unless a paragraph turns them off): a quarter of the
-/// East Asian character's font size between an East Asian letter and a Latin letter (`letters`)
-/// or a digit (`digits`) next to it, when no space separates them. Measured in Word for Mac:
-/// 漢字Latin漢字123漢字 at 10.5 pt has 2.6 pt gaps, 1/4 em, at each of the four boundaries.
-fn auto_space(b: &mut Builder, text: &str, letters: bool, digits: bool) {
+/// font size of the character before the boundary between an East Asian letter and a Latin
+/// letter (`letters`) or a digit (`digits`) next to it, when no space separates them. Measured
+/// in Word for Mac: 漢字Latin漢字123漢字 at 10.5 pt has 2.6 pt gaps, 1/4 em, at each of the four
+/// boundaries; on a lines-and-characters grid the grid's gap joins the size (a 14 pt pitch over
+/// 10.5 pt: 3.5 after a 10.5 pt character, 4.4 after a 14 pt one, 2.9 after an 8 pt one);
+/// snapping to characters the space is 15/64 of the size (2.46 at 10.5 pt, 3.28 at 14), whatever
+/// the cell. The space is added to the advance of the character before the boundary; returned
+/// per cluster for the snap-to-characters layout, which lays its Latin blocks out again.
+fn auto_space(b: &mut Builder, text: &str, letters: bool, digits: bool, grid: &Grid, snapped: bool) -> Vec<(usize, f32)> {
     let latin =
         |c: char| !crate::kinsoku::is_east_asian(c) && !is_east_asian(c) && ((letters && c.is_alphabetic()) || (digits && c.is_ascii_digit()));
     let mut gaps: Vec<(usize, f32)> = Vec::new();
@@ -602,23 +789,25 @@ fn auto_space(b: &mut Builder, text: &str, letters: bool, digits: bool) {
         if b.tcy.iter().any(|t| t.0 == i - 1 || t.0 == i) {
             continue;
         }
-        let ea = if ea_letter(pc) && latin(nc) {
-            prev
-        } else if latin(pc) && ea_letter(nc) {
-            next
-        } else {
+        if !((ea_letter(pc) && latin(nc)) || (latin(pc) && ea_letter(nc))) {
             continue;
-        };
-        let size = b.styles.get(ea.style as usize).map_or(0.0, |st| st.size);
+        }
+        let size = b.styles.get(prev.style as usize).map_or(0.0, |st| st.size);
         if size.is_finite() && size > 0.0 {
-            gaps.push((i - 1, size / 4.0));
+            let space = match (snapped, grid.chars, grid.cell) {
+                (true, Some(_), Some(_)) => size * 15.0 / 64.0,
+                (true, Some(_), None) => (size + grid.gap()) / 4.0,
+                _ => size / 4.0,
+            };
+            gaps.push((i - 1, space.max(0.0)));
         }
     }
-    for (i, gap) in gaps {
-        if let Some(c) = b.clusters.get_mut(i) {
+    for (i, gap) in &gaps {
+        if let Some(c) = b.clusters.get_mut(*i) {
             c.adv += gap;
         }
     }
+    gaps
 }
 
 /// Full-width closing punctuation that Word's "compress punctuation" (`w:characterSpacingControl`)
@@ -633,13 +822,20 @@ const FULL_WIDTH_PUNCT: &str = "、。，．・：；！？）」』】〕〉》
 /// With `w:topLinePunct` one at the start of a line takes half its cell (see `break_lines`).
 const OPENING: &str = "（「『【〔〈《〘〖〝［｛";
 
-fn compress_punctuation(b: &mut Builder, text: &str) {
+/// `cells`: the paragraph snaps to characters, where Word for Mac was measured (`cg2`/`cg9`,
+/// 2026-10-19) to compress a closing mark only before another closing mark (。、) and to keep an
+/// opening bracket after a mark (、「) in its whole cell.
+fn compress_punctuation(b: &mut Builder, text: &str, cells: bool) {
     let mut halve: Vec<usize> = Vec::new();
     let mut shrink_left: Vec<usize> = Vec::new();
     for i in 1..b.clusters.len() {
         let (Some(prev), Some(next)) = (b.clusters.get(i - 1), b.clusters.get(i)) else { continue };
         let (Some(pc), Some(nc)) = (cluster_char(text, prev), cluster_char(text, next)) else { continue };
-        if OPENING.contains(nc) && FULL_WIDTH_PUNCT.contains(pc) {
+        if cells {
+            if COMPRESSIBLE.contains(pc) && COMPRESSIBLE.contains(nc) {
+                halve.push(i - 1);
+            }
+        } else if OPENING.contains(nc) && FULL_WIDTH_PUNCT.contains(pc) {
             shrink_left.push(i);
         } else if COMPRESSIBLE.contains(pc) && FULL_WIDTH_PUNCT.contains(nc) {
             halve.push(i - 1);
@@ -1875,16 +2071,32 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
             b.shape(s, range.start + seg, &rc, None);
         }
     }
-    if rp.snap_to_grid {
-        snap_chars(&mut b, &p.text, &env.grid);
+    let snapped = rp.snap_to_grid && env.grid.chars.is_some();
+    let snap_cells = snapped && env.grid.cell.is_some();
+    let ea_space = ea_space_flags(&b, &p.text, snap_cells);
+    space_widths(&mut b, &ea_space);
+    let chain = if snap_cells && env.doc.settings.punct_compression.compresses() { chain_flags(&b, &p.text) } else { Vec::new() };
+    if snapped {
+        snap_chars(&mut b, &p.text, &env.grid, &chain);
     }
-    // On a character grid the East Asian characters already sit on their pitch (the grid
-    // absorbs the space); otherwise the automatic spacing applies.
-    if (rp.auto_space_de || rp.auto_space_dn) && !(rp.snap_to_grid && env.grid.chars.is_some()) {
-        auto_space(&mut b, &p.text, rp.auto_space_de, rp.auto_space_dn);
-    }
+    let autos = if rp.auto_space_de || rp.auto_space_dn {
+        auto_space(&mut b, &p.text, rp.auto_space_de, rp.auto_space_dn, &env.grid, snapped)
+    } else {
+        Vec::new()
+    };
+    let (cell_classes, cell_autos) = if snap_cells {
+        let mut cell_autos = vec![0.0f32; b.clusters.len()];
+        for (k, a) in &autos {
+            if let Some(v) = cell_autos.get_mut(*k) {
+                *v += a;
+            }
+        }
+        (cell_classes(&b, &p.text, &ea_space, &chain), cell_autos)
+    } else {
+        (Vec::new(), Vec::new())
+    };
     if env.doc.settings.punct_compression.compresses() {
-        compress_punctuation(&mut b, &p.text);
+        compress_punctuation(&mut b, &p.text, snap_cells);
     }
     fit_text_blocks(&mut b, &p.text);
     // Break opportunities and hyphenation points come from the text as laid out: hidden text that is
@@ -2025,6 +2237,8 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         enclosures,
         tcy: b.tcy,
         openings: Vec::new(),
+        cell_classes,
+        cell_autos,
         align_dy: Vec::new(),
         vertical: env.vertical,
     };
@@ -2093,6 +2307,8 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
     // The document grid's line pitch, for paragraphs that snap to it.
     let grid = Some(env.grid).filter(|g| g.line.is_some() && rp.snap_to_grid);
     let grid = grid.as_ref();
+    // Snapping to characters: the cell the lines are fitted to (`distribute_cells`).
+    let snap_cells = env.grid.cell.filter(|c| rp.snap_to_grid && c.is_finite() && *c > 0.0 && pl.cell_classes.len() == pl.clusters.len());
     let bidi = rtl_para || !pl.bidi_levels.is_empty();
     let mirrored: Vec<Exclusion>;
     let exclusions: &[Exclusion] = if rtl_para {
@@ -2206,11 +2422,8 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 .and_then(|k| pl.clusters.get(k))
                 .map(|c| {
                     let size = pl.styles.get(c.style as usize).map_or(c.adv, |st| st.size);
-                    // Its cell: the character pitch on a grid, else an em; `adv` when wider.
-                    let cell = match env.grid.chars {
-                        Some(pitch) if rp.snap_to_grid && env.grid.font_size > 0.0 => pitch * (size / env.grid.font_size).round().clamp(1.0, 64.0),
-                        _ => size,
-                    };
+                    // Its cell: the character's advance on a grid, else an em; `adv` when wider.
+                    let cell = if rp.snap_to_grid && env.grid.chars.is_some() { env.grid.ea_advance(size) } else { size };
                     (c.adv - cell / 2.0).clamp(0.0, cell / 2.0)
                 })
                 .filter(|h| h.is_finite())
@@ -2452,6 +2665,8 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
         xs.push(end_x);
         pending_tab = None;
         let _ = pending_tab;
+        // Snap to characters: the line's units are fitted to cells and spread over the line.
+        let distributed = snap_cells.is_some_and(|cell| distribute_cells(pl, &mut xs, c0, c1, line_start_x, right_edge, cell, end == LineEnd::Wrap));
 
         // Text alignment (`w:textAlignment`): runs of different sizes line up on their ascent
         // lines (top), the centres of their ascent–descent boxes (center) or their descents
@@ -2617,7 +2832,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
             (None, Align::Right) => slack,
             _ => 0.0,
         };
-        if shift > 0.0 && slack > 0.0 {
+        if shift > 0.0 && slack > 0.0 && !distributed {
             for v in xs.iter_mut().skip(align_from - c0) {
                 *v += shift;
             }
@@ -2631,7 +2846,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 lab.x += shift;
             }
         }
-        let justify = display.is_none() && ((rp.align == Align::Justify && end == LineEnd::Wrap) || rp.align == Align::Distribute);
+        let justify = display.is_none() && !distributed && ((rp.align == Align::Justify && end == LineEnd::Wrap) || rp.align == Align::Distribute);
         // A line that only fits with shrunk spaces is shrunk, the last line of the paragraph too.
         let shrink = display.is_none() && shrink_spaces && slack < 0.0 && last_tab.is_none();
         if shrink {
@@ -2771,6 +2986,222 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
     }
     pl.height = top;
     pl.lines = lines;
+}
+
+/// Snap to characters (`w:docGrid snapToChars`): lays a line out again as Word for Mac does
+/// (measured 2026-10-19 on 468 pt lines of 10.5 pt 游明朝 and Aptos with 11.7 and 18 pt cells,
+/// `cg2`/`cg9`/`cg11`/`cg12`/`cg14`/`cg16`/`cg17` samples). The line is a row of units: an East
+/// Asian character is its cells (`snap_chars`), a run of Latin text with its spaces a block of as
+/// many whole cells as its width needs, the text centred in them (abc in two 11.7 pt cells sits
+/// 3.2 pt in; a block the line breaks inside keeps its own width), two or more closing marks one
+/// after another a compressed chain in whole cells (。、。 is two 11.7 pt cells: half an em, half
+/// an em and an em, a share between each). The units are spread over the line — the last ending
+/// at the right edge, trailing spaces hanging past it with the last block's right padding (quick
+/// brown fox.␣ as a paragraph puts the full stop at the right edge, the q 3.0 pt in) — by sharing
+/// the leftover equally: one share after every unit but the last (none between two Hangul
+/// characters: 한글 stay 11.7 pt apart), one for every East Asian-width space, one plus a twelfth
+/// of its size for every Latin space between two words (あ a あ puts the a twice as far from the
+/// first あ as from the second; a paragraph of 20 あ and "end" has its characters 22.1 pt apart).
+/// The automatic space between East Asian and Latin letters stays outside the cells. Lines with
+/// tabs keep the usual layout. Returns whether the line was laid out again.
+#[allow(clippy::too_many_arguments)]
+fn distribute_cells(pl: &ParaLayout, xs: &mut Vec<f32>, c0: usize, c1: usize, x0: f32, right: f32, cell: f32, wraps: bool) -> bool {
+    use CellClass::*;
+    let class = |k: usize| pl.cell_classes.get(k).copied().unwrap_or(Other);
+    let kind = |k: usize| pl.clusters.get(k).map(|c| c.kind);
+    let adv = |k: usize| pl.clusters.get(k).map_or(0.0, |c| c.adv.max(0.0));
+    let auto = |k: usize| pl.cell_autos.get(k).copied().unwrap_or(0.0).max(0.0);
+    let size = |k: usize| pl.clusters.get(k).and_then(|c| pl.styles.get(c.style as usize)).map_or(0.0, |st| st.size).clamp(0.0, 1584.0);
+    if c1 <= c0 || c1 > pl.clusters.len() || !(cell.is_finite() && cell > 0.0) || xs.len() != c1 - c0 + 1 {
+        return false;
+    }
+    // Trailing spaces and markers hang past the right edge: the line's content ends before them.
+    let mut last = c1;
+    while last > c0 && matches!(kind(last - 1), Some(ClKind::Space) | Some(ClKind::Marker)) {
+        last -= 1;
+    }
+    if last == c0 {
+        return false;
+    }
+    let trailing: f32 = (last..c1).filter(|k| kind(*k) == Some(ClKind::Space)).map(adv).sum();
+    let in_cells = |natural: f32| (natural / cell - 0.001).ceil().clamp(1.0, 10_000.0) * cell;
+    enum Unit {
+        Cell(usize),
+        /// Clusters `k0..k1`, the block's width on the line (its cells; its own width when the
+        /// line breaks inside it, or with its right padding hanging after trailing spaces),
+        /// the text's offset in it and the automatic space after it.
+        Block {
+            k0: usize,
+            k1: usize,
+            width: f32,
+            pad: f32,
+            auto: f32,
+        },
+        /// Closing marks `k0..k1` compressed into whole cells, a share between each.
+        Chain {
+            k0: usize,
+            k1: usize,
+            width: f32,
+            pad: f32,
+        },
+    }
+    let mut units: Vec<Unit> = Vec::new();
+    let mut k = c0;
+    while k < last {
+        match class(k) {
+            Other => {
+                if kind(k) != Some(ClKind::Marker) {
+                    return false;
+                }
+                k += 1;
+            }
+            Cell | Hangul => {
+                units.push(Unit::Cell(k));
+                k += 1;
+            }
+            Mark => {
+                let k0 = k;
+                while k < last && class(k) == Mark {
+                    k += 1;
+                }
+                let natural: f32 = (k0..k).map(adv).sum();
+                if !natural.is_finite() || natural <= 0.0 {
+                    return false;
+                }
+                let width = in_cells(natural);
+                units.push(Unit::Chain { k0, k1: k, width, pad: ((width - natural) / 2.0).max(0.0) });
+            }
+            Latin | LatinSpace | EastAsianSpace => {
+                let k0 = k;
+                while k < last && (matches!(class(k), Latin | LatinSpace | EastAsianSpace) || kind(k) == Some(ClKind::Marker)) {
+                    k += 1;
+                }
+                let k1 = k;
+                let auto = auto(k1 - 1);
+                let natural: f32 = (k0..k1).map(adv).sum::<f32>() - auto;
+                if !natural.is_finite() {
+                    return false;
+                }
+                // The line breaks inside the block (its text goes on): no cells, no padding.
+                let cut = wraps
+                    && k1 == last
+                    && (c1..pl.clusters.len())
+                        .find(|q| kind(*q) != Some(ClKind::Marker))
+                        .is_some_and(|q| matches!(class(q), Latin | LatinSpace | EastAsianSpace));
+                let (width, pad) = if cut || natural <= 0.0 {
+                    (natural.max(0.0), 0.0)
+                } else if k1 == last && trailing > 0.0 {
+                    // The trailing spaces count for the block's cells, then hang past the right
+                    // edge with the right padding: the text ends at the edge.
+                    let pad = ((in_cells(natural + trailing) - natural - trailing) / 2.0).max(0.0);
+                    (pad + natural, pad)
+                } else {
+                    let w = in_cells(natural);
+                    (w, ((w - natural) / 2.0).max(0.0))
+                };
+                units.push(Unit::Block { k0, k1, width, pad, auto });
+            }
+        }
+    }
+    if units.is_empty() {
+        return false;
+    }
+    // A Latin space between two words of its block stretches, with a twelfth of its size more.
+    let internal =
+        |k: usize, k1: usize| class(k) == LatinSpace && (k + 1..k1).find(|q| kind(*q) != Some(ClKind::Marker)).is_some_and(|q| class(q) == Latin);
+    // Two Hangul characters stay together: no share between them.
+    let glued = |ui: usize| matches!((units.get(ui), units.get(ui + 1)), (Some(Unit::Cell(a)), Some(Unit::Cell(b))) if class(*a) == Hangul && class(*b) == Hangul);
+    let n_units = units.len();
+    let mut shares = 0usize;
+    let mut fixed = 0.0f32;
+    let mut total = 0.0f32;
+    for (ui, u) in units.iter().enumerate() {
+        if ui + 1 < n_units && !glued(ui) {
+            shares += 1;
+        }
+        match u {
+            Unit::Cell(k) => total += adv(*k),
+            Unit::Chain { k0, k1, width, .. } => {
+                total += width;
+                shares += (k1 - k0).saturating_sub(1);
+            }
+            Unit::Block { k0, k1, width, auto, .. } => {
+                total += width + auto;
+                for k in *k0..*k1 {
+                    match class(k) {
+                        EastAsianSpace => shares += 1,
+                        LatinSpace if internal(k, *k1) => {
+                            shares += 1;
+                            fixed += size(k) / 12.0;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    // The automatic spaces come out of what the cells leave; a line its cells fill exactly has
+    // none (38 あ and "end" on a 40-cell line put the e 3.1 pt into its cells, as a lone block).
+    let autos: f32 = (c0..last).map(auto).sum();
+    let room = right - x0 - (total - autos) - fixed;
+    let kept = if autos > 0.0 && room.is_finite() && room < autos { (room / autos).clamp(0.0, 1.0) } else { 1.0 };
+    let slack = room - autos * kept;
+    let share = if shares > 0 && slack.is_finite() && slack > 0.0 { slack / shares as f32 } else { 0.0 };
+    let extra = if share > 0.0 { 1.0 } else { 0.0 };
+    let mut pos = vec![x0; c1 - c0];
+    let mut x = x0;
+    for (ui, u) in units.iter().enumerate() {
+        let after = if ui + 1 < n_units && !glued(ui) { share } else { 0.0 };
+        match u {
+            Unit::Cell(k) => {
+                if let Some(v) = pos.get_mut(*k - c0) {
+                    *v = x;
+                }
+                x += adv(*k) - auto(*k) * (1.0 - kept) + after;
+            }
+            Unit::Chain { k0, k1, width, pad } => {
+                let mut cur = x + pad;
+                for k in *k0..*k1 {
+                    if let Some(v) = pos.get_mut(k - c0) {
+                        *v = cur;
+                    }
+                    cur += adv(k) + if k + 1 < *k1 { share } else { 0.0 };
+                }
+                x += width + share * (k1 - k0).saturating_sub(1) as f32 + after;
+            }
+            Unit::Block { k0, k1, width, pad, auto } => {
+                let bx = x;
+                let mut cur = x + pad;
+                let mut stretched = 0.0;
+                for k in *k0..*k1 {
+                    if let Some(v) = pos.get_mut(k - c0) {
+                        *v = cur;
+                    }
+                    cur += adv(k) - if k + 1 == *k1 { *auto } else { 0.0 };
+                    let s = match class(k) {
+                        EastAsianSpace => share,
+                        LatinSpace if internal(k, *k1) => share + extra * size(k) / 12.0,
+                        _ => 0.0,
+                    };
+                    cur += s;
+                    stretched += s;
+                }
+                x = bx + width + stretched + auto * kept + after;
+            }
+        }
+    }
+    for k in last..c1 {
+        if let Some(v) = pos.get_mut(k - c0) {
+            *v = x;
+        }
+        x += adv(k);
+    }
+    if !(x.is_finite() && pos.iter().all(|v| v.is_finite())) {
+        return false;
+    }
+    *xs = pos;
+    xs.push(x);
+    true
 }
 
 /// Make a row's lines as tall as its tallest, and return that height.
