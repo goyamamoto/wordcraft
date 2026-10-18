@@ -642,6 +642,9 @@ struct Ctx<'a> {
     chains: textbox::Chains,
     /// The current section's document grid (body text only: none for headers and footers).
     grid: para::Grid,
+    /// The current section is top-to-bottom (`tbRl`): its East Asian text shapes with vertical
+    /// alternates.
+    vertical: bool,
     /// Whether tracked deletions are left out in the story being laid out
     /// ([`LayoutOptions::hides_deleted`]): the body's, or the story of the [`layout_box`] at work.
     hide_deleted: bool,
@@ -710,6 +713,7 @@ impl Ctx<'_> {
             read_line_spacing: None,
             grid: para::Grid::default(),
             fit_objects: false,
+            vertical: false,
         };
         let pl = Arc::new(para::layout_para(&p, &env));
         self.numbers.insert(n, pl.clone());
@@ -859,6 +863,7 @@ impl Ctx<'_> {
             read_line_spacing: if self.opts.view == ViewMode::Read { self.opts.read_line_spacing } else { None },
             grid: self.grid,
             fit_objects: self.boxes.inside(),
+            vertical: self.vertical,
         }
     }
 }
@@ -2018,6 +2023,7 @@ fn layout_pass(
         boxes: wordcraft_doc::BoxBudget::default(),
         chains: Default::default(),
         grid: para::Grid::default(),
+        vertical: false,
         uses_totals: false,
         track_totals: true,
         pct_base: None,
@@ -2143,6 +2149,7 @@ fn layout_pass(
         pb.sect = sect;
         pb.sect_idx = si;
         ctx.grid = para::Grid::default();
+        ctx.vertical = turn == TextDirection::Down;
         let (foot, end_opts) = (doc.note_options(sect, false), doc.note_options(sect, true));
         pb.sect_beneath = foot.pos == wordcraft_doc::section::NotePos::BeneathText;
         if !web && !doc.footnote_separators.is_empty() {
@@ -2294,6 +2301,7 @@ fn layout_pass(
         p.h = bottom + 36.0;
     }
     ctx.grid = para::Grid::default();
+    ctx.vertical = false;
     if !reflow && ctx.uses_totals && may_repeat {
         let found = Totals::of(&pages, sections.len());
         if found != *totals {
@@ -3622,6 +3630,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize) -> f32
                 read_line_spacing: if ctx.opts.view == ViewMode::Read { ctx.opts.read_line_spacing } else { None },
                 grid: ctx.grid,
                 fit_objects: false,
+                vertical: false,
             };
             let _ = rp;
             let pl = para::layout_para(p, &env);

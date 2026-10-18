@@ -193,3 +193,55 @@ fn x_of_cluster(para: &crate::para::ParaLayout, c: &crate::para::Cluster) -> f32
     let line = para.lines.iter().find(|l| (l.c0..l.c1).contains(&k)).unwrap();
     line.cl_left(k).unwrap()
 }
+
+/// Top-to-bottom text takes the font's vertical forms (OpenType `vert`) for the punctuation
+/// Word for Mac substitutes — 、。「」（）ー and the small kana stand upright as their vertical
+/// glyphs, with no correction — while the ellipsis and the dash keep their horizontal form
+/// turned along the line, as Word draws them (`plan/word/samples/ja-layout-v.pdf`).
+#[test]
+fn vertical_text_takes_the_fonts_vertical_forms_and_turns_the_dashes() {
+    let mut d = Document::from_text("Vertical. \n日本語、縦書き。「括弧」ーぁっ（丸）…―");
+    d.last_section.text_direction = TextDirection::Down;
+    let l = lay(&d);
+    let draws = display::page_display(&d, &l.pages[0], &Default::default());
+    // Every glyph drawn turned: (character, glyph id, its face, whether it stands upright).
+    let mut seen: Vec<(char, u32, wordcraft_fonts::FaceRef, bool)> = Vec::new();
+    let mut take = |ds: &[display::Draw], upright: bool| {
+        for x in ds {
+            if let display::Draw::Glyphs { face, glyphs, text, ranges, .. } = x {
+                for (g, r) in glyphs.iter().zip(ranges) {
+                    if let Some(c) = text.get(r.clone()).and_then(|t| t.chars().next()) {
+                        seen.push((c, g.0, *face, upright));
+                    }
+                }
+            }
+        }
+    };
+    for x in &draws {
+        if let display::Draw::Turned { items, .. } = x {
+            for it in items {
+                match it {
+                    display::Draw::Rotated { items, .. } => take(items, true),
+                    other => take(std::slice::from_ref(other), false),
+                }
+            }
+        }
+    }
+    let of = |c: char| seen.iter().find(|s| s.0 == c).unwrap_or_else(|| panic!("{c} is drawn"));
+    for c in ['日', '、', '。', '「', '」', 'ー', 'ぁ', 'っ', '（', '）'] {
+        assert!(of(c).3, "{c} stands upright");
+    }
+    for c in ['V', 'e', '…', '―'] {
+        let (_, gid, face, upright) = *of(c);
+        assert!(!upright, "{c} lies along the line");
+        assert_eq!(gid, face.glyph_for(c), "{c} keeps its horizontal form");
+    }
+    // Where the font has vertical forms (every CJK font on macOS does), the brackets and the
+    // prolonged sound mark are drawn as those forms, not as the horizontal glyphs.
+    let (_, gid, face, _) = *of('「');
+    if face.has_layout_tables() && cfg!(target_os = "macos") {
+        assert_ne!(gid, face.glyph_for('「'), "「 takes its vertical form");
+        assert_ne!(of('ー').1, face.glyph_for('ー'), "ー takes its vertical form");
+        assert_ne!(of('、').1, face.glyph_for('、'), "、 takes its vertical form");
+    }
+}
