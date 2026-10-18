@@ -627,6 +627,12 @@ pub fn line_metrics(face: &crate::FontFace) -> (f64, f64) {
 /// Japanese line 0.07 em further apart than Word. `None` for other families: their faces' own
 /// metrics apply ([`line_metrics`]).
 pub fn office_line_metrics(family: &str, face: &crate::FontFace) -> Option<(f64, f64)> {
+    is_office_yu(family).then_some((1.051 * face.upem, 0.379 * face.upem))
+}
+
+/// Is `family` one of the Yu Mincho / Yu Gothic families Office bundles its own builds of (by
+/// its English or Japanese name, any weight)?
+pub fn is_office_yu(family: &str) -> bool {
     const YU: &[&str] = &[
         "Yu Mincho",
         "Yu Mincho Demibold",
@@ -644,8 +650,64 @@ pub fn office_line_metrics(family: &str, face: &crate::FontFace) -> Option<(f64,
         "游ゴシック Bold",
     ];
     let base = fold_cjk_name(family);
-    let yu = YU.iter().any(|n| fold_cjk_name(n) == base);
-    yu.then_some((1.051 * face.upem, 0.379 * face.upem))
+    YU.iter().any(|n| fold_cjk_name(n) == base)
+}
+
+/// Where Word draws a run's underline and strikethrough, in points for text of `size` points.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Decorations {
+    /// The underline's top edge below the baseline.
+    pub underline_top: f32,
+    pub underline_thickness: f32,
+    /// The strikethrough's top edge above the baseline.
+    pub strike_top: f32,
+    pub strike_thickness: f32,
+}
+
+/// Is `family` Aptos (Office's default Latin font since 2023) or one of its variants?
+pub fn is_office_aptos(family: &str) -> bool {
+    let f = family.trim();
+    f.len() >= 5 && f.get(..5).is_some_and(|h| h.eq_ignore_ascii_case("aptos")) && f.get(5..).is_some_and(|r| r.is_empty() || r.starts_with(' '))
+}
+
+/// The underline and strikethrough geometry Word for Mac draws for `size`-point text of
+/// `family` drawn with `face`: the face's own `post` and OS/2 suggestions (an underline whose
+/// top is the table's offset below the baseline, a strike whose top is OS/2's offset above it),
+/// except for the fonts Office bundles, which another face stands in for here — measured in
+/// Word for Mac 16.114 on 2026-10-19:
+/// - Word's own Yu Mincho / Yu Gothic builds ([`is_office_yu`]), at 8–48 pt: the underline's
+///   top edge 0.153 em + 0.53 pt below the baseline (1.68 pt at 8, 2.16 at 10.5, 4.08 at 24,
+///   7.92 at 48 — not a fixed share of the em), 0.05 em thick; the strikethrough's top 0.42 em
+///   above the baseline, 0.045 em thick (4.32 and 0.48 at 10.5, 20.16 and 2.16 at 48). The
+///   macOS 游明朝体 says −0.075 em / 0.05 em and 0.299 em / 0.05 em, which would put the
+///   underline a point too close to 10.5-pt text.
+/// - Aptos ([`is_office_aptos`]), at 10.5, 16 and 24 pt: the underline's top 0.05 em below the
+///   baseline, 0.025 em thick (0.48 and 0.24 at 10.5); the strikethrough's top 0.36 em above,
+///   0.05 em thick (3.84 and 0.48 at 10.5).
+///
+/// Hostile sizes are clamped.
+pub fn decoration_metrics(family: &str, face: &crate::FontFace, size: f32) -> Decorations {
+    let size = if size.is_finite() { size.clamp(0.0, 1638.0) } else { 0.0 };
+    if is_office_yu(family) {
+        return Decorations {
+            underline_top: 0.153 * size + 0.53,
+            underline_thickness: 0.05 * size,
+            strike_top: 0.42 * size,
+            strike_thickness: 0.045 * size,
+        };
+    }
+    if is_office_aptos(family) {
+        return Decorations { underline_top: 0.05 * size, underline_thickness: 0.025 * size, strike_top: 0.36 * size, strike_thickness: 0.05 * size };
+    }
+    let k = size as f64 / face.upem.max(1.0);
+    let (uo, ut) = face.underline;
+    let (so, st) = face.strikeout;
+    Decorations {
+        underline_top: (-uo * k) as f32,
+        underline_thickness: (ut * k) as f32,
+        strike_top: (so * k) as f32,
+        strike_thickness: (st * k) as f32,
+    }
 }
 
 #[cfg(test)]
@@ -665,6 +727,35 @@ mod tests {
             assert!(office_line_metrics(name, face.get()).is_none(), "{name}");
         }
         let _ = db;
+    }
+
+    #[test]
+    fn words_own_yu_fonts_take_words_decoration_geometry() {
+        let face = resolve("Yu Mincho", false, false).face;
+        let d = decoration_metrics("游明朝", face.get(), 10.5);
+        assert!((d.underline_top - 2.1365).abs() < 1e-3 && (d.underline_thickness - 0.525).abs() < 1e-3, "{d:?}");
+        assert!((d.strike_top - 4.41).abs() < 1e-3 && (d.strike_thickness - 0.4725).abs() < 1e-3, "{d:?}");
+        let d48 = decoration_metrics("Yu Gothic Medium", face.get(), 48.0);
+        assert!((d48.underline_top - 7.874).abs() < 1e-3 && (d48.strike_top - 20.16).abs() < 1e-3, "{d48:?}");
+        // Aptos: Word's geometry for it, whatever face stands in.
+        let face = resolve("Aptos", false, false).face.get();
+        let d = decoration_metrics("Aptos", face, 10.5);
+        assert!((d.underline_top - 0.525).abs() < 1e-3 && (d.underline_thickness - 0.2625).abs() < 1e-3, "{d:?}");
+        assert!((d.strike_top - 3.78).abs() < 1e-3 && (d.strike_thickness - 0.525).abs() < 1e-3, "{d:?}");
+        assert!(is_office_aptos("Aptos Display") && is_office_aptos("aptos narrow") && !is_office_aptos("Aptosaurus") && !is_office_aptos(""));
+        // Another family: the face's own tables, scaled to the size.
+        let face = resolve("Source Sans 3", false, false).face.get();
+        let d = decoration_metrics("Source Sans 3", face, 20.0);
+        let k = 20.0 / face.upem;
+        assert!((d.underline_top as f64 + face.underline.0 * k).abs() < 1e-3, "{d:?} vs {:?}", face.underline);
+        assert!((d.underline_thickness as f64 - face.underline.1 * k).abs() < 1e-3);
+        assert!((d.strike_top as f64 - face.strikeout.0 * k).abs() < 1e-3 && (d.strike_thickness as f64 - face.strikeout.1 * k).abs() < 1e-3);
+        assert!(d.underline_top > 0.0 && d.strike_top > 0.0 && d.underline_thickness > 0.0, "{d:?}");
+        // Hostile sizes never produce NaN or infinity.
+        for v in [f32::NAN, f32::INFINITY, -5.0, 1e9] {
+            let d = decoration_metrics("游明朝", face, v);
+            assert!(d.underline_top.is_finite() && d.strike_top.is_finite(), "{v}: {d:?}");
+        }
     }
 
     #[test]

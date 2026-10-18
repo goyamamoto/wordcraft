@@ -78,6 +78,8 @@ pub struct StyleRun {
     pub glyph_ascent: f32,
     /// Baseline shift (superscript etc.), points, positive up.
     pub shift: f32,
+    /// Where Word draws this run's underline and strikethrough, points at this size.
+    pub deco: wordcraft_fonts::word::Decorations,
 }
 
 /// A positioned glyph inside its cluster.
@@ -591,12 +593,13 @@ fn fit_text_blocks(b: &mut Builder, text: &str) {
     }
 }
 
-/// Emphasis marks (傍点, `w:em`) take room: a third of an em above the text for marks above it,
-/// below for marks below (a 10.5 pt line with marks grew by about 3.8 pt in Word for Mac).
-/// The room an emphasis mark (傍点) adds to a line: a third of an em on its side, added after
-/// the document grid has sized the line (Word for Mac: a 10.5 pt line on an 18 pt grid with
-/// marks above is 21.8 pt, not two grid lines).
-pub(crate) const EMPHASIS_ROOM: f32 = 0.33;
+/// The room an emphasis mark (傍点) asks for on its side of the text, in ems of the marked
+/// text: measured in Word for Mac at 10.5 and 16 pt with and without a document grid (3.6–3.84
+/// pt at 10.5, 5.76 at 16, the same for dots, commas, circles and under dots, in horizontal
+/// lines and vertical columns alike). How the line takes it is decided where the line is sized
+/// (`layout_para`): without a grid the line grows by it on the mark's side; in a grid the
+/// text's own slack can absorb it.
+pub(crate) const EMPHASIS_ROOM: f32 = 0.36;
 
 /// Which spaces (U+0020) take the East Asian width — half their font size — as measured in Word
 /// for Mac (10.5 pt 游明朝 and Aptos, `cg7`/`cg10`/`cg15` samples, 2026-10-19): a space next to an
@@ -1126,6 +1129,7 @@ impl<'a> Builder<'a> {
             descent: (d * k) as f32,
             glyph_ascent: (face.ascent.max(0.0) * k) as f32,
             shift: rc.baseline_shift(),
+            deco: wordcraft_fonts::word::decoration_metrics(ea_family.unwrap_or(&rc.font), &face, size),
         };
         // A `u32` index (like the glyph ranges) counts more distinct formats than a paragraph can
         // hold in memory, so every format keeps its own style.
@@ -2828,9 +2832,29 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
         } else {
             top + baseline_offset(rp.line_spacing, asc, height, desc).max(obj_asc.min(height - desc))
         };
-        // Emphasis marks sit outside the grid's line: the line grows by their room.
-        let baseline = baseline + em_above;
-        let height = height + em_above + em_below;
+        // Emphasis marks (傍点) ask for `EMPHASIS_ROOM` on their side of the text. Measured in
+        // Word for Mac: without a grid the line grows by the room on that side; in a grid a
+        // line whose slack above the text (half of what the whole pitches leave over) holds the
+        // room keeps its height and baseline for marks above the text, and for marks below it
+        // moves the text up by the room instead (16-pt text in two 18-pt pitches: dots leave
+        // the baseline 23.3 pt below the line's top, under dots lift it to 17.5); a line
+        // without that slack grows by the whole room on the mark's side, its text staying put
+        // (10.5-pt text in one pitch: 21.84 pt tall, the baseline 3.84 lower under dots above
+        // it). Exact spacing is exact: the marks get no room.
+        let exact = matches!(rp.line_spacing, LineSpacing::Exactly(_));
+        let pad = if centred { ((height - asc.max(obj_asc) - desc) / 2.0).max(0.0) } else { 0.0 };
+        let (mut baseline, mut height) = (baseline, height);
+        if !exact {
+            if em_above > pad {
+                baseline += em_above;
+                height += em_above;
+            }
+            if em_below > pad {
+                height += em_below;
+            } else {
+                baseline -= em_below;
+            }
+        }
 
         // Alignment / justification (trailing spaces hang).
         let mut content_end = xs.last().copied().unwrap_or(line_start_x);
