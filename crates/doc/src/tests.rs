@@ -14,6 +14,11 @@ fn word_count() {
     let d = Document::from_text("Hello, world!\nThis is — a test 42.\n\n");
     assert_eq!(d.word_count(), 7);
     assert_eq!(count_words(" -- "), 0);
+    // Word for Mac counts every Chinese or Japanese character, punctuation included, as a word.
+    assert_eq!(count_words("漢字かなabc 123、「テスト」。Hello world"), 15);
+    assert_eq!(count_words("日本語の文章です。"), 9);
+    assert_eq!(count_words("日本語 English 混在、テスト"), 10);
+    assert_eq!(count_words("한국어 단어"), 2, "Korean words are separated by spaces");
 }
 
 #[test]

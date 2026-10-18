@@ -660,9 +660,32 @@ fn set(s: &mut Session, v: &Value) -> CmdResult {
 }
 
 /// What the ribbon shows: the formatting at the selection (mixed values are null).
+/// The character the formatting state describes: the first selected one, else the one before
+/// the caret (what typing there continues), else the one after it.
+fn described_char(s: &Session) -> Option<char> {
+    let (a, b) = s.sel.ordered();
+    let text = &s.doc.para_at(&a)?.text;
+    let after = || text.get(a.off..).and_then(|t| t.chars().next());
+    if a != b {
+        return after();
+    }
+    text.get(..a.off).and_then(|t| t.chars().next_back()).or_else(after)
+}
+
+/// The font East Asian text with formatting `r` is drawn with: its own East Asian font, else the
+/// theme's for the run's East Asian language (游明朝 for Japanese body text under the Office theme).
+fn east_asian_font(s: &Session, r: &ResolvedChar, c: char) -> Option<String> {
+    let st = &s.doc.settings;
+    let major = r.font == st.major_font && st.major_font != st.minor_font;
+    r.font_ea.clone().or_else(|| st.east_asian_font(major, r.lang_ea.as_deref(), c.encode_utf8(&mut [0; 4])).map(str::to_string))
+}
+
 pub fn state(s: &Session) -> Value {
     let all = resolved(s);
     let first = all.first().cloned();
+    // On East Asian text the font box names the East Asian font, as Word's does (Yu Mincho on
+    // 漢字, Aptos on abc, in the same paragraph).
+    let ea_char = described_char(s).filter(|c| wordcraft_doc::east_asian::is_east_asian(*c));
     let same = |f: &dyn Fn(&ResolvedChar) -> Value| -> Value {
         let Some(r) = &first else { return Value::Null };
         let v0 = f(r);
@@ -671,7 +694,10 @@ pub fn state(s: &Session) -> Value {
     let style = s.doc.para_at(&s.sel.focus).and_then(|p| p.props.style.clone()).unwrap_or_else(|| "Normal".into());
     let style_name = s.doc.styles.get(&style).map(|st| st.name.clone()).unwrap_or(style.clone());
     json!({
-        "font": same(&|r| json!(r.font)),
+        "font": match ea_char {
+            Some(c) => same(&|r| json!(east_asian_font(s, r, c).unwrap_or_else(|| r.font.clone()))),
+            None => same(&|r| json!(r.font)),
+        },
         "fontEastAsia": same(&|r| json!(r.font_ea)),
         "size": same(&|r| json!(r.size)),
         "bold": all.iter().all(|r| r.bold),

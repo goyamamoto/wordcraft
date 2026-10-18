@@ -7277,3 +7277,18 @@ fn a_japanese_region_starts_from_words_japanese_normal_template() {
     s.system_region = wordcraft_geom::Region::from_tag("ko-KR");
     assert_eq!(s.blank_document().settings.theme_font_lang_ea.as_deref(), Some("ko-KR"));
 }
+
+/// Word's font box names the East Asian font on 漢字 (Yu Mincho there) and the Latin font on abc in
+/// the same paragraph; a selection goes by its first character.
+#[test]
+fn format_state_names_the_east_asian_font_on_japanese_text() {
+    let mut s = Session::new(crate::blank_document(&wordcraft_geom::Region::from_tag("ja-JP")));
+    run(&mut s, "text.insert", json!({"text": "漢字"}));
+    assert_eq!(run(&mut s, "format.state", json!({}))["font"], "游明朝");
+    run(&mut s, "text.insert", json!({"text": "abc"}));
+    assert_eq!(run(&mut s, "format.state", json!({}))["font"], "Aptos");
+    run(&mut s, "select.all", json!({}));
+    assert_eq!(run(&mut s, "format.state", json!({}))["font"], "游明朝");
+    // Every Chinese or Japanese character is a word, as Word counts them (#word count).
+    assert_eq!(s.word_count(), 3);
+}
