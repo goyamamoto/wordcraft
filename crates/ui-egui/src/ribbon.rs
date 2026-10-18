@@ -501,9 +501,10 @@ fn mi_text(ui: &mut Ui, app: &mut WordApp, text: &str, id: &str, params: Value) 
 }
 
 /// The proofing languages the Language menu offers: tag and English name (translated when drawn).
-pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 9] = [
+pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 10] = [
     ("en-US", "English (United States)"),
     ("en-GB", "English (United Kingdom)"),
+    ("ja-JP", "Japanese"),
     ("pl-PL", "Polish"),
     ("pt-BR", "Portuguese (Brazil)"),
     ("it-IT", "Italian"),
@@ -631,7 +632,7 @@ pub(crate) fn caret_language(app: &WordApp) -> String {
 }
 
 /// The language tag at the caret, resolved through the styles and the document default.
-fn caret_lang_tag(app: &WordApp) -> Option<String> {
+pub(crate) fn caret_lang_tag(app: &WordApp) -> Option<String> {
     let s = &app.session;
     let para = s.doc.para_at(&s.sel.focus);
     let style = para.and_then(|p| p.props.style.clone());
@@ -662,9 +663,11 @@ pub(crate) fn caret_missing_dictionary(app: &WordApp) -> Option<&'static str> {
 /// (#860: the short list alone left no way to pick French).
 pub(crate) fn language_menu(ui: &mut Ui, app: &mut WordApp) {
     let st = app.session.run("format.state", &json!({})).unwrap_or_default();
-    // The selection's own language; else (nothing set on the text) the one it gets from its
-    // style or the document default, as the status bar shows.
-    let current = match st.get("lang") {
+    // The selection's own language — the East Asian one on East Asian text (Japanese on 漢字);
+    // else (nothing set on the text) the one it gets from its style or the document default, as
+    // the status bar shows.
+    let east_asian = st.get("eastAsian").and_then(Value::as_bool).unwrap_or(false);
+    let current = match st.get(if east_asian { "langEastAsia" } else { "lang" }) {
         Some(Value::String(t)) => t.clone(),
         Some(Value::Null) if app.session.sel.is_collapsed() => caret_lang_tag(app).unwrap_or_else(|| "en-US".into()),
         _ => String::new(),
@@ -679,6 +682,7 @@ pub(crate) fn language_menu(ui: &mut Ui, app: &mut WordApp) {
             || (tag == "tr-TR" && current.eq_ignore_ascii_case("tr"))
             || (tag == "cs-CZ" && wordcraft_engine::proof::ProofLang::from_tag(Some(&current)) == wordcraft_engine::proof::ProofLang::Cs)
             || (tag == "en-US" && current.eq_ignore_ascii_case("en"))
+            || (tag == "ja-JP" && current.eq_ignore_ascii_case("ja"))
     };
     let checks = language_checks(&current, listed);
     if let Some(name) = checks.extra {
@@ -3018,5 +3022,26 @@ mod tests {
         // At the start of the paragraph the character after the caret decides.
         app.run("caret.docStart", json!({})).unwrap();
         assert_eq!(caret_language(&app), "Japanese");
+        // The status bar menu lists Japanese, checked on Japanese text; French set on 漢字 is its
+        // Latin language, so the text stays Japanese (as in Word), and abc gets French.
+        use egui_kittest::kittest::{By, Queryable};
+        let item = |label: &'static str| By::new().label_contains(label);
+        let mut h =
+            egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 400.0)).build_ui_state(|ui, app: &mut WordApp| language_menu(ui, app), app);
+        h.run();
+        assert!(h.query(item("Japanese")).is_some(), "the short list has Japanese");
+        let st = h.state_mut().session.run("format.state", &json!({})).unwrap();
+        assert_eq!((st["eastAsian"].as_bool(), st["langEastAsia"].as_str()), (Some(true), Some("ja-JP")), "checked as the current language");
+        h.state_mut().run("select.all", json!({})).unwrap();
+        h.state_mut().run("review.language", json!({"lang": "fr-FR"})).unwrap();
+        h.state_mut().run("caret.docStart", json!({})).unwrap();
+        h.run();
+        assert_eq!(caret_language(h.state()), "Japanese");
+        h.state_mut().run("caret.docEnd", json!({})).unwrap();
+        assert_eq!(caret_language(h.state()), "French (France)");
+        // Choosing Japanese on abc sets its East Asian language and leaves French in place.
+        h.state_mut().run("review.language", json!({"lang": "ja-JP"})).unwrap();
+        assert_eq!(caret_language(h.state()), "French (France)");
+        assert_eq!(h.state_mut().session.run("format.state", &json!({})).unwrap()["langEastAsia"], "ja-JP");
     }
 }
