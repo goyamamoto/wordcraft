@@ -360,6 +360,9 @@ pub struct ParaLayout {
     /// font's line height; the display draws the glyphs turned 90° anticlockwise about its
     /// centre, which a turned (`tbRl`) page stands upright again, as Word draws them.
     pub tcy: Vec<(usize, f32)>,
+    /// Clusters that are full-width opening brackets (「（『…), sorted: with `w:topLinePunct`
+    /// one that starts a line takes half its cell (see `break_lines`).
+    pub openings: Vec<u32>,
 }
 
 /// A shape drawn over a cluster (an enclosed character's circle, square, triangle or diamond),
@@ -613,13 +616,21 @@ fn auto_space(b: &mut Builder, text: &str, letters: bool, digits: bool) {
 /// and every 。 and 、 but the last take half an em; a 、 before 句 keeps its full width.
 const COMPRESSIBLE: &str = "、。，．）」』】〕〉》〙〗〟］｝";
 const FULL_WIDTH_PUNCT: &str = "、。，．・：；！？）」』】〕〉》〙〗〟］｝（「『【〔〈《〘〖〝［｛";
+/// Full-width opening brackets: after any full-width mark one loses its blank left half (Word
+/// for Mac: 「「い, 「（い, 『「い, （（い, ：「い, ・「い all put い 1.5 em after the first mark, and
+/// あ×44、「 wraps as あ×43 / あ、「 — the 、 keeps its width, so it is the bracket that shrinks).
+/// With `w:topLinePunct` one at the start of a line takes half its cell (see `break_lines`).
+const OPENING: &str = "（「『【〔〈《〘〖〝［｛";
 
 fn compress_punctuation(b: &mut Builder, text: &str) {
     let mut halve: Vec<usize> = Vec::new();
+    let mut shrink_left: Vec<usize> = Vec::new();
     for i in 1..b.clusters.len() {
         let (Some(prev), Some(next)) = (b.clusters.get(i - 1), b.clusters.get(i)) else { continue };
         let (Some(pc), Some(nc)) = (cluster_char(text, prev), cluster_char(text, next)) else { continue };
-        if COMPRESSIBLE.contains(pc) && FULL_WIDTH_PUNCT.contains(nc) {
+        if OPENING.contains(nc) && FULL_WIDTH_PUNCT.contains(pc) {
+            shrink_left.push(i);
+        } else if COMPRESSIBLE.contains(pc) && FULL_WIDTH_PUNCT.contains(nc) {
             halve.push(i - 1);
         }
     }
@@ -629,6 +640,19 @@ fn compress_punctuation(b: &mut Builder, text: &str) {
         {
             // Closing marks sit in the left half of their cell: the glyph stays, the cell shrinks.
             c.adv /= 2.0;
+        }
+    }
+    for i in shrink_left {
+        if let Some(c) = b.clusters.get_mut(i)
+            && c.adv.is_finite()
+        {
+            // Opening brackets sit in the right half: the cell loses its left half, the glyph
+            // moves left into it.
+            c.adv /= 2.0;
+            let half = c.adv;
+            for g in b.glyphs.get_mut(c.g0 as usize..c.g1 as usize).into_iter().flatten() {
+                g.dx -= half;
+            }
         }
     }
 }
@@ -1950,7 +1974,17 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         left_out: Vec::new(),
         enclosures,
         tcy: b.tcy,
+        openings: Vec::new(),
     };
+    if pl.rp.top_line_punct {
+        pl.openings = pl
+            .clusters
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| cluster_char(&p.text, c).is_some_and(|ch| OPENING.contains(ch)))
+            .map(|(k, _)| k as u32)
+            .collect();
+    }
     let auto = env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens;
     pl.hyph_after = hyphenation_points(&text, to_para, &pl, auto, env.doc.settings.hyphenate_caps, &runs);
     pl.left_out = left;
@@ -2106,6 +2140,33 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 LevelSuffix::Nothing => end,
             };
         }
+        // Compress punctuation at the start of a line (`w:topLinePunct`): an opening bracket
+        // that starts a line takes half its cell, its blank left half hung into the margin (or
+        // the indent). Word for Mac: 「 at a wrapped or first line starts 0.5 em before the
+        // left edge, the next character 0.5 em after it (half the pitch on a character grid,
+        // where the characters after it sit off the grid), so the line holds half an em more;
+        // only the first of 「「 moves; after a list number nothing moves. A bracket already
+        // shrunk by punctuation compression has no left half left to hang.
+        let hang = if rp.top_line_punct && !rtl_para && !(first && pl.label.is_some()) {
+            (i..n)
+                .find(|k| pl.clusters.get(*k).is_none_or(|c| c.kind != ClKind::Marker))
+                .filter(|k| pl.openings.binary_search(&(*k as u32)).is_ok())
+                .and_then(|k| pl.clusters.get(k))
+                .map(|c| {
+                    let size = pl.styles.get(c.style as usize).map_or(c.adv, |st| st.size);
+                    // Its cell: the character pitch on a grid, else an em; `adv` when wider.
+                    let cell = match env.grid.chars {
+                        Some(pitch) if rp.snap_to_grid && env.grid.font_size > 0.0 => pitch * (size / env.grid.font_size).round().clamp(1.0, 64.0),
+                        _ => size,
+                    };
+                    (c.adv - cell / 2.0).clamp(0.0, cell / 2.0)
+                })
+                .filter(|h| h.is_finite())
+                .unwrap_or(0.0)
+        } else {
+            0.0
+        };
+        x -= hang;
         let line_start_x = x;
         let c0 = i;
         // The first word doesn't fit a span narrowed by a floating object: it moves on whole.

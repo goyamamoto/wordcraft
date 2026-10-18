@@ -7343,6 +7343,132 @@ fn compress_punctuation_halves_consecutive_full_width_marks() {
 }
 
 #[test]
+fn compress_punctuation_halves_a_mark_before_an_opening_bracket() {
+    // Measured in Word for Mac (Japanese Normal template): in あ「「い, あ「（い, あ（「い, あ」「い,
+    // あ。「い, あ『「い, あ「『い, あ（（い, あ、（い, あ：「い and あ・「い the い starts 1.5 em after
+    // the first mark; あ×44、「い wraps as あ×43 / あ、「い (the 、 keeps its width at the line's
+    // end), so it is the bracket that loses its blank left half: half the advance, the glyph
+    // moved left by it. 「 before あ keeps its width.
+    let text = "あ「「い「（い（「い」「い。「い『「い「『い（（い、（い：「い・「い「あ";
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(10.5), ..Default::default() };
+    let with = |compress: bool| {
+        let mut d = Document::from_text("");
+        d.settings.punct_compression = if compress {
+            wordcraft_doc::east_asian::PunctCompression::CompressPunctuation
+        } else {
+            wordcraft_doc::east_asian::PunctCompression::DoNotCompress
+        };
+        d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, chr.clone()))];
+        let l = lay(&d);
+        let pl = first_para(&l);
+        pl.clusters
+            .iter()
+            .filter(|c| matches!(c.kind, crate::para::ClKind::Text | crate::para::ClKind::Space))
+            .map(|c| (c.adv, pl.glyphs.get(c.g0 as usize).map_or(0.0, |g| g.dx)))
+            .collect::<Vec<_>>()
+    };
+    let off = with(false);
+    let on = with(true);
+    assert_eq!(off.len(), text.chars().count());
+    let halved: Vec<usize> = (0..off.len()).filter(|&i| (on[i].0 - off[i].0 / 2.0).abs() < 0.01 && off[i].0 > 0.0).collect();
+    // The bracket of every pair: indices of the 「 （ 『 after 「 「 （ 」 。 『 「 （ 、 ： ・.
+    let expect: Vec<usize> = text
+        .char_indices()
+        .map(|(_, c)| c)
+        .collect::<Vec<_>>()
+        .windows(2)
+        .enumerate()
+        .filter(|(_, w)| "（「『".contains(w[1]) && "「（」。『、：・".contains(w[0]))
+        .map(|(i, _)| i + 1)
+        .collect();
+    assert_eq!(expect.len(), 11);
+    assert_eq!(halved, expect, "on {on:?} off {off:?}");
+    for i in &halved {
+        assert!((on[*i].1 - (off[*i].1 - 5.25)).abs() < 0.01, "the bracket's glyph moves half an em left: {i} {:?} {:?}", on[*i], off[*i]);
+    }
+    let same = (0..off.len()).filter(|&i| on[i] == off[i]).count();
+    assert_eq!(same, off.len() - 11);
+}
+
+/// `w:topLinePunct` (Compress punctuation at the start of a line), measured in Word for Mac:
+/// an opening bracket that starts a line — wrapped or the paragraph's first — begins half an em
+/// before the left edge (after the first-line indent when there is one) and the next character
+/// half an em after it, so the line holds half an em more: 44 あ then 「 and 44 い wrap as 「 + 44
+/// い where the option is off they wrap as 「 + 43 い. Only the first of 「「 moves. On a
+/// 40-character grid the hang is half the pitch and the line gains nothing (the characters after
+/// the bracket sit off the grid).
+#[test]
+fn top_line_punct_hangs_an_opening_bracket_half_an_em_into_the_margin() {
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(10.5), ..Default::default() };
+    let lines_of = |text: &str, on: bool, indent_first: f32| {
+        let mut d = Document::from_text("");
+        let mut p = wordcraft_doc::Paragraph::with_text(text, chr.clone());
+        p.props.top_line_punct = Some(on);
+        p.props.indent_first = (indent_first != 0.0).then_some(indent_first);
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = lay(&d);
+        let pl = first_para(&l);
+        pl.lines.iter().map(|ln| (ln.left, ln.xs.first().copied().unwrap_or(0.0), ln.c1 - ln.c0)).collect::<Vec<_>>()
+    };
+    let text = format!("{}「{}う", "あ".repeat(44), "い".repeat(44));
+    let off = lines_of(&text, false, 0.0);
+    let on = lines_of(&text, true, 0.0);
+    assert_eq!(off.iter().map(|l| l.2).collect::<Vec<_>>(), vec![44, 44, 2], "off {off:?}");
+    assert_eq!(on.iter().map(|l| l.2).collect::<Vec<_>>(), vec![44, 45, 1], "on {on:?}");
+    assert!((off[1].1 - off[1].0).abs() < 0.01, "off: the bracket sits at the edge {off:?}");
+    assert!((on[1].1 - (on[1].0 - 5.25)).abs() < 0.01, "on: the bracket hangs half an em {on:?}");
+    assert!((on[0].1 - on[0].0).abs() < 0.01, "a line starting with あ is unmoved");
+    // The paragraph's first line, with and without a first-line indent (10.5 pt: one character).
+    let first = lines_of(&format!("「{}", "か".repeat(50)), true, 0.0);
+    assert_eq!(first[0].2, 45, "{first:?}");
+    assert!((first[0].1 - (first[0].0 - 5.25)).abs() < 0.01, "{first:?}");
+    let indented = lines_of(&format!("「{}", "か".repeat(50)), true, 10.5);
+    assert_eq!(indented[0].2, 44, "{indented:?}");
+    assert!((indented[0].1 - 5.25).abs() < 0.01, "the hang is from the indent: {indented:?}");
+    // 「「: the first bracket (already half an em, compressed before the second) hangs; the line
+    // holds the same as with a single bracket.
+    let double = lines_of(&format!("{}「「{}", "あ".repeat(44), "い".repeat(10)), true, 0.0);
+    assert_eq!(double[1].2, 12, "{double:?}");
+    assert!((double[1].1 - (double[1].0 - 5.25)).abs() < 0.01, "{double:?}");
+    // 、 before 「 keeps its width at the end of a line: あ、「 move on together (kinsoku), and
+    // the line they start is unmoved.
+    let comma = lines_of(&format!("{}、「{}", "あ".repeat(44), "い".repeat(10)), true, 0.0);
+    assert_eq!(comma.iter().map(|l| l.2).collect::<Vec<_>>(), vec![43, 13], "{comma:?}");
+    assert!((comma[1].1 - comma[1].0).abs() < 0.01, "{comma:?}");
+}
+
+/// On a character grid (Word for Mac, a 40-character grid: 「 at 66.15, 括 at 77.85 with the left
+/// edge at 72 and an 11.7 pt pitch) the bracket starting a line hangs half the pitch and the
+/// characters after it sit half a cell off the grid, so the line holds as many either way.
+/// Here the pitch is 13.2 pt (the Normal style's 12 pt plus 1.2): 35 characters a line.
+#[test]
+fn top_line_punct_on_a_character_grid_hangs_half_the_pitch() {
+    use wordcraft_doc::section::{DocGrid, DocGridType};
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(10.5), ..Default::default() };
+    let lines_of = |on: bool| {
+        let mut d = Document::from_text("");
+        let mut p = wordcraft_doc::Paragraph::with_text(&format!("{}「{}", "あ".repeat(35), "か".repeat(45)), chr.clone());
+        p.props.top_line_punct = Some(on);
+        p.props.snap_to_grid = Some(true);
+        d.body = vec![wordcraft_doc::para_block(p)];
+        // charSpace = 1.2 pt * 4096 over the Normal style's 12 pt.
+        d.last_section.doc_grid = Some(DocGrid { kind: DocGridType::LinesAndChars, line_pitch: 18.0, char_space: 4915 });
+        let l = lay(&d);
+        let pl = first_para(&l);
+        pl.lines
+            .iter()
+            .map(|ln| (ln.left, ln.xs.first().copied().unwrap_or(0.0), ln.xs.get(1).copied().unwrap_or(0.0), ln.c1 - ln.c0))
+            .collect::<Vec<_>>()
+    };
+    let off = lines_of(false);
+    let on = lines_of(true);
+    assert_eq!(off.iter().map(|l| l.3).collect::<Vec<_>>(), vec![35, 35, 11], "{off:?}");
+    assert_eq!(on.iter().map(|l| l.3).collect::<Vec<_>>(), vec![35, 35, 11], "{on:?}");
+    assert!((off[1].1 - off[1].0).abs() < 0.01 && (off[1].2 - off[1].0 - 13.2).abs() < 0.05, "{off:?}");
+    assert!((on[1].1 - (on[1].0 - 6.6)).abs() < 0.05 && (on[1].2 - on[1].0 - 6.6).abs() < 0.05, "{on:?}");
+}
+
+#[test]
 fn east_asian_text_takes_the_theme_script_font_for_its_language() {
     // Word draws Japanese in an Aptos paragraph with the theme's Jpan minor font (游明朝) and
     // Chinese (zh-CN) with its Hans one; a run's own `w:eastAsia` font wins. The faces are
