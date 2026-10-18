@@ -8,7 +8,7 @@
 use std::io::{Read, Write};
 
 use wordcraft_doc::east_asian::{PunctCompression, ScriptFonts};
-use wordcraft_doc::props::CharProps;
+use wordcraft_doc::props::{CharProps, CombineBrackets, EmphasisMark};
 use wordcraft_doc::{Document, Paragraph, para_block};
 
 fn zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
@@ -139,4 +139,57 @@ fn a_document_without_theme_script_fonts_keeps_the_office_ones() {
     assert_eq!(r.settings.script_fonts, d.settings.script_fonts);
     assert_eq!(r.settings.east_asian_font(false, None, "かな"), Some("游明朝"));
     assert_eq!(r.settings.east_asian_font(false, None, "漢字"), None, "Han alone names no script");
+}
+
+/// A body as Word for Mac writes 割注, 均等割り付け, 縦中横 and 傍点 (`plan/word/samples/ja-layout.docx`,
+/// 2026-10-18), with the theme and styles of the Japanese Normal template.
+fn asian_layout_docx() -> Vec<u8> {
+    let base = japanese_docx();
+    let doc = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="{W}"><w:body><w:p><w:r><w:t>割注丸：</w:t></w:r><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:eastAsianLayout w:id="-359372279" w:combine="1" w:combineBrackets="round"/></w:rPr><w:t>これは割注の本文です</w:t></w:r><w:r><w:t>。</w:t></w:r></w:p><w:p><w:r><w:rPr><w:eastAsianLayout w:id="-359372280" w:combine="1"/></w:rPr><w:t>これは割注の本文です</w:t></w:r></w:p><w:p><w:r><w:t>均等：</w:t></w:r><w:r><w:rPr><w:spacing w:val="193"/><w:kern w:val="0"/><w:fitText w:val="2000" w:id="-359372284"/></w:rPr><w:t>均等割</w:t></w:r><w:r><w:rPr><w:spacing w:val="1"/><w:kern w:val="0"/><w:fitText w:val="2000" w:id="-359372284"/></w:rPr><w:t>付</w:t></w:r><w:r><w:t>。</w:t></w:r></w:p><w:p><w:r><w:rPr><w:eastAsianLayout w:id="-359372287" w:vert="1" w:vertCompress="1"/></w:rPr><w:t>12</w:t></w:r><w:r><w:rPr><w:eastAsianLayout w:id="-359372288" w:vert="1"/></w:rPr><w:t>345</w:t></w:r></w:p><w:p><w:r><w:rPr><w:em w:val="dot"/></w:rPr><w:t>強調</w:t></w:r><w:r><w:rPr><w:em w:val="underDot"/></w:rPr><w:t xml:space="preserve"> abc</w:t></w:r><w:r><w:rPr><w:em w:val="none"/></w:rPr><w:t>し</w:t></w:r></w:p></w:body></w:document>"#
+    );
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(base)).unwrap();
+    let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
+    for i in 0..z.len() {
+        let mut f = z.by_index(i).unwrap();
+        let name = f.name().to_string();
+        let mut bytes = Vec::new();
+        f.read_to_end(&mut bytes).unwrap();
+        let replaced = name == "word/document.xml";
+        entries.push((name, if replaced { doc.as_bytes().to_vec() } else { bytes }));
+    }
+    let refs: Vec<(&str, &[u8])> = entries.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
+    zip(&refs)
+}
+
+#[test]
+fn word_asian_layout_runs_read_as_word_writes_them() {
+    let d = wordcraft_docx::read(&asian_layout_docx()).unwrap();
+    let p = d.body[0].as_para().unwrap();
+    let l = p.runs[1].props.east_asian_layout.expect("割注");
+    assert_eq!((l.combine, l.combine_brackets, l.vert, l.id), (true, CombineBrackets::Round, false, -359372279));
+    let p = d.body[1].as_para().unwrap();
+    assert_eq!(p.runs[0].props.east_asian_layout.map(|l| (l.combine, l.combine_brackets)), Some((true, CombineBrackets::None)));
+    let p = d.body[2].as_para().unwrap();
+    let f = p.runs[1].props.fit_text.expect("均等割り付け");
+    assert_eq!((f.width, f.id), (100.0, -359372284));
+    assert_eq!(p.runs[2].props.fit_text, Some(f), "the block's runs share the id");
+    assert_eq!(p.runs[1].props.spacing, Some(9.65), "Word's computed spacing is kept for the file");
+    let p = d.body[3].as_para().unwrap();
+    assert_eq!(p.runs[0].props.east_asian_layout.map(|l| (l.vert, l.vert_compress, l.combine)), Some((true, true, false)));
+    assert_eq!(p.runs[1].props.east_asian_layout.map(|l| (l.vert, l.vert_compress)), Some((true, false)));
+    let p = d.body[4].as_para().unwrap();
+    assert_eq!(p.runs[0].props.em, Some(EmphasisMark::Dot));
+    assert_eq!(p.runs[1].props.em, Some(EmphasisMark::UnderDot));
+    assert_eq!(p.runs[2].props.em, Some(EmphasisMark::None));
+    // Written back in Word's spelling, in schema order.
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let xml = part(&bytes, "word/document.xml");
+    assert!(xml.contains(r#"<w:eastAsianLayout w:id="-359372279" w:combine="1" w:combineBrackets="round"/>"#), "{xml}");
+    assert!(xml.contains(r#"<w:fitText w:val="2000" w:id="-359372284"/>"#), "{xml}");
+    assert!(xml.contains(r#"<w:eastAsianLayout w:id="-359372287" w:vert="1" w:vertCompress="1"/>"#), "{xml}");
+    assert!(xml.contains(r#"<w:em w:val="underDot"/>"#) && xml.contains(r#"<w:em w:val="none"/>"#), "{xml}");
+    let fit = xml.find("<w:fitText").unwrap();
+    let kern = xml[..fit].rfind("<w:kern").unwrap();
+    assert!(kern < fit, "kern before fitText as in the schema");
 }

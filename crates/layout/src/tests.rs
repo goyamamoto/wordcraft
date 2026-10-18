@@ -7382,3 +7382,258 @@ fn east_asian_text_takes_the_theme_script_font_for_its_language() {
         assert_eq!(face_of(Some("ja-JP"), Some("ＭＳ ゴシック"), "日本語"), gothic.id(), "the run's East Asian font, substituted, wins");
     }
 }
+
+// ---- Asian layout: emphasis marks, fit text, 割注, 組み文字 (measured in Word for Mac) ----
+
+/// A paragraph of `pieces` (text, its character properties) at 10.5 pt 游明朝 with Japanese as
+/// the East Asian language, as Word's Japanese default; `None` when this machine has no font
+/// for Japanese (then the checks are moot).
+fn ja_doc(pieces: &[(&str, wordcraft_doc::CharProps)]) -> Option<Document> {
+    if !wordcraft_fonts::word::resolve("游明朝", false, false).face.covers('語') {
+        return None;
+    }
+    let mut p = wordcraft_doc::Paragraph::default();
+    p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+    for (t, props) in pieces {
+        let mut props = props.clone();
+        props.font.get_or_insert_with(|| "游明朝".into());
+        props.font_ea.get_or_insert_with(|| "游明朝".into());
+        props.size.get_or_insert(10.5);
+        props.lang_ea.get_or_insert_with(|| "ja-JP".into());
+        p.text.push_str(t);
+        p.runs.push(wordcraft_doc::Run { len: t.len(), props });
+    }
+    let mut d = Document::from_text("");
+    d.body = vec![wordcraft_doc::para_block(p)];
+    Some(d)
+}
+
+fn first_para(l: &DocLayout) -> &ParaLayout {
+    l.pages
+        .iter()
+        .flat_map(|p| p.items.iter())
+        .find_map(|it| if let Placed::Lines { para, .. } = it { Some(para.as_ref()) } else { None })
+        .expect("a body line")
+}
+
+fn ea_layout(f: impl FnOnce(&mut wordcraft_doc::props::EastAsianLayout)) -> wordcraft_doc::CharProps {
+    let mut l = wordcraft_doc::props::EastAsianLayout::default();
+    f(&mut l);
+    wordcraft_doc::CharProps { east_asian_layout: Some(l), ..Default::default() }
+}
+
+#[test]
+fn character_spacing_counts_twice_on_east_asian_characters_as_in_word() {
+    // Word for Mac, 10.5 pt: 均等割付 expanded by 10 pt has 20 pt gaps, abcd expanded by 10 pt
+    // has 10 pt gaps (measured in its PDF).
+    let sp = wordcraft_doc::CharProps { spacing: Some(10.0), ..Default::default() };
+    let Some(d) = ja_doc(&[("均等", sp.clone()), ("ab", sp)]) else { return };
+    let Some(plain) = ja_doc(&[("均等", Default::default()), ("ab", Default::default())]) else { return };
+    let (l, lp) = (lay(&d), lay(&plain));
+    let x = |l: &DocLayout, off: usize| l.caret(&Pos::body(0, off)).unwrap().x;
+    let kanji = (x(&l, 3) - x(&l, 0)) - (x(&lp, 3) - x(&lp, 0));
+    let latin = (x(&l, 7) - x(&l, 6)) - (x(&lp, 7) - x(&lp, 6));
+    assert!((kanji - 20.0).abs() < 0.1, "an East Asian character advances 2 × 10 pt more: {kanji}");
+    assert!((latin - 10.0).abs() < 0.1, "a Latin letter 10 pt more: {latin}");
+}
+
+#[test]
+fn fit_text_spreads_a_block_to_its_width_and_narrows_a_wider_one() {
+    // Word for Mac, 10.5 pt 游明朝: 均等割付 fit to 100 pt puts its characters 29.8 pt apart
+    // (19.3 pt gaps, none after the last); fit to 30 pt it narrows them to 71%. The runs carry
+    // the spacing Word computed for the same spread, which must not count twice.
+    let fit = |w: f32, spacing: f32| wordcraft_doc::CharProps {
+        fit_text: Some(wordcraft_doc::props::FitText { width: w, id: 1 }),
+        spacing: Some(spacing),
+        ..Default::default()
+    };
+    let Some(d) = ja_doc(&[("前", Default::default()), ("均等割付", fit(100.0, 19.3)), ("後", Default::default())]) else { return };
+    let l = lay(&d);
+    let x = |off: usize| l.caret(&Pos::body(0, off)).unwrap().x;
+    let (a, b) = (x(3), x(3 + 12));
+    assert!((b - a - 100.0).abs() < 0.5, "block width {}", b - a);
+    for i in 0..3 {
+        let pitch = x(3 + (i + 1) * 3) - x(3 + i * 3);
+        assert!((pitch - 29.8).abs() < 0.5, "pitch {i}: {pitch}");
+    }
+    assert!((x(3 + 15) - b - 10.5).abs() < 0.5, "後 follows the block without a gap");
+    let Some(d) = ja_doc(&[("均等割付", fit(30.0, 0.0))]) else { return };
+    let l = lay(&d);
+    let x = |off: usize| l.caret(&Pos::body(0, off)).unwrap().x;
+    assert!((x(12) - x(0) - 30.0).abs() < 0.5, "narrowed block width {}", x(12) - x(0));
+    assert!((x(3) - x(0) - 10.5 * 0.714).abs() < 0.5, "71% pitch {}", x(3) - x(0));
+    let p = first_para(&l);
+    assert!(p.lines[0].c1 - p.lines[0].c0 >= 4);
+    assert!(p.clusters.iter().take(3).all(|c| !c.break_after), "no line break inside the block");
+}
+
+#[test]
+fn fit_text_shares_the_surplus_between_latin_letters() {
+    // Word for Mac: abc (10.5 pt) fit to 60 pt has 21.47 pt gaps between the letters.
+    let Some(d) = ja_doc(&[(
+        "abc",
+        wordcraft_doc::CharProps {
+            font: Some("Source Sans 3".into()),
+            fit_text: Some(wordcraft_doc::props::FitText { width: 60.0, id: 2 }),
+            ..Default::default()
+        },
+    )]) else {
+        return;
+    };
+    let l = lay(&d);
+    let p = first_para(&l);
+    let text: Vec<&crate::para::Cluster> = p.clusters.iter().filter(|c| c.kind == crate::para::ClKind::Text).collect();
+    assert_eq!(text.len(), 3);
+    let total: f32 = text.iter().map(|c| c.adv).sum();
+    assert!((total - 60.0).abs() < 0.5, "block width {total}");
+    let gap = |c: &crate::para::Cluster| {
+        let st = &p.styles[c.style as usize];
+        c.adv - st.face.advance(p.glyphs[c.g0 as usize].gid) as f32 * st.size / st.face.upem as f32
+    };
+    let (g0, g1) = (gap(text[0]), gap(text[1]));
+    assert!((g0 - g1).abs() < 0.05 && g0 > 15.0 && g0 < 25.0, "equal gaps {g0} {g1}");
+    assert!(gap(text[2]).abs() < 0.05, "no gap after the last letter");
+}
+
+#[test]
+fn two_lines_in_one_stacks_half_size_lines_in_one_cluster() {
+    // Word for Mac, 10.5 pt: a ten-character 割注 is 25 pt wide (five characters at 5 pt), its
+    // half lines 7.2 pt apart and the pair centred on the line's text box; brackets at full size.
+    let inner = "割注は十文字の文です";
+    assert_eq!(inner.chars().count(), 10);
+    let Some(d) = ja_doc(&[("前", Default::default()), (inner, ea_layout(|l| l.combine = true)), ("後", Default::default())]) else { return };
+    let l = lay(&d);
+    let p = first_para(&l);
+    let block = p.clusters.iter().find(|c| c.start == 3 && c.end == 3 + inner.len()).expect("one cluster for the block");
+    assert!((block.adv - 25.0).abs() < 0.5, "block width {}", block.adv);
+    let x = |off: usize| l.caret(&Pos::body(0, off)).unwrap().x;
+    assert!((x(3 + inner.len()) - x(3) - 25.0).abs() < 0.5);
+    let draws = display::page_display(&d, &l.pages[0], &Default::default());
+    let mut half: Vec<f32> = Vec::new();
+    let mut full_base = None;
+    for dr in &draws {
+        if let display::Draw::Glyphs { size, glyphs, text, .. } = dr {
+            if (*size - 5.0).abs() < 0.01 {
+                half.extend(glyphs.iter().map(|g| g.2));
+            } else if text.contains('前') {
+                full_base = glyphs.first().map(|g| g.2);
+            }
+        }
+    }
+    let base = full_base.expect("the full-size text is drawn");
+    half.sort_by(|a, b| a.total_cmp(b));
+    half.dedup_by(|a, b| (*a - *b).abs() < 0.01);
+    assert_eq!(half.len(), 2, "two half lines: {half:?}");
+    assert!((half[1] - half[0] - 7.2).abs() < 0.3, "half-line pitch {}", half[1] - half[0]);
+    let st = &p.styles[block.style as usize];
+    let (full_mid, half_mid) = (base - (st.ascent - st.descent) / 2.0, (half[0] + half[1]) / 2.0 - (st.ascent - st.descent) / 2.0 * 5.0 / 10.5);
+    assert!((full_mid - half_mid).abs() < 0.5, "centred on the text box: {full_mid} vs {half_mid}");
+    // The line is no taller than without the block.
+    let Some(plain) = ja_doc(&[("前後", Default::default())]) else { return };
+    assert!((p.lines[0].height - first_para(&lay(&plain)).lines[0].height).abs() < 0.01);
+    // Brackets are drawn at full size and the line never breaks inside them.
+    let Some(d) = ja_doc(&[(
+        inner,
+        ea_layout(|l| {
+            l.combine = true;
+            l.combine_brackets = wordcraft_doc::props::CombineBrackets::Round;
+        }),
+    )]) else {
+        return;
+    };
+    let l = lay(&d);
+    let p = first_para(&l);
+    let text: Vec<&crate::para::Cluster> = p.clusters.iter().filter(|c| c.kind == crate::para::ClKind::Text).collect();
+    assert_eq!(text.len(), 3, "open bracket, block, close bracket");
+    assert!(!text[0].break_after && !text[1].break_after);
+    assert!((text[1].adv - 25.0).abs() < 0.5);
+    let draws = display::page_display(&d, &l.pages[0], &Default::default());
+    let shown: String = draws.iter().filter_map(|d| if let display::Draw::Glyphs { text, .. } = d { Some(text.as_str()) } else { None }).collect();
+    let (o, c) = wordcraft_doc::props::CombineBrackets::Round.chars().unwrap();
+    assert!(shown.contains(o) && shown.contains(c), "{shown}");
+}
+
+#[test]
+fn combine_characters_make_one_character_cell() {
+    // Word for Mac, 10.5 pt: 株式会社 combined is about 10 pt wide (two 5 pt characters), the
+    // upper pair raised round(size/2) = 5 pt and the lower pair lowered 2 pt. Five characters go
+    // two above, three below at 66%; two characters sit top left and bottom right.
+    let Some(d) = ja_doc(&[("前", Default::default()), ("株式会社", ea_layout(|l| l.combine_chars = true)), ("後", Default::default())]) else {
+        return;
+    };
+    let l = lay(&d);
+    let p = first_para(&l);
+    let block = p.clusters.iter().find(|c| c.start == 3 && c.end == 15).expect("one cluster");
+    assert!((block.adv - 10.0).abs() < 0.5, "width {}", block.adv);
+    let draws = display::page_display(&d, &l.pages[0], &Default::default());
+    let base = draws
+        .iter()
+        .find_map(|d| match d {
+            display::Draw::Glyphs { text, glyphs, .. } if text.contains('前') => glyphs.first().map(|g| g.2),
+            _ => None,
+        })
+        .unwrap();
+    let mut ys: Vec<f32> = draws
+        .iter()
+        .filter_map(|d| match d {
+            display::Draw::Glyphs { size, glyphs, .. } if (*size - 5.0).abs() < 0.01 => Some(glyphs.iter().map(|g| g.2 - base).collect::<Vec<_>>()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    ys.sort_by(|a, b| a.total_cmp(b));
+    ys.dedup_by(|a, b| (*a - *b).abs() < 0.01);
+    assert_eq!(ys.len(), 2, "{ys:?}");
+    assert!((ys[0] + 5.0).abs() < 0.3, "upper pair raised 5 pt: {}", ys[0]);
+    assert!((ys[1] - 2.0).abs() < 0.3, "lower pair lowered 2 pt: {}", ys[1]);
+    let widths = |text: &str| -> (f32, Vec<(f32, f32)>) {
+        let d = ja_doc(&[(text, ea_layout(|l| l.combine_chars = true))]).unwrap();
+        let l = lay(&d);
+        let p = first_para(&l);
+        let c = p.clusters.iter().find(|c| c.kind == crate::para::ClKind::Text).unwrap();
+        let st = &p.styles[c.style as usize];
+        (c.adv, p.glyphs[c.g0 as usize..c.g1 as usize].iter().map(|g| (g.dx, base - st.shift - g.dy)).collect())
+    };
+    let (w5, g5) = widths("東京都千代");
+    assert!((w5 - 10.0).abs() < 0.5, "five characters: {w5}");
+    let above = g5.iter().filter(|g| g.1 < base).count();
+    assert_eq!((above, g5.len() - above), (2, 3), "東京 above, 都千代 below");
+    let (w3, g3) = widths("株式会");
+    assert!((w3 - 10.0).abs() < 0.5, "three characters: {w3}");
+    assert_eq!(g3.iter().filter(|g| g.1 < base).count(), 2, "two above, one below");
+    let (w2, g2) = widths("株式");
+    assert!((w2 - 10.0).abs() < 0.5, "two characters: {w2}");
+    assert!(g2[0].0 < g2[1].0 - 4.0 && g2[0].1 < g2[1].1, "top left and bottom right: {g2:?}");
+    let (w6, _) = widths("株式会社東京");
+    assert!((w6 - 10.0).abs() < 0.5, "six characters at 66%: {w6}");
+}
+
+#[test]
+fn emphasis_marks_take_a_third_of_an_em_and_draw_one_mark_per_character() {
+    use wordcraft_doc::props::EmphasisMark;
+    let Some(plain) = ja_doc(&[("傍点つき", Default::default())]) else { return };
+    let h0 = first_para(&lay(&plain)).lines[0].height;
+    let em = |em: EmphasisMark| wordcraft_doc::CharProps { em: Some(em), ..Default::default() };
+    for (mark, below) in [(EmphasisMark::Dot, false), (EmphasisMark::Comma, false), (EmphasisMark::Circle, false), (EmphasisMark::UnderDot, true)] {
+        let d = ja_doc(&[("傍点つき", em(mark))]).unwrap();
+        let l = lay(&d);
+        let h = first_para(&l).lines[0].height;
+        assert!((h - h0 - 10.5 * 0.33).abs() < 0.5, "{mark:?}: line {h} vs {h0}");
+        let draws = display::page_display(&d, &l.pages[0], &Default::default());
+        let base = draws.iter().find_map(|d| if let display::Draw::Glyphs { glyphs, .. } = d { glyphs.first().map(|g| g.2) } else { None }).unwrap();
+        let marks: Vec<f32> = draws
+            .iter()
+            .filter_map(|d| match d {
+                display::Draw::Shape { rect, fill, stroke, .. } if fill.is_some() || stroke.is_some() => Some(rect.y + rect.h / 2.0),
+                display::Draw::Path { segs, .. } => {
+                    segs.iter().find_map(|s| if let wordcraft_doc::graphic::PathSeg::Move(_, y) = s { Some(*y) } else { None })
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(marks.len(), 4, "{mark:?}: one mark per character");
+        for y in marks {
+            assert_eq!(y > base, below, "{mark:?}: mark at {y}, baseline {base}");
+        }
+    }
+}

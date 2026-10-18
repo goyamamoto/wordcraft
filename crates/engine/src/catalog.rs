@@ -78,6 +78,7 @@ Home|Font|Character Position|format.position
 Home|Font|Character Border|format.border
 Home|Font|Phonetic Guide|format.phonetic
 Home|Font|Enclose Characters|format.enclose
+Home|Font|Emphasis Mark|format.emphasisMark
 Home|Paragraph|Bullets|para.bullets
 Home|Paragraph|Numbering|para.numbering
 Home|Paragraph|Multilevel List|para.multilevel
@@ -113,6 +114,10 @@ Home|Paragraph|Hanging Indent|para.hangingIndent
 Home|Paragraph|Right-to-Left Text Direction|para.rtl
 Home|Paragraph|Left-to-Right Text Direction|para.ltr
 Home|Paragraph|Asian Typography|para.asianTypography
+Home|Paragraph|Adjust Width|format.fitText
+Home|Paragraph|Asian Layout Horizontal in Vertical|format.horizontalInVertical
+Home|Paragraph|Asian Layout Combine Characters|format.combineCharacters
+Home|Paragraph|Asian Layout Two Lines in One|format.twoLinesInOne
 Home|Styles|Styles Gallery|para.style
 Home|Styles|Normal|para.normal
 Home|Styles|Heading 1|para.heading1
