@@ -80,6 +80,12 @@ pub struct StyleRun {
     pub shift: f32,
     /// Where Word draws this run's underline and strikethrough, points at this size.
     pub deco: wordcraft_fonts::word::Decorations,
+    /// In a vertical column, how far toward the ascent side of the column's centre line this
+    /// run's upright em squares are centred, points: half the font's win ascent − descent less
+    /// half its line ascent − descent (0.0215 em for Hiragino Mincho ProN, 0.1045 for Toppan
+    /// Bunkyu Mincho, none for Word's Yu fonts, MS Mincho, Songti SC), as Word for Mac places
+    /// them (`wordcraft_fonts::word::vertical_em_centre`).
+    pub v_centre: f32,
 }
 
 /// A positioned glyph inside its cluster.
@@ -377,9 +383,10 @@ pub struct ParaLayout {
     /// paragraph's text alignment (`w:textAlignment` top, center or bottom); empty otherwise.
     pub align_dy: Vec<f32>,
     /// Laid out for a vertical (`tbRl`) section: each line's `baseline` is the centre line of its
-    /// column, on which the em squares of its upright characters are centred (see
-    /// [`break_lines`]'s vertical metrics); the display draws lying text on a baseline
-    /// (ascent − descent) / 2 from it and stands East Asian characters up about it.
+    /// column, about which the em squares of its upright characters are centred, each run's
+    /// `v_centre` toward the ascent side (see [`break_lines`]'s vertical metrics); the display
+    /// draws lying text on a baseline (ascent − descent) / 2 from it and stands East Asian
+    /// characters up about it.
     pub vertical: bool,
 }
 
@@ -1139,6 +1146,7 @@ impl<'a> Builder<'a> {
             glyph_ascent: (face.ascent.max(0.0) * k) as f32,
             shift: rc.baseline_shift(),
             deco: wordcraft_fonts::word::decoration_metrics(ea_family.unwrap_or(&rc.font), &face, size),
+            v_centre: ((wordcraft_fonts::word::vertical_em_centre(ea_family.unwrap_or(&rc.font), &face) - (a - d) / 2.0) * k) as f32,
         };
         // A `u32` index (like the glyph ranges) counts more distinct formats than a paragraph can
         // hold in memory, so every format keeps its own style.

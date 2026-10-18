@@ -117,6 +117,12 @@ pub fn is_east_asian(c: char) -> bool {
         | 0x20000..=0x3FFFF) // supplementary ideographs
 }
 
+/// A Hangul syllable, jamo or compatibility jamo: Word for Mac counts each as a word and an
+/// East Asian character.
+pub fn is_hangul(c: char) -> bool {
+    matches!(u32::from(c), 0x1100..=0x11FF | 0x3130..=0x318F | 0xA960..=0xA97F | 0xAC00..=0xD7FF)
+}
+
 /// The script a character alone tells: kana → `Jpan`, Hangul → `Hang`, bopomofo → `Hant`.
 /// `None` for Han ideographs and everything else (they belong to several scripts).
 pub fn script_of_char(c: char) -> Option<&'static str> {

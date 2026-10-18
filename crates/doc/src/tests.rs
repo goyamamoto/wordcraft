@@ -13,12 +13,36 @@ fn new_document_is_valid() {
 fn word_count() {
     let d = Document::from_text("Hello, world!\nThis is — a test 42.\n\n");
     assert_eq!(d.word_count(), 7);
-    assert_eq!(count_words(" -- "), 0);
+    // Word for Mac (2026-10-19): a token between spaces is a word whatever it holds; an em dash
+    // separates words and is none itself.
+    assert_eq!(count_words(" -- "), 1);
+    assert_eq!(count_words("a . b"), 3);
+    assert_eq!(count_words("x - y"), 3);
+    assert_eq!(count_words("a—b"), 2);
+    assert_eq!(count_words("a–b"), 2);
+    assert_eq!(count_words("— —"), 0);
+    assert_eq!(count_words("– –"), 0);
+    assert_eq!(count_words("a…b"), 1);
+    assert_eq!(count_words("a—"), 1);
+    assert_eq!(count_words("a\u{a0}b"), 2);
+    assert_eq!(count_words("a\u{3000}b"), 2);
+    assert_eq!(count_words("a―b"), 1);
+    assert_eq!(count_words("a‐b"), 1);
+    assert_eq!(count_words("a/b"), 1);
+    assert_eq!(count_words("a,b"), 1);
+    assert_eq!(count_words("(ABC)"), 1);
     // Word for Mac counts every Chinese or Japanese character, punctuation included, as a word.
     assert_eq!(count_words("漢字かなabc 123、「テスト」。Hello world"), 15);
     assert_eq!(count_words("日本語の文章です。"), 9);
     assert_eq!(count_words("日本語 English 混在、テスト"), 10);
-    assert_eq!(count_words("한국어 단어"), 2, "Korean words are separated by spaces");
+    assert_eq!(count_words("日本語."), 4);
+    assert_eq!(count_words("ｶﾀｶﾅ.ｶﾅ"), 7);
+    // Word for Mac: every Hangul syllable is a word and an East Asian character (2026-10-19).
+    assert_eq!(count_words("한국어 단어"), 5);
+    assert_eq!(count_words("테스트입니다."), 7);
+    assert_eq!(count_words("한국어,단어"), 6);
+    assert_eq!(count_east_asian("한국어 단어 テスト。"), 9);
+    assert_eq!(count_east_asian("ㄱㄴ 가나"), 4);
 }
 
 #[test]
