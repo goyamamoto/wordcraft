@@ -4869,6 +4869,125 @@ mod tests {
         assert_eq!(text(&h), "a日本語b");
     }
 
+    /// The input method may name committed text while its composition shows (macOS live
+    /// conversion marks the words before its marked text again to convert them together), and a
+    /// commit may name the text it replaces: both replace that text, never add to it.
+    #[test]
+    fn ime_replaces_committed_text_named_while_composing_and_on_commit() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("document.setText", json!({"text": "a日本b"})).unwrap();
+        app.run("caret.set", json!({"pos": Pos::body(0, 7)})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for _ in 0..8 {
+            h.step();
+        }
+        let text = |h: &egui_kittest::Harness<'_, WordApp>| h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+        let preedit = |t: &str, active: Option<std::ops::Range<usize>>| {
+            egui::Event::Ime(egui::ImeEvent::Preedit { text: t.into(), active_range_chars: active })
+        };
+        // Composing ご before b: the input method reads a日本ごb.
+        h.event(preedit("ご", None));
+        h.step();
+        assert_eq!(text(&h), "a日本ごb");
+        assert_eq!(h.state().canvas.ime_surrounding.as_ref().map(|s| s.text.as_str()), Some("a日本ごb"));
+        // It marks 日本ご (1..4 of that text) again as 日本語: the committed 日本 gives way too.
+        h.state_mut().canvas.ime_replace = Some(1..4);
+        h.event(preedit("日本語", Some(0..3)));
+        h.step();
+        assert_eq!(text(&h), "a日本語b", "no duplicated 日本");
+        assert_eq!(h.state().session.composition().map(|c| c.text.as_str()), Some("日本語"));
+        // Dismissed: the committed text is back; committed: replaced for good, one undo step.
+        h.event(preedit("", None));
+        h.step();
+        assert_eq!(text(&h), "a日本b");
+        h.event(preedit("ご", None));
+        h.step();
+        h.state_mut().canvas.ime_replace = Some(1..4);
+        h.event(preedit("日本語", Some(0..3)));
+        h.step();
+        h.event(preedit("", None));
+        h.event(egui::Event::Ime(egui::ImeEvent::Commit("日本語".into())));
+        h.step();
+        assert_eq!(text(&h), "a日本語b");
+        let _ = h.state_mut().run("edit.undo", json!({}));
+        assert_eq!(text(&h), "a日本b");
+        // A commit naming the text it replaces without marking it first (the dismissal carries
+        // the range, as the vendored winit reports it): 日本ご → 日本語.
+        h.state_mut().run("caret.set", json!({"pos": Pos::body(0, 7)})).unwrap();
+        h.step();
+        h.event(preedit("ご", None));
+        h.step();
+        assert_eq!(text(&h), "a日本ごb");
+        h.state_mut().canvas.ime_replace = Some(1..4);
+        h.event(preedit("", None));
+        h.event(egui::Event::Ime(egui::ImeEvent::Commit("日本語".into())));
+        h.step();
+        assert_eq!(text(&h), "a日本語b");
+        assert!(h.state().canvas.ime_replace.is_none());
+        let _ = h.state_mut().run("edit.undo", json!({}));
+        assert_eq!(text(&h), "a日本b");
+    }
+
+    /// The caret's paragraph is reported wherever it is: on a later page, scrolled off the screen,
+    /// in a table cell — a long committed document is readable throughout.
+    #[test]
+    fn ime_reads_the_caret_paragraph_on_any_page_even_off_screen() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        let paras: Vec<String> = (1..=120).map(|i| format!("第{i}段落 日本語の文章です")).collect();
+        app.run("document.setText", json!({"text": paras.join("\n")})).unwrap();
+        app.run("caret.docEnd", json!({})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for _ in 0..10 {
+            h.step();
+        }
+        let last = paras.last().unwrap().clone();
+        let units = last.encode_utf16().count();
+        assert!(h.state_mut().session.layout().pages.len() > 1, "several pages");
+        assert_eq!(h.state().canvas.ime_surrounding, Some(crate::ime::ImeSurrounding { text: last.clone(), selected: units..units }));
+        // Scroll back to the top: the caret leaves the screen; the input method still reads it.
+        let centre = egui::pos2(720.0, 500.0);
+        h.event(egui::Event::PointerMoved(centre));
+        for _ in 0..12 {
+            h.event(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: vec2(0.0, 2000.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.step();
+        }
+        for _ in 0..30 {
+            h.step();
+        }
+        let focus = h.state().session.sel.focus.clone();
+        let c = h.state_mut().session.layout().caret(&focus).expect("caret geometry");
+        let on_screen = page_to_screen(h.state_mut(), c.page, c.x, c.top).expect("page rect");
+        assert!(!(0.0..900.0).contains(&on_screen.y), "the caret is off the screen: {on_screen:?}");
+        assert_eq!(h.state().canvas.ime_surrounding, Some(crate::ime::ImeSurrounding { text: last, selected: units..units }));
+        // In a table cell.
+        h.state_mut().run("caret.set", json!({"pos": Pos::body(0, 0)})).unwrap();
+        h.state_mut().run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+        h.state_mut().run("text.insert", json!({"text": "セルの文"})).unwrap();
+        for _ in 0..4 {
+            h.step();
+        }
+        assert_eq!(h.state().canvas.ime_surrounding, Some(crate::ime::ImeSurrounding { text: "セルの文".into(), selected: 4..4 }));
+    }
+
     #[test]
     fn space_and_enter_on_the_canvas_do_not_interrupt_ime() {
         let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
