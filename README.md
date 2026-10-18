@@ -1,7 +1,13 @@
 <h1 align="center">WordCraft-ja</h1>
 
 <p align="center">
-  <b>WordCraft with Japanese typography the way Word does it: an open-source, clean-room reimplementation of Microsoft Word, rebuilt in pure Rust.</b>
+  <b>WordCraft の日本語強化版</b> — Microsoft Word をクリーンルームで再実装したオープンソースのワープロ <a href="https://github.com/storytold/wordcraft">WordCraft</a> に、Word と同じ日本語組版を加えています。<br>
+  <b>A Japanese-enhanced WordCraft</b>: the open-source, clean-room reimplementation of Microsoft Word in pure Rust, with Japanese typography done the way Word does it.
+</p>
+
+<p align="center">
+  日本語の標準テンプレート（10.5 pt、18 pt の行グリッド）、テーマの日本語フォント（游明朝 / 游ゴシック）、和欧文間の自動スペース、句読点の詰め、Word 標準の禁則、
+  日本語文字上でのフォント欄・言語表示・語数を、この Mac の Word で実測して合わせています。変更は本家にも Pull Request で返します。
 </p>
 
 <p align="center">
