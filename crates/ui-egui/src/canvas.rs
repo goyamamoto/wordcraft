@@ -1196,7 +1196,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 let step = match sect.and_then(|s| s.grid_line_pitch().map(|lp| (s, lp))) {
                     Some((s, lp)) => {
                         let size = app.session.doc.styles.resolve_char(Some("Normal"), &Default::default()).size;
-                        let cp = s.grid_char_pitch(size).map_or(f32::INFINITY, |cp| drawing_grid_step(cp, page_scale));
+                        let cp = s.grid_char_cell(size).map_or(f32::INFINITY, |cp| drawing_grid_step(cp, page_scale));
                         (cp, drawing_grid_step(lp, page_scale))
                     }
                     None => (drawing_grid_step(settings.grid_h, page_scale), drawing_grid_step(settings.grid_v, page_scale)),

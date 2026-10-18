@@ -7495,7 +7495,9 @@ fn top_line_punct_hangs_an_opening_bracket_half_an_em_into_the_margin() {
 #[test]
 fn top_line_punct_on_a_character_grid_hangs_half_the_pitch() {
     use wordcraft_doc::section::{DocGrid, DocGridType};
-    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(10.5), ..Default::default() };
+    // The Normal style's 12 pt, so a character takes the 13.2 pt pitch (10.5 pt text would take
+    // 10.5 + 1.2: the grid adds its gap to the character's own size, see `Grid`).
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
     let lines_of = |on: bool| {
         let mut d = Document::from_text("");
         let mut p = wordcraft_doc::Paragraph::with_text(&format!("{}「{}", "あ".repeat(35), "か".repeat(45)), chr.clone());
@@ -7517,6 +7519,267 @@ fn top_line_punct_on_a_character_grid_hangs_half_the_pitch() {
     assert_eq!(on.iter().map(|l| l.3).collect::<Vec<_>>(), vec![35, 35, 11], "{on:?}");
     assert!((off[1].1 - off[1].0).abs() < 0.01 && (off[1].2 - off[1].0 - 13.2).abs() < 0.05, "{off:?}");
     assert!((on[1].1 - (on[1].0 - 6.6)).abs() < 0.05 && (on[1].2 - on[1].0 - 6.6).abs() < 0.05, "{on:?}");
+}
+
+/// The Normal style's size and a section with a line grid, for the character-grid tests.
+fn grid_normal_size() -> f32 {
+    use wordcraft_doc::section::{DocGrid, DocGridType};
+    let sect = wordcraft_doc::SectionProps { doc_grid: Some(DocGrid { kind: DocGridType::Lines, ..Default::default() }), ..Default::default() };
+    crate::para::Grid::of(&Document::from_text(""), &sect).font_size
+}
+
+/// (xs from the line's left edge, cluster advances, line width) of the first line of every
+/// paragraph in `d`, in order.
+fn first_lines(d: &Document) -> Vec<(Vec<f32>, Vec<f32>, f32)> {
+    let l = lay(d);
+    let mut out = Vec::new();
+    for p in &l.pages {
+        for it in &p.items {
+            if let Placed::Lines { para, l0, .. } = it
+                && *l0 == 0
+                && let Some(ln) = para.lines.first()
+            {
+                let xs = ln.xs.iter().map(|x| x - ln.left).collect();
+                let advs = para.clusters[ln.c0..ln.c1].iter().map(|c| c.adv).collect();
+                out.push((xs, advs, ln.right - ln.left));
+            }
+        }
+    }
+    out
+}
+
+/// Spaces beside East Asian text, measured in Word for Mac (`cg7`/`cg15` samples, 2026-10-19,
+/// 10.5 pt 游明朝 and Aptos, no character grid): a space next to an East Asian character — on
+/// either side, through other spaces — and every space of a run of two or more takes half its
+/// size (5.25 pt), a lone space between Latin characters its own width (2.14 pt).
+#[test]
+fn spaces_beside_east_asian_text_take_half_their_size() {
+    let size = 12.0f32;
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(size), ..Default::default() };
+    let advs = |text: &str| {
+        let mut d = Document::from_text("");
+        d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, chr.clone()))];
+        cluster_advances(&d)
+    };
+    let half = size / 2.0;
+    let latin = advs("x y|")[1];
+    assert!(latin < half - 1.0, "a Latin space is narrower than half an em: {latin}");
+    assert!((advs("あ a|")[1] - half).abs() < 0.01, "{:?}", advs("あ a|"));
+    assert!((advs("a あ|")[1] - half).abs() < 0.01, "{:?}", advs("a あ|"));
+    let two = advs("あ  a|");
+    assert!((two[1] - half).abs() < 0.01 && (two[2] - half).abs() < 0.01, "{two:?}");
+    let two = advs("a  あ|");
+    assert!((two[1] - half).abs() < 0.01 && (two[2] - half).abs() < 0.01, "{two:?}");
+    let two = advs("x  y|");
+    assert!((two[1] - half).abs() < 0.01 && (two[2] - half).abs() < 0.01, "a run of two spaces: {two:?}");
+    let mixed = advs("a b あ|");
+    assert!((mixed[1] - latin).abs() < 0.01 && (mixed[3] - half).abs() < 0.01, "{mixed:?}");
+    let punct = advs("あ、 a|");
+    assert!((punct[2] - half).abs() < 0.01, "after a full-width mark: {punct:?}");
+}
+
+/// Lines and characters (`w:docGrid linesAndChars`), measured in Word for Mac (`cg1`/`cg5`/
+/// `cg8`/`cg10`/`cg13` samples, 2026-10-19, 10.5 pt 游明朝 and Aptos on 11.7 and 14 pt pitches):
+/// an East Asian character takes its size plus the grid's gap (the pitch less the default
+/// size), its glyph at the start of that — whatever its size: a 14 pt character on a 14 pt
+/// pitch over 10.5 pt takes 17.5 pt, not two cells, and nothing snaps back to the grid after
+/// it; every Latin character and space gains half the gap; a space beside East Asian text is
+/// half its size plus half the gap; the automatic space is a quarter of the size before the
+/// boundary plus the gap (3.5 on the 14 pt pitch); a compressed mark takes half of (size + gap).
+#[test]
+fn lines_and_chars_grid_adds_the_gap_to_every_character_as_word_for_mac() {
+    use wordcraft_doc::section::{DocGrid, DocGridType};
+    let size = grid_normal_size();
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(size), ..Default::default() };
+    let advs = |text: &str, run_size: f32, kind: DocGridType| {
+        let mut d = Document::from_text("");
+        let mut p = wordcraft_doc::Paragraph::with_text(text, chr.clone());
+        p.runs = vec![wordcraft_doc::Run { len: p.text.len(), props: wordcraft_doc::CharProps { size: Some(run_size), ..chr.clone() } }];
+        p.props.snap_to_grid = Some(true);
+        d.body = vec![wordcraft_doc::para_block(p)];
+        d.settings.punct_compression = wordcraft_doc::east_asian::PunctCompression::CompressPunctuation;
+        d.last_section.doc_grid = Some(DocGrid { kind, line_pitch: 18.0, char_space: DocGrid::char_space_for(size + 2.0, size) });
+        cluster_advances(&d)
+    };
+    let text = "日本語abc 。、「」end";
+    let on = advs(text, size, DocGridType::LinesAndChars);
+    let off = advs(text, size, DocGridType::Lines);
+    assert_eq!(on.len(), text.chars().count());
+    // 日 本 語(+auto) a b c ␣(East Asian width) 。(compressed) 、 「(shrunk) 」 e n d
+    let expected = [2.0, 2.0, 2.5, 1.0, 1.0, 1.0, 1.0, 1.0, 2.0, 1.0, 2.0, 1.0, 1.0, 1.0];
+    for (k, (a, b)) in on.iter().zip(&off).enumerate() {
+        assert!((a - b - expected[k]).abs() < 0.01, "cluster {k}: {a} on, {b} off; on {on:?} off {off:?}");
+    }
+    assert!((on[0] - (size + 2.0)).abs() < 0.01 && (on[6] - (size / 2.0 + 1.0)).abs() < 0.01 && (on[7] - (size + 2.0) / 2.0).abs() < 0.01, "{on:?}");
+    // A character twice the size takes its size plus the gap, not two cells.
+    let big = advs("大", size * 2.0, DocGridType::LinesAndChars);
+    assert!((big[0] - (size * 2.0 + 2.0)).abs() < 0.01, "{big:?}");
+    let small = advs("小", size * 0.5, DocGridType::LinesAndChars);
+    assert!((small[0] - (size * 0.5 + 2.0)).abs() < 0.01, "{small:?}");
+}
+
+/// Snap to characters (`w:docGrid snapToChars`), measured in Word for Mac (`cg2`/`cg9`/`cg11`/
+/// `cg12`/`cg14`/`cg16` samples, 2026-10-19): the text width is divided into whole cells; an
+/// East Asian character takes the cells its size needs, centred; Latin text with its spaces
+/// takes whole cells, centred; and every line — the paragraph's last too — is spread over the
+/// width, the leftover shared equally between the units (one share after each unit, one for
+/// each East Asian-width space, one and a twelfth of its size for a Latin space between words);
+/// nothing is compressed before an opening bracket.
+#[test]
+fn snap_to_chars_fits_cells_and_spreads_every_line_as_word_for_mac() {
+    use wordcraft_doc::section::{DocGrid, DocGridType};
+    let size = grid_normal_size();
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(size), ..Default::default() };
+    let mut d = Document::from_text("");
+    let para = |text: &str| {
+        let mut p = wordcraft_doc::Paragraph::with_text(text, chr.clone());
+        p.props.snap_to_grid = Some(true);
+        p
+    };
+    let many = "あ".repeat(20) + "end";
+    let mut big = para("大あ|");
+    big.runs = vec![
+        wordcraft_doc::Run { len: "大".len(), props: wordcraft_doc::CharProps { size: Some(size * 2.0), ..chr.clone() } },
+        wordcraft_doc::Run { len: "あ|".len(), props: chr.clone() },
+    ];
+    let full = "あ".repeat(34) + "end";
+    d.body = ["あい|", "あ a あ", many.as_str(), "a b|", "end", "あ、「あ|"].iter().map(|t| wordcraft_doc::para_block(para(t))).collect();
+    d.body.push(wordcraft_doc::para_block(big));
+    d.body.extend(["あ。、。あ|", "ＡＢＣabc|", "한글abc|", "quick brown fox. ", full.as_str()].iter().map(|t| wordcraft_doc::para_block(para(t))));
+    d.settings.punct_compression = wordcraft_doc::east_asian::PunctCompression::CompressPunctuation;
+    // A 13 pt pitch: the 468 pt line holds 36 cells of exactly 13 pt.
+    d.last_section.doc_grid = Some(DocGrid { kind: DocGridType::SnapToChars, line_pitch: 18.0, char_space: DocGrid::char_space_for(13.0, size) });
+    let lines = first_lines(&d);
+    assert_eq!(lines.len(), 12);
+    let w = lines[0].2;
+    assert!((w - 468.0).abs() < 0.01, "line width {w}");
+    let cell = 13.0f32;
+    let near = |a: f32, b: f32| (a - b).abs() < 0.02;
+    // あい|: い in the middle, the | in the last cell, centred.
+    let (xs, advs, _) = &lines[0];
+    assert!(near(xs[0], 0.0) && near(xs[1], (w - cell) / 2.0) && near(xs[2], w - cell + (cell - advs[2]) / 2.0) && near(xs[3], w), "{xs:?} {advs:?}");
+    assert!(near(advs[0], cell) && near(advs[1], cell), "{advs:?}");
+    // あ a あ: the a's block (a space of half an em, a, a Latin space) in whole cells; the
+    // first gap, with the East Asian space, twice the second.
+    let (xs, advs, _) = &lines[1];
+    let natural = size / 2.0 + advs[2] + advs[3];
+    let cells = (natural / cell).ceil() * cell;
+    let pad = (cells - natural) / 2.0;
+    let k = (w - 2.0 * cell - cells) / 3.0;
+    assert!(near(advs[1], size / 2.0), "the space after あ is half an em: {advs:?}");
+    assert!(near(xs[1], cell + k + pad) && near(xs[2], cell + 2.0 * k + pad + size / 2.0) && near(xs[4], w - cell), "{xs:?} k {k} pad {pad}");
+    // 20 あ and "end": the characters spread by one share each; the automatic space 15/64 em.
+    let (xs, advs, _) = &lines[2];
+    let end_w: f32 = advs[20..23].iter().sum();
+    let end_cells = (end_w / cell).ceil() * cell;
+    let auto = size * 15.0 / 64.0;
+    let k = (w - 20.0 * cell - end_cells - auto) / 20.0;
+    assert!(near(xs[1] - xs[0], cell + k) && near(xs[19], 19.0 * (cell + k)), "{xs:?} k {k}");
+    assert!(near(xs[20], 20.0 * cell + 20.0 * k + auto + (end_cells - end_w) / 2.0) && near(xs[23], w), "{xs:?}");
+    // a b|: one block; its space takes the leftover, a twelfth of its size more than a share.
+    let (xs, advs, _) = &lines[3];
+    let natural: f32 = advs.iter().sum();
+    let cells = (natural / cell).ceil() * cell;
+    let pad = (cells - natural) / 2.0;
+    assert!(near(xs[0], pad) && near(xs[2], w - pad - advs[2] - advs[3]) && near(xs[4], w), "{xs:?} pad {pad}");
+    // end: a lone block sits in its cells at the left.
+    let (xs, advs, _) = &lines[4];
+    let natural: f32 = advs.iter().sum();
+    let cells = (natural / cell).ceil() * cell;
+    assert!(near(xs[0], (cells - natural) / 2.0) && near(xs[3], cells), "{xs:?}");
+    // あ、「あ|: five whole cells, nothing compressed; the | centred in the last.
+    let (xs, advs, _) = &lines[5];
+    let k = (w - 5.0 * cell) / 4.0;
+    assert!(advs[..4].iter().all(|a| near(*a, cell)), "{advs:?}");
+    assert!((0..4).all(|i| near(xs[i], i as f32 * (cell + k))) && near(xs[4], w - cell + (cell - advs[4]) / 2.0), "{xs:?}");
+    // 大 (twice the size) takes two cells.
+    let (_, advs, _) = &lines[6];
+    assert!(near(advs[0], 2.0 * cell) && near(advs[1], cell), "{advs:?}");
+    // あ。、。あ|: the three marks are one chain of whole cells — half an em, half an em and an
+    // em, a share between each (Word for Mac, cg17: 。 at 94.8, 、 at 181.9, 。 at 269.1 on
+    // 11.7 pt cells) — then あ and the | in their cells.
+    let (xs, advs, _) = &lines[7];
+    assert!(near(advs[1], size / 2.0) && near(advs[2], size / 2.0) && near(advs[3], size) && near(advs[4], cell), "{advs:?}");
+    let chain = (2.0 * size / cell).ceil() * cell;
+    let pad = (chain - 2.0 * size) / 2.0;
+    let k = (w - 3.0 * cell - chain) / 5.0;
+    assert!(near(xs[1], cell + k + pad) && near(xs[2], xs[1] + size / 2.0 + k) && near(xs[3], xs[2] + size / 2.0 + k), "{xs:?} k {k} pad {pad}");
+    assert!(near(xs[4], cell + chain + 4.0 * k) && near(xs[5], w - cell + (cell - advs[5]) / 2.0) && near(xs[6], w), "{xs:?}");
+    // ＡＢＣabc|: full-width letters get no automatic space before Latin text.
+    let (xs, advs, _) = &lines[8];
+    let natural: f32 = advs[3..].iter().sum();
+    let cells = (natural / cell).ceil() * cell;
+    let k = (w - 3.0 * cell - cells) / 3.0;
+    assert!(near(advs[2], cell), "no automatic space after Ｃ: {advs:?}");
+    assert!(near(xs[1], cell + k) && near(xs[3], w - cells + (cells - natural) / 2.0), "{xs:?} k {k}");
+    // 한글abc|: the two Hangul characters stay together; the quarter em follows the 글.
+    let (xs, advs, _) = &lines[9];
+    let natural: f32 = advs[2..].iter().sum();
+    let cells = (natural / cell).ceil() * cell;
+    assert!(near(advs[1], cell + size * 15.0 / 64.0), "{advs:?}");
+    assert!(near(xs[1], cell) && near(xs[2], w - cells + (cells - natural) / 2.0), "{xs:?}");
+    // quick brown fox.␣: the trailing space counts for the block's cells, then hangs past the
+    // right edge with the right padding; the full stop ends at the edge and the two spaces
+    // between the words share the rest.
+    let (xs, advs, _) = &lines[10];
+    let natural: f32 = advs.iter().sum();
+    let cells = (natural / cell).ceil() * cell;
+    let pad = (cells - natural) / 2.0;
+    assert!(near(xs[0], pad) && near(xs[15] + advs[15], w) && near(xs[16], w) && near(xs[17], w + advs[16]), "{xs:?} pad {pad}");
+    let s1 = xs[6] - xs[5] - advs[5];
+    let s2 = xs[12] - xs[11] - advs[11];
+    assert!(near(s1, s2) && near(s1 + s2, w - pad - (natural - advs[16])), "{s1} {s2}");
+    // 34 あ and "end" fill the 36 cells: no shares, and the automatic space has no room.
+    let (xs, advs, _) = &lines[11];
+    let end_w: f32 = advs[34..37].iter().sum();
+    assert!(near(advs[33], cell + size * 15.0 / 64.0) && end_w <= 2.0 * cell, "{advs:?}");
+    assert!(near(xs[33], 33.0 * cell) && near(xs[34], 34.0 * cell + (2.0 * cell - end_w) / 2.0) && near(xs[37], w), "{xs:?}");
+}
+
+/// Half-width forms are East Asian text to the grid: ｱ takes a whole cell when snapping to
+/// characters, centred by its own advance (Word for Mac, cg17: 3.2 pt into an 11.7 pt cell).
+#[test]
+fn half_width_kana_is_centred_in_its_cell_by_its_own_advance() {
+    use wordcraft_doc::section::{DocGrid, DocGridType};
+    let size = grid_normal_size();
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(size), ..Default::default() };
+    let mut d = Document::from_text("");
+    let mut p = wordcraft_doc::Paragraph::with_text("ｱあ", chr);
+    p.props.snap_to_grid = Some(true);
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let natural = cluster_advances(&d);
+    d.last_section.doc_grid = Some(DocGrid { kind: DocGridType::SnapToChars, line_pitch: 18.0, char_space: DocGrid::char_space_for(13.0, size) });
+    let l = lay(&d);
+    let para = first_para(&l);
+    for (i, c) in para.clusters.iter().take(2).enumerate() {
+        let dx = para.glyphs[c.g0 as usize].dx;
+        assert!(natural[i] > 0.0 && natural[i] <= 13.0, "{natural:?}");
+        assert!((c.adv - 13.0).abs() < 0.02 && (dx - (13.0 - natural[i]) / 2.0).abs() < 0.02, "{i}: adv {} dx {dx} natural {}", c.adv, natural[i]);
+    }
+}
+
+/// The automatic space between East Asian and Latin text (Word for Mac, `cg17`/`cg18`): none
+/// beside full-width letters and digits (ＡＢＣabc, １２３abc, abcＡＢＣ), the quarter em after
+/// half-width katakana and Hangul.
+#[test]
+fn auto_space_skips_full_width_latin_forms() {
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(10.5), ..Default::default() };
+    let gaps = |text: &str| {
+        let with = |on: bool| {
+            let mut d = Document::from_text("");
+            let mut p = wordcraft_doc::Paragraph::with_text(text, chr.clone());
+            p.props = ParaProps { auto_space_de: Some(on), auto_space_dn: Some(on), ..Default::default() };
+            d.body = vec![wordcraft_doc::para_block(p)];
+            cluster_advances(&d)
+        };
+        let (on, off) = (with(true), with(false));
+        on.iter().zip(&off).enumerate().filter(|(_, (a, b))| (*a - *b).abs() > 0.01).map(|(i, _)| i).collect::<Vec<_>>()
+    };
+    assert_eq!(gaps("ＡＢＣabc"), Vec::<usize>::new());
+    assert_eq!(gaps("１２３abc"), Vec::<usize>::new());
+    assert_eq!(gaps("abcＡＢＣ"), Vec::<usize>::new());
+    assert_eq!(gaps("ｱｲｳabc"), vec![2]);
+    assert_eq!(gaps("한글abc"), vec![1]);
 }
 
 /// Spacing in lines (`w:beforeLines`/`w:afterLines`), read back from Word for Mac: 100 is one
