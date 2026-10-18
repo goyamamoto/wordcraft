@@ -144,10 +144,24 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("para.heading1", "Heading 1", "Home › Styles", |s, _| apply_style(s, &json!({"style": "Heading1"}))).key("Mod+Alt+1"),
         CommandSpec::new("para.heading2", "Heading 2", "Home › Styles", |s, _| apply_style(s, &json!({"style": "Heading2"}))).key("Mod+Alt+2"),
         CommandSpec::new("para.heading3", "Heading 3", "Home › Styles", |s, _| apply_style(s, &json!({"style": "Heading3"}))).key("Mod+Alt+3"),
-        CommandSpec::new("para.bullets", "Bullets", "Home › Paragraph", |s, v| list(s, v, ListKind::Bullet)).params(r#"{"kind"?: "bullet" | single char, "off"?: bool}"#).key("Mod+Shift+L"),
-        CommandSpec::new("para.numbering", "Numbering", "Home › Paragraph", |s, v| list(s, v, ListKind::Numbered))
-            .params(r#"{"kind"?: "numbered|numberedParen|upperLetter|lowerLetter|lowerRoman|outline", "off"?: bool}"#),
-        CommandSpec::new("para.multilevel", "Multilevel List", "Home › Paragraph", |s, v| list(s, v, ListKind::Legal)).params(r#"{"kind"?: "legal|outline"}"#),
+        CommandSpec::new("para.bullets", "Bullets", "Home › Paragraph", |s, v| {
+            let default = if japanese_lists(s) { ListKind::JaBullet } else { ListKind::Bullet };
+            list(s, v, default)
+        })
+        .params(r#"{"kind"?: "bullet|jaBullet" | single char, "off"?: bool}"#)
+        .key("Mod+Shift+L"),
+        CommandSpec::new("para.numbering", "Numbering", "Home › Paragraph", |s, v| {
+            let default = if japanese_lists(s) { ListKind::JaNumbered } else { ListKind::Numbered };
+            list(s, v, default)
+        })
+        .params(
+            r#"{"kind"?: "numbered|numberedParen|upperLetter|lowerLetter|lowerRoman|outline" | Word's Japanese library "jaNumbered|circled|jaUpperRoman|upperLetterParen|aiueo|iroha|jaLowerRoman", "off"?: bool}"#,
+        ),
+        CommandSpec::new("para.multilevel", "Multilevel List", "Home › Paragraph", |s, v| {
+            let default = if japanese_lists(s) { ListKind::JaNumbers } else { ListKind::Legal };
+            list(s, v, default)
+        })
+        .params(r#"{"kind"?: "legal|outline" | Word's Japanese library "jaNumbers|jaLegal|jaFullWidthDash|jaMixed|jaChapter|jaChapterKanji|jaOutline"}"#),
         CommandSpec::new("para.listLevel", "Change List Level", "Home › Paragraph › Bullets", |s, v| {
             let lvl = p::u64(v, "level").unwrap_or(0).min(8) as u8;
             fmt(s, &|p| {
@@ -510,6 +524,14 @@ fn apply_style(s: &mut Session, v: &Value) -> CmdResult {
     }
     s.pending = None;
     sel_result(s)
+}
+
+/// Whether the list buttons and galleries use Word's Japanese libraries: the region's language is
+/// Japanese (Word's East Asian editing language, an application setting), or the document's
+/// default East Asian language is.
+pub fn japanese_lists(s: &Session) -> bool {
+    s.region().language.eq_ignore_ascii_case("ja")
+        || s.doc.styles.default_chr.lang_ea.as_deref().is_some_and(|l| l.get(..2).is_some_and(|p| p.eq_ignore_ascii_case("ja")))
 }
 
 fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {
