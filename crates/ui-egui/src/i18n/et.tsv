@@ -2267,3 +2267,7 @@
 # Reading Mode column widths (#1040)
 	Narrow	Kitsas
 	Medium	Keskmine
+	Half-width	Poollaiusega
+	Full-width	Täislaiusega
+	Hiragana	Hiragana
+	Katakana	Katakana

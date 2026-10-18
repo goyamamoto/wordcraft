@@ -115,7 +115,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"color": "RRGGBB" | null}"#),
         CommandSpec::new("format.changeCase", "Change Case", "Home › Font", change_case)
             .key("Shift+F3")
-            .params(r#"{"mode"?: "sentence|lower|upper|title|toggle"}"#),
+            .params(r#"{"mode"?: "sentence|lower|upper|title|toggle|halfWidth|fullWidth|hiragana|katakana"}"#),
         CommandSpec::new("format.clear", "Clear All Formatting", "Home › Font", clear),
         // Word's Ctrl+Space; ⌘Space is Spotlight, so Word for Mac uses ⌃Space.
         CommandSpec::new("format.resetChar", "Reset Character Formatting", "Home › Font", reset_char).key(super::mac_or("Ctrl+Space", "Mod+Space")),
@@ -562,6 +562,10 @@ fn convert(src: &str, mode: &str, para_start: bool) -> String {
 /// The case-converted form of each character of `src`, in order (one entry per char, so a
 /// change of length such as ß → SS or İ → i̇ can be applied run by run).
 fn convert_chars(src: &str, mode: &str, para_start: bool) -> Vec<String> {
+    // Word's Japanese kinds (文字種の変換): half/full width, hiragana, katakana.
+    if let Some(kind) = wordcraft_doc::kana::Kind::parse(mode) {
+        return wordcraft_doc::kana::convert(src, kind);
+    }
     let chars: Vec<char> = src.chars().collect();
     // Greek capital sigma lowers to the final form at the end of a word (as `str::to_lowercase`).
     let lower = |i: usize, c: char| -> String {

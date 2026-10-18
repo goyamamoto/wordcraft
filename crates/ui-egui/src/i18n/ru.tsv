@@ -2630,3 +2630,7 @@ preview	Title	Пример
 # Reading Mode column widths (#1040)
 	Narrow	Узкая
 	Medium	Средняя
+	Half-width	Половинная ширина
+	Full-width	Полная ширина
+	Hiragana	Хирагана
+	Katakana	Катакана

@@ -2247,3 +2247,7 @@
 # Reading Mode column widths (#1040)
 	Narrow	Уска
 	Medium	Средња
+	Half-width	Половична ширина
+	Full-width	Пуна ширина
+	Hiragana	Хирагана
+	Katakana	Катакана

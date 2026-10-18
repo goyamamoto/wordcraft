@@ -2641,3 +2641,7 @@ preview	Title	Esempio
 # Reading Mode column widths (#1040)
 	Narrow	Stretta
 	Medium	Media
+	Half-width	Larghezza dimezzata
+	Full-width	Larghezza intera
+	Hiragana	Hiragana
+	Katakana	Katakana

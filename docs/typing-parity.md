@@ -1,6 +1,6 @@
 # Typing parity with Word
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-14 · **Change:** trivial (Shift+Delete cuts the selection on every platform, #1669; previously trivial: Select All then Delete removes a table the document starts with, #1198; previously trivial: Alt+numpad character codes, #961; previously trivial: Down and Up from a line start beside a table go into it, #1007; previously trivial: sample-text formulas on Enter, #1067; previously trivial: Track Changes: Accept All after a tracked delete from a paragraph end keeps the next paragraph; Reject All after typing into an empty paragraph keeps it (#864); previously minor: Correct TWo INitial CApitals, cAPS LOCK and table-cell capitals, #544; previously trivial: complex-script caret and Backspace, #604; Move Paragraph Up/Down, Promote/Demote, Go Back and Alt+X keys, #343) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-18 · **Change:** trivial (Change Case: Word's Japanese Half-width, Full-width, Hiragana and Katakana kinds; previously trivial: Shift+Delete cuts the selection on every platform, #1669; previously trivial: Select All then Delete removes a table the document starts with, #1198; previously trivial: Alt+numpad character codes, #961; previously trivial: Down and Up from a line start beside a table go into it, #1007; previously trivial: sample-text formulas on Enter, #1067; previously trivial: Track Changes: Accept All after a tracked delete from a paragraph end keeps the next paragraph; Reject All after typing into an empty paragraph keeps it (#864); previously minor: Correct TWo INitial CApitals, cAPS LOCK and table-cell capitals, #544; previously trivial: complex-script caret and Backspace, #604; Move Paragraph Up/Down, Promote/Demote, Go Back and Alt+X keys, #343) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 What Word does when you type, observed black-box (same keystrokes typed into Word and
 WordCraft, results read back paragraph by paragraph) and pinned by tests in
@@ -171,6 +171,19 @@ Word.
   `myanmar_typing_steps_by_syllable_and_backspaces_by_sign`,
   `indic_and_khmer_backspace_removes_one_character`).
 
+## Japanese
+
+- Change Case (Home › Aa, `format.changeCase`) has Word's four Japanese kinds — Half-width,
+  Full-width, Hiragana, Katakana — converted exactly as Word for Mac does with Japanese as the
+  East Asian editing language, read back through `set case of text object to case half width`
+  etc. (2026-10-18): fullwidth ASCII ↔ ASCII (￥ and ＼ → `\`, `\` → ￥), 　 ↔ space,
+  katakana ↔ halfwidth kana with ﾞ/ﾟ composed (ｶﾞ ↔ ガ, ｳﾞ ↔ ヴ) or, where no voiced kana
+  exists, kept as ゛/゜ (ﾜﾞ → ワ゛); Hiragana drops a halfwidth mark it can't attach after East
+  Asian text and leaves the kana before it halfwidth (ﾜﾞ → ﾜ, ｲﾟ → ｲ); Katakana leaves
+  halfwidth text alone and folds う゛/ウ゛ into ヴ; ヵヶ, ゕゖ, ヷ..ヺ and ヽヾ stay where Word
+  keeps them. Shift+F3 still cycles the Latin kinds only (`wordcraft_doc::kana` tests,
+  `change_case_converts_japanese_kinds_as_word`).
+
 ## Known gaps
 
 - Word's body font Aptos isn't installed outside Office; our substitute (Carlito, else Helvetica
@@ -196,6 +209,7 @@ Word.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-18 | trivial | Change Case: Word's Japanese kinds Half-width, Full-width, Hiragana and Katakana, character for character as Word for Mac converts them (sound marks included) |
 | 2026-10-14 | trivial | Shift+Delete cuts the selection, and does nothing without one, on macOS and Linux too, as in Word for Windows (#1669); Shift+Backspace already erased (#707) |
 | 2026-10-13 | trivial | Select All then Delete or Backspace removes a table the document starts with (#1198) |
 | 2026-10-12 | trivial | Editing keys: Down and Up from the start of a line beside a table go into it instead of skipping it (#1007) |
