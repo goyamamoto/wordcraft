@@ -245,3 +245,139 @@ fn vertical_text_takes_the_fonts_vertical_forms_and_turns_the_dashes() {
         assert_ne!(of('、').1, face.glyph_for('、'), "、 takes its vertical form");
     }
 }
+
+/// A top-to-bottom section of 10.5-pt 游明朝 paragraphs (Word's Japanese default), with a
+/// ruby's `(size, raise)` on 漢字 in a 前漢字後 paragraph or a 20-pt 大 in 前大後; `None`
+/// without a Japanese font on this machine (then the checks are moot).
+fn ja_vertical_doc(paras: &[Option<(f32, f32)>], big: bool, grid: Option<f32>) -> Option<Document> {
+    use wordcraft_doc::para::RubyAlign;
+    if !wordcraft_fonts::word::resolve("游明朝", false, false).face.covers('語') {
+        return None;
+    }
+    let chr = |size: f32| CharProps {
+        font: Some("游明朝".into()),
+        font_ea: Some("游明朝".into()),
+        size: Some(size),
+        lang_ea: Some("ja-JP".into()),
+        ..Default::default()
+    };
+    let mut d = Document::from_text("");
+    d.body.clear();
+    for (i, p) in paras.iter().enumerate() {
+        let (text, size) = match (p, big && i == paras.len() - 1) {
+            (Some(_), _) => ("前後", 10.5),
+            (None, true) => ("前大後", 10.5),
+            (None, false) => ("次の行", 10.5),
+        };
+        let mut para = Paragraph::with_text(text, chr(size));
+        para.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+        if big && i == paras.len() - 1 {
+            para.runs = vec![
+                wordcraft_doc::Run { len: "前".len(), props: chr(10.5) },
+                wordcraft_doc::Run { len: "大".len(), props: chr(20.0) },
+                wordcraft_doc::Run { len: "後".len(), props: chr(10.5) },
+            ];
+        }
+        d.body.push(wordcraft_doc::para_block(para));
+        if let Some((size, raise)) = p {
+            let ruby = InlineObject::Ruby {
+                base: "漢字".into(),
+                ruby: "かんじ".into(),
+                align: RubyAlign::DistributeSpace,
+                size: *size,
+                raise: *raise,
+                base_size: 10.5,
+                lang: "ja-JP".into(),
+                props: Default::default(),
+            };
+            d.insert_object(&Pos::body(i, "前".len()), ruby, &chr(10.5)).unwrap();
+        }
+    }
+    d.last_section.text_direction = TextDirection::Down;
+    d.last_section.doc_grid =
+        grid.map(|p| wordcraft_doc::section::DocGrid { kind: wordcraft_doc::section::DocGridType::Lines, line_pitch: p, char_space: 0 });
+    Some(d)
+}
+
+/// The body paragraphs' first lines on page 0 in order: (height, centre line below the top).
+fn columns(l: &DocLayout) -> Vec<(f32, f32)> {
+    let mut v: Vec<(usize, f32, f32)> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Lines { story: StoryRef::Body, path, para, .. } => {
+                assert!(para.vertical, "laid out as a vertical column");
+                let line = para.lines.first()?;
+                Some((path.0[0] as usize, line.height, line.baseline - line.top))
+            }
+            _ => None,
+        })
+        .collect();
+    v.sort_by_key(|x| x.0);
+    v.into_iter().map(|(_, h, c)| (h, c)).collect()
+}
+
+/// Vertical columns measured in Word for Mac (10.5-pt 游明朝, single spacing, 2026-10-18): a
+/// column is the text's line (1.43 em, 15.0 pt) centred on the characters' em squares, 7.5 pt
+/// each side of its centre line; a ruby runs beside its base, its centre line `raise` to the
+/// right, and the column reaches raise + ascent − 0.38 em of the ruby's size that way (a 5-pt
+/// ruby raised 5: 16.04 pt from the previous column's centre; a 7-pt one raised 7: 19.2); a
+/// 20-pt character shares the centre line of the 10.5-pt text round it (its column 28.6 wide).
+#[test]
+fn vertical_columns_centre_em_squares_and_run_rubies_beside_them_as_word_does() {
+    let Some(d) = ja_vertical_doc(&[None, Some((5.0, 5.0)), None, Some((7.0, 7.0)), None, None], true, None) else { return };
+    let l = lay(&d);
+    let cols = columns(&l);
+    assert_eq!(cols.len(), 6, "{cols:?}");
+    let near = |a: f32, b: f32| (a - b).abs() < 0.05;
+    // A plain column: the 1.43 em line, 0.715 em each side of its centre.
+    assert!(near(cols[0].0, 15.015) && near(cols[0].1, 7.5075), "plain column {:?}", cols[0]);
+    assert!(near(cols[2].0, 15.015) && near(cols[2].1, 7.5075), "{:?}", cols[2]);
+    // 5-pt ruby raised 5: reaches 5 + 5.255 − 1.9 = 8.355 right of the centre.
+    assert!(near(cols[1].0, 8.355 + 7.5075) && near(cols[1].1, 8.355), "5-pt ruby column {:?}", cols[1]);
+    // 7-pt ruby raised 7: 7 + 7.357 − 2.66 = 11.697.
+    assert!(near(cols[3].0, 11.697 + 7.5075) && near(cols[3].1, 11.697), "7-pt ruby column {:?}", cols[3]);
+    // The 20-pt character's line, centred.
+    assert!(near(cols[5].0, 28.6) && near(cols[5].1, 14.3), "20-pt column {:?}", cols[5]);
+    // Drawn: every East Asian character stands centred on its column's centre line, the ruby
+    // letters on theirs, `raise` to the right (above, before the turn) of the base's.
+    let draws = display::page_display(&d, &l.pages[0], &Default::default());
+    let turned: Vec<&Vec<display::Draw>> =
+        draws.iter().filter_map(|x| if let display::Draw::Turned { items, .. } = x { Some(items) } else { None }).collect();
+    let stood = |items: &[display::Draw]| -> Vec<(String, f32, f32)> {
+        items
+            .iter()
+            .filter_map(|x| match x {
+                display::Draw::Rotated { cy, items, .. } => match items.first() {
+                    Some(display::Draw::Glyphs { text, size, .. }) => Some((text.clone(), *size, *cy)),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    };
+    let with_ruby = turned.iter().map(|i| stood(i)).find(|s| s.iter().any(|(t, _, _)| t == "か")).expect("the ruby paragraph");
+    let base_cy = with_ruby.iter().find(|(t, _, _)| t == "漢").map(|x| x.2).unwrap();
+    let ruby_cy = with_ruby.iter().filter(|(t, s, _)| t == "か" && *s == 5.0).map(|x| x.2).next().unwrap();
+    assert!(near(base_cy, 8.355) && near(ruby_cy, 8.355 - 5.0), "base {base_cy} ruby {ruby_cy}");
+    assert!(with_ruby.iter().filter(|(_, s, _)| *s == 10.5).all(|(_, _, cy)| near(*cy, base_cy)), "{with_ruby:?}");
+    let big = turned.iter().map(|i| stood(i)).find(|s| s.iter().any(|(t, _, _)| t == "大")).expect("the 20-pt paragraph");
+    assert!(big.iter().all(|(_, _, cy)| near(*cy, 14.3)), "{big:?}");
+}
+
+/// With Word's 18-pt line grid the same columns take whole grid lines, centred in them: the
+/// 5-pt ruby's column one line (its centre 0.42 pt left of the line's middle, the ruby's reach
+/// shared out), the 7-pt ruby's two (measured in Word for Mac: the base 20.4 pt from the pair's
+/// right edge, the ruby 13.4).
+#[test]
+fn vertical_columns_take_whole_grid_lines_centred() {
+    let Some(d) = ja_vertical_doc(&[None, Some((5.0, 5.0)), None, Some((7.0, 7.0)), None, Some((7.0, 3.0))], false, Some(18.0)) else { return };
+    let cols = columns(&lay(&d));
+    assert_eq!(cols.len(), 6, "{cols:?}");
+    let near = |a: f32, b: f32| (a - b).abs() < 0.05;
+    assert!(near(cols[0].0, 18.0) && near(cols[0].1, 9.0), "{:?}", cols[0]);
+    assert!(near(cols[1].0, 18.0) && near(cols[1].1, 9.0 + (8.355 - 7.5075) / 2.0), "5-pt ruby {:?}", cols[1]);
+    assert!(near(cols[3].0, 36.0) && near(cols[3].1, 18.0 + (11.697 - 7.5075) / 2.0), "7-pt ruby {:?}", cols[3]);
+    // A 7-pt ruby raised only 3 fits its line: 3 + 7.357 − 2.66 = 7.697.
+    assert!(near(cols[5].0, 18.0) && near(cols[5].1, 9.0 + (7.697 - 7.5075) / 2.0), "7-pt ruby raised 3 {:?}", cols[5]);
+}
