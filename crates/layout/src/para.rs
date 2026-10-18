@@ -355,6 +355,11 @@ pub struct ParaLayout {
     pub shown: Vec<(usize, String, Vec<std::ops::Range<usize>>)>,
     /// Shapes drawn around overstruck field text (enclosed characters, `EQ \o`), by cluster index.
     pub enclosures: Vec<(usize, Enclosed)>,
+    /// Horizontal-in-vertical runs (縦中横, `w:eastAsianLayout/@w:vert`): the cluster standing
+    /// for the run and the run's natural width, sorted by cluster. The cluster advances by the
+    /// font's line height; the display draws the glyphs turned 90° anticlockwise about its
+    /// centre, which a turned (`tbRl`) page stands upright again, as Word draws them.
+    pub tcy: Vec<(usize, f32)>,
 }
 
 /// A shape drawn over a cluster (an enclosed character's circle, square, triangle or diamond),
@@ -458,6 +463,77 @@ pub fn is_east_asian(c: char) -> bool {
 /// Character grid: East Asian characters (all text with `snapToChars`) take whole cells of the
 /// pitch, the glyph centred in them. A character at the default size takes one cell, a larger one
 /// as many as its size needs; Latin text stays proportional unless everything snaps.
+/// 均等割り付け (`w:fitText`): consecutive clusters of one block (same id and width) are spread
+/// to exactly the block's width — the surplus shared equally between the characters, none after
+/// the last — or, when the text is wider, narrowed to it (advances only: the glyphs keep their
+/// outlines, where Word also narrows them). Measured in Word for Mac at 10.5 pt: 均等割付 fit to
+/// 100 pt has its characters 29.8 pt apart; abc fit to 60 pt has 21.5 pt gaps; 均等割付 fit to
+/// 30 pt is drawn at 71%. The spacing Word stores in the block's runs (`w:spacing`) is what it
+/// computed for the same spread, so it doesn't count. A line never breaks inside a block.
+/// Word's character spacing (`w:spacing`) counts twice on an East Asian character: measured in
+/// Word for Mac, 均等割付 expanded by 10 pt has 20 pt between its characters, abcd 10 pt.
+fn spacing_for(spacing: f32, ch: char) -> f32 {
+    if wordcraft_doc::east_asian::is_east_asian(ch) { spacing * 2.0 } else { spacing }
+}
+
+fn fit_text_blocks(b: &mut Builder, text: &str) {
+    let fit_of = |b: &Builder, k: usize| b.clusters.get(k).and_then(|c| b.styles.get(c.style as usize)).and_then(|s| s.rc.fit_text);
+    let mut i = 0;
+    while i < b.clusters.len() {
+        let Some(ft) = fit_of(b, i) else {
+            i += 1;
+            continue;
+        };
+        let mut j = i + 1;
+        while j < b.clusters.len() && fit_of(b, j) == Some(ft) {
+            j += 1;
+        }
+        let spacing = |b: &Builder, k: usize| {
+            b.clusters
+                .get(k)
+                .and_then(|c| {
+                    let s = b.styles.get(c.style as usize)?.rc.spacing;
+                    let ch = text.get(c.start..).and_then(|t| t.chars().next()).unwrap_or(' ');
+                    Some(spacing_for(s, ch))
+                })
+                .unwrap_or(0.0)
+        };
+        let natural: f32 = (i..j).map(|k| b.clusters.get(k).map(|c| c.adv - spacing(b, k)).unwrap_or(0.0).max(0.0)).sum();
+        let n = j - i;
+        let width = ft.width.clamp(0.1, 1584.0);
+        if width >= natural {
+            let gap = if n > 1 { (width - natural) / (n - 1) as f32 } else { width - natural };
+            for k in i..j {
+                let s = spacing(b, k);
+                if let Some(c) = b.clusters.get_mut(k) {
+                    c.adv = (c.adv - s).max(0.0) + if k + 1 < j || n == 1 { gap } else { 0.0 };
+                }
+            }
+        } else if natural > 0.0 {
+            let scale = width / natural;
+            for k in i..j {
+                let s = spacing(b, k);
+                let (g0, g1) = b.clusters.get(k).map(|c| (c.g0 as usize, c.g1 as usize)).unwrap_or((0, 0));
+                for g in b.glyphs.get_mut(g0..g1).into_iter().flatten() {
+                    g.dx *= scale;
+                }
+                if let Some(c) = b.clusters.get_mut(k) {
+                    c.adv = (c.adv - s).max(0.0) * scale;
+                }
+            }
+        }
+        b.glued.extend(i..j.saturating_sub(1));
+        i = j;
+    }
+}
+
+/// Emphasis marks (傍点, `w:em`) take room: a third of an em above the text for marks above it,
+/// below for marks below (a 10.5 pt line with marks grew by about 3.8 pt in Word for Mac).
+/// The room an emphasis mark (傍点) adds to a line: a third of an em on its side, added after
+/// the document grid has sized the line (Word for Mac: a 10.5 pt line on an 18 pt grid with
+/// marks above is 21.8 pt, not two grid lines).
+pub(crate) const EMPHASIS_ROOM: f32 = 0.33;
+
 fn snap_chars(b: &mut Builder, text: &str, grid: &Grid) {
     let Some(pitch) = grid.chars else { return };
     let base = grid.font_size.max(1.0);
@@ -504,6 +580,10 @@ fn auto_space(b: &mut Builder, text: &str, letters: bool, digits: bool) {
     for i in 1..b.clusters.len() {
         let (Some(prev), Some(next)) = (b.clusters.get(i - 1), b.clusters.get(i)) else { continue };
         let (Some(pc), Some(nc)) = (cluster_char(text, prev), cluster_char(text, next)) else { continue };
+        // A 縦中横 run takes exactly the font's line height along the column (measured).
+        if b.tcy.iter().any(|t| t.0 == i - 1 || t.0 == i) {
+            continue;
+        }
         let ea = if ea_letter(pc) && latin(nc) {
             prev
         } else if latin(pc) && ea_letter(nc) {
@@ -576,6 +656,10 @@ struct Builder<'a> {
     levels: Vec<u8>,
     /// Text drawn by clusters that stand for an object, by cluster index (see `ParaLayout::shown`).
     shown: Vec<(usize, String, Vec<std::ops::Range<usize>>)>,
+    /// Clusters a line never breaks after: the inside of a fit-text block or a bracketed 割注.
+    glued: Vec<usize>,
+    /// See [`ParaLayout::tcy`].
+    tcy: Vec<(usize, f32)>,
 }
 
 /// What a piece of text is shaped as: one face, case, script formatting and direction.
@@ -1002,7 +1086,7 @@ impl<'a> Builder<'a> {
                 } else {
                     ClKind::Text
                 });
-                let adv = if kind == ClKind::Marker { 0.0 } else { adv + rc.spacing };
+                let adv = if kind == ClKind::Marker { 0.0 } else { adv + spacing_for(rc.spacing, ch) };
                 // Clusters index the document text, never the displayed text.
                 let (cs, ce) = if substituted { remap_range(&map_starts, &orig_of, sub.len(), gs, ge) } else { (gs, ge) };
                 self.clusters.push(Cluster {
@@ -1068,6 +1152,144 @@ impl<'a> Builder<'a> {
         let g1 = added.last().map(|c| c.g1).unwrap_or(g0);
         self.shown.push((self.clusters.len(), text.to_string(), ranges));
         self.clusters.push(Cluster { start, end, adv: x, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false });
+    }
+
+    /// Two lines in one (割注, `chars` false) or Combine Characters (組み文字, `chars` true): the
+    /// text of `start..end` as two half-size lines stacked in one cluster, as Word for Mac
+    /// draws them (measured at 10.5 pt: half size 5 pt, the lines 7.2 pt apart for 割注 and
+    /// raised 5 pt / lowered 2 pt for 組み文字, the stack centred on the line's text box).
+    fn shape_stacked(&mut self, text: &str, start: usize, end: usize, rc: &Arc<ResolvedChar>, chars: bool, brackets: Option<(char, char)>) {
+        let size = rc.size.clamp(1.0, 1638.0);
+        // Half size: 10.5 → 5, 11 → 5.5, 12 → 6, 9 → 4.5.
+        let half = (size.floor() / 2.0).max(0.5);
+        let n = text.chars().count();
+        // 割注 puts the odd character above (5 → 3/2); 組み文字 below (5 → 2/3), except that
+        // three characters go 2/1, as Word's own files pin.
+        let split = if !chars || n == 3 { n.div_ceil(2) } else { (n / 2).max(1) };
+        let at = text.char_indices().nth(split).map(|(i, _)| i).unwrap_or(text.len());
+        let (upper, lower) = (text.get(..at).unwrap_or(""), text.get(at..).unwrap_or(""));
+        let full = self.style(rc, None, false);
+        let (asc, desc) = self.styles.get(full as usize).map(|s| (s.ascent, s.descent)).unwrap_or((size * 0.9, size * 0.2));
+        let mut hr = (**rc).clone();
+        hr.size = half;
+        hr.spacing = 0.0;
+        hr.fit_text = None;
+        hr.east_asian_layout = None;
+        hr.em = wordcraft_doc::props::EmphasisMark::None;
+        if chars {
+            // Word narrows the characters so three or four per line still make one character
+            // cell: `w:w` 66 and 50 in its field. (Only the advances narrow here: the glyphs
+            // keep their outlines.)
+            hr.scale = match split.max(n.saturating_sub(split)) {
+                0..=2 => 100.0,
+                3 => 66.0,
+                _ => 50.0,
+            };
+        }
+        let hr = Arc::new(hr);
+        let (bo, bc) = match brackets {
+            Some((o, c)) => (Some(o), Some(c)),
+            None => (None, None),
+        };
+        if let Some(o) = bo {
+            self.shape_atomic(&o.to_string(), start, start, rc);
+            self.glued.push(self.clusters.len().saturating_sub(1));
+        }
+        let (c0, s0) = (self.clusters.len(), self.shown.len());
+        self.shape_atomic(upper, start, end, &hr);
+        if !lower.is_empty() {
+            self.shape_atomic(lower, start, end, &hr);
+        }
+        let added: Vec<Cluster> = self.clusters.drain(c0..).collect();
+        let shown: Vec<(usize, String, Vec<std::ops::Range<usize>>)> = self.shown.drain(s0..).collect();
+        let wu = added.first().map(|c| c.adv.max(0.0)).unwrap_or(0.0);
+        let wl = added.get(1).map(|c| c.adv.max(0.0)).unwrap_or(0.0);
+        // Horizontal placement: 割注 lines start together; 組み文字 lines are centred on each
+        // other, except two characters, which sit top left and bottom right.
+        let (width, dxs) = if chars && n == 2 {
+            (wu + wl, [0.0, wu])
+        } else if chars {
+            let w = wu.max(wl);
+            (w, [(w - wu) / 2.0, (w - wl) / 2.0])
+        } else {
+            (wu.max(wl), [0.0, 0.0])
+        };
+        let (asc_h, desc_h) =
+            added.first().and_then(|c| self.styles.get(c.style as usize)).map(|s| (s.ascent, s.descent)).unwrap_or((half * 0.9, half * 0.2));
+        let dys = if chars {
+            [(size / 2.0).round(), -2.0]
+        } else {
+            let pitch = 1.44 * half;
+            let (c, ch) = ((asc - desc) / 2.0, (asc_h - desc_h) / 2.0);
+            [c + pitch / 2.0 - ch, c - pitch / 2.0 - ch]
+        };
+        let (mut text_out, mut ranges) = (String::new(), Vec::new());
+        let (mut g0, mut g1) = (u32::MAX, 0u32);
+        for (i, c) in added.iter().enumerate() {
+            let (dx, dy) = (dxs.get(i).copied().unwrap_or(0.0), dys.get(i).copied().unwrap_or(0.0));
+            for g in self.glyphs.get_mut(c.g0 as usize..c.g1 as usize).into_iter().flatten() {
+                g.dx += dx;
+                g.dy += dy;
+            }
+            if let Some((_, t, r)) = shown.get(i) {
+                let off = text_out.len();
+                ranges.extend(r.iter().map(|x| x.start.saturating_add(off)..x.end.saturating_add(off)));
+                text_out.push_str(t);
+            }
+            g0 = g0.min(c.g0);
+            g1 = g1.max(c.g1);
+        }
+        let g = self.glyphs.len() as u32;
+        let (g0, g1) = if g0 <= g1 { (g0, g1) } else { (g, g) };
+        // The cluster's style draws at half size but keeps the full size's line metrics: the
+        // stack fits inside the line without shrinking it.
+        let style = match added.first().and_then(|c| self.styles.get(c.style as usize)).cloned() {
+            Some(mut st) => {
+                st.ascent = asc;
+                st.descent = desc;
+                let i = u32::try_from(self.styles.len()).unwrap_or(u32::MAX);
+                self.styles.push(st);
+                i
+            }
+            None => full,
+        };
+        let k = self.clusters.len();
+        if !text_out.is_empty() {
+            self.shown.push((k, text_out, ranges));
+        }
+        self.clusters.push(Cluster {
+            start,
+            end,
+            adv: width,
+            kind: ClKind::Text,
+            style,
+            g0,
+            g1,
+            break_after: false,
+            obj_h: 0.0,
+            obj_d: 0.0,
+            dot: false,
+        });
+        if let Some(c) = bc {
+            self.glued.push(k);
+            self.shape_atomic(&c.to_string(), end, end, rc);
+        }
+    }
+
+    /// Horizontal in vertical (縦中横, `w:eastAsianLayout/@w:vert`): the text of `start..end` as
+    /// one cluster advancing by the font's line height, drawn turned (see [`ParaLayout::tcy`]).
+    /// Word for Mac draws the run at its natural width whether or not it asks to compress it.
+    fn shape_turned(&mut self, text: &str, start: usize, end: usize, rc: &Arc<ResolvedChar>) {
+        let k = self.clusters.len();
+        self.shape_atomic(text, start, end, rc);
+        let metrics = self.clusters.get(k).and_then(|c| self.styles.get(c.style as usize)).map(|s| s.ascent + s.descent);
+        if let (Some(c), Some(h)) = (self.clusters.get_mut(k), metrics)
+            && c.kind == ClKind::Text
+        {
+            let natural = c.adv.max(0.0);
+            c.adv = h.max(0.0);
+            self.tcy.push((k, natural));
+        }
     }
 
     /// Shape `texts` on top of one another as one cluster for `start..end`: each aligned within
@@ -1312,8 +1534,17 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     }
     let resolve = |c: &CharProps| -> Arc<ResolvedChar> { Arc::new(doc.styles.resolve_char_in(para_style, table_chr, c)) };
     let levels = bidi_levels(&p.text, rp.bidi);
-    let mut b =
-        Builder { env, styles: Vec::new(), style_index: Default::default(), glyphs: Vec::new(), clusters: Vec::new(), levels, shown: Vec::new() };
+    let mut b = Builder {
+        env,
+        styles: Vec::new(),
+        style_index: Default::default(),
+        glyphs: Vec::new(),
+        clusters: Vec::new(),
+        levels,
+        shown: Vec::new(),
+        glued: Vec::new(),
+        tcy: Vec::new(),
+    };
     let mark_rc = resolve(&p.mark);
     let mark_style = b.style(&mark_rc, None, false);
     let mut has_page_fields = false;
@@ -1337,10 +1568,45 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let mut left: Vec<std::ops::Range<usize>> = Vec::new();
     // Each run's proofing language and whether it is checked (spelling, grammar, hyphenation).
     let mut runs: Vec<ProofRun> = Vec::new();
+    // The end of the Asian layout block (割注, 組み文字, 縦中横) laid out as one piece: the runs
+    // up to it are done.
+    let mut block_end = 0usize;
     for (range, props) in p.run_ranges() {
         let rc = resolve(props);
         runs.push(ProofRun::of(range.clone(), &rc));
+        if range.end <= block_end {
+            continue;
+        }
         let Some(text) = p.text.get(range.clone()) else { continue };
+        if let Some(l) = rc.east_asian_layout
+            && !left_out(&rc, b.env.show_hidden, b.env.hide_deleted)
+        {
+            // Adjacent runs of the same block (Word splits a block it also formats) are one piece.
+            let mut end = range.end;
+            for (r2, p2) in p.run_ranges().skip_while(|(r, _)| r.start < range.end) {
+                if r2.start != end || resolve(p2).east_asian_layout != Some(l) {
+                    break;
+                }
+                end = r2.end;
+            }
+            let plain = p
+                .text
+                .get(range.start..end)
+                .filter(|t| !t.is_empty() && !t.chars().any(|c| matches!(c, '\t' | LINE_BREAK | PAGE_BREAK | COLUMN_BREAK | OBJ | '\r')));
+            if let Some(t) = plain {
+                if l.vert {
+                    b.shape_turned(t, range.start, end, &rc);
+                } else if l.combine {
+                    b.shape_stacked(t, range.start, end, &rc, false, l.combine_brackets.chars());
+                } else if l.combine_chars {
+                    b.shape_stacked(t, range.start, end, &rc, true, None);
+                } else {
+                    b.shape(t, range.start, &rc, None);
+                }
+                block_end = end;
+                continue;
+            }
+        }
         if left_out(&rc, b.env.show_hidden, b.env.hide_deleted) {
             match left.last_mut() {
                 Some(last) if last.end == range.start => last.end = range.end,
@@ -1544,6 +1810,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     if env.doc.settings.punct_compression.compresses() {
         compress_punctuation(&mut b, &p.text);
     }
+    fit_text_blocks(&mut b, &p.text);
     // Break opportunities and hyphenation points come from the text as laid out: hidden text that is
     // not shown and, without markup, tracked deletions are left out, so a space or soft hyphen there
     // is no place to break, and words are hyphenated as they read.
@@ -1589,6 +1856,11 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let opps: std::collections::HashSet<usize> = found.into_iter().filter_map(to_para).collect();
     for c in &mut b.clusters {
         c.break_after = opps.contains(&c.end) || matches!(c.kind, ClKind::Object(_) | ClKind::Tab);
+    }
+    for k in &b.glued {
+        if let Some(c) = b.clusters.get_mut(*k) {
+            c.break_after = false;
+        }
     }
 
     // Word hides a list label on a paragraph containing only a page break. The list counter
@@ -1664,6 +1936,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         displays,
         left_out: Vec::new(),
         enclosures,
+        tcy: b.tcy,
     };
     let auto = env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens;
     pl.hyph_after = hyphenation_points(&text, to_para, &pl, auto, env.doc.settings.hyphenate_caps, &runs);
@@ -2058,6 +2331,8 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
         let (mut asc, mut desc) = (0.0f32, 0.0f32);
         // The tallest picture on the line (it sits on the baseline).
         let mut obj_asc = 0.0f32;
+        // Emphasis marks: room above and below the line, added after the grid sizes it.
+        let (mut em_above, mut em_below) = (0.0f32, 0.0f32);
         let mut any = false;
         let dropped = pl.drop_cap.map_or(0, |d| d.0);
         for (k, c) in pl.clusters.get(c0..c1).into_iter().flatten().enumerate() {
@@ -2079,12 +2354,20 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                         (st.ascent, st.descent)
                     }
                 } else {
-                    // `obj_h` is set on text clusters only under ruby text, which the line grows to fit.
-                    ((st.ascent + st.shift.max(0.0)).max(c.obj_h + st.shift), st.descent + (-st.shift).max(0.0))
+                    // `obj_h` is set on text clusters under ruby text and emphasis marks, which the
+                    // line grows to fit; `obj_d` under emphasis marks below the text.
+                    ((st.ascent + st.shift.max(0.0)).max(c.obj_h + st.shift), (st.descent + (-st.shift).max(0.0)).max(c.obj_d - st.shift))
                 };
                 asc = asc.max(a);
                 desc = desc.max(d);
                 any = true;
+                if c.kind == ClKind::Text && st.rc.em != wordcraft_doc::props::EmphasisMark::None {
+                    if st.rc.em.below() {
+                        em_below = em_below.max(st.size * EMPHASIS_ROOM);
+                    } else {
+                        em_above = em_above.max(st.size * EMPHASIS_ROOM);
+                    }
+                }
             }
         }
         if (!any || (asc == 0.0 && desc == 0.0))
@@ -2129,6 +2412,9 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
         } else {
             top + baseline_offset(rp.line_spacing, asc, height, desc).max(obj_asc.min(height - desc))
         };
+        // Emphasis marks sit outside the grid's line: the line grows by their room.
+        let baseline = baseline + em_above;
+        let height = height + em_above + em_below;
 
         // Alignment / justification (trailing spaces hang).
         let mut content_end = xs.last().copied().unwrap_or(line_start_x);

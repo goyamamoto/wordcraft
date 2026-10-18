@@ -4,8 +4,9 @@ use std::collections::HashMap;
 
 use wordcraft_doc::para::cap_alt;
 use wordcraft_doc::props::{
-    Align, Border, BorderStyle, Borders, CellProps, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, Rgb, RowProps, TabAlign,
-    TabLeader, TabStop, TableFloat, TableLook, TableProps, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
+    Align, Border, BorderStyle, Borders, CellProps, CharProps, CombineBrackets, EastAsianLayout, EmphasisMark, FitText, HeightRule, Highlight,
+    LineSpacing, NumRef, ParaProps, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextColor, TextDirection,
+    Underline, VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::{
     Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, MAX_CHAR_SPACE, MAX_GRID_PITCH, NotePos, NoteProps, NoteRestart, NumFormat,
@@ -202,6 +203,33 @@ impl PropCtx {
                 "w:outline" => c.outline = Some(on_off(k)),
                 "w:shadow" => c.shadow = Some(on_off(k)),
                 "w:emboss" => c.emboss = Some(on_off(k)),
+                "w:em" => c.em = k.attr("w:val").and_then(EmphasisMark::from_ooxml),
+                "w:fitText" => {
+                    c.fit_text = tw(k, "w:val").filter(|v| *v > 0.0).map(|width| FitText {
+                        width: width.clamp(0.1, 1584.0),
+                        id: k
+                            .attr("w:id")
+                            .and_then(|v| v.trim().parse::<i64>().ok())
+                            .map(|v| v.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
+                            .unwrap_or(0),
+                    })
+                }
+                "w:eastAsianLayout" => {
+                    let flag = |a: &str| k.attr(a).is_some_and(|v| !matches!(v.trim(), "0" | "false" | "off"));
+                    let l = EastAsianLayout {
+                        id: k
+                            .attr("w:id")
+                            .and_then(|v| v.trim().parse::<i64>().ok())
+                            .map(|v| v.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
+                            .unwrap_or(0),
+                        vert: flag("w:vert"),
+                        vert_compress: flag("w:vertCompress"),
+                        combine: flag("w:combine"),
+                        combine_brackets: k.attr("w:combineBrackets").and_then(CombineBrackets::from_ooxml).unwrap_or_default(),
+                        combine_chars: false,
+                    };
+                    c.east_asian_layout = (!l.is_none()).then_some(l);
+                }
                 "w:imprint" => c.engrave = Some(on_off(k)),
                 "w:noProof" => c.no_proof = Some(on_off(k)),
                 "w:vanish" => c.hidden = Some(on_off(k)),

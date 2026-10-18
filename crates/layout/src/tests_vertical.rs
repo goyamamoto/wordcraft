@@ -118,3 +118,78 @@ fn headers_stay_horizontal_and_a_vertical_section_starts_a_page() {
     assert_eq!(l.caret(&Pos::body(0, 0)).unwrap().width, 0.0);
     assert!(l.caret(&Pos::body(1, 0)).unwrap().width > 0.0);
 }
+
+#[test]
+fn horizontal_in_vertical_turns_the_run_in_one_cell_the_height_of_the_font() {
+    // Word for Mac, 10.5 pt: "12" set 縦中横 occupies one cell of the font's line height
+    // (ascent + descent) along the column, the figures turned upright and centred; drawn at
+    // their natural width whether or not the run asks to compress.
+    if !wordcraft_fonts::word::resolve("游明朝", false, false).face.covers('語') {
+        return;
+    }
+    let props = |ea: Option<wordcraft_doc::props::EastAsianLayout>| wordcraft_doc::CharProps {
+        font: Some("游明朝".into()),
+        font_ea: Some("游明朝".into()),
+        size: Some(10.5),
+        lang_ea: Some("ja-JP".into()),
+        east_asian_layout: ea,
+        ..Default::default()
+    };
+    let tcy = wordcraft_doc::props::EastAsianLayout { vert: true, vert_compress: true, ..Default::default() };
+    let mut p = wordcraft_doc::Paragraph::default();
+    for (t, ea) in [("第", None), ("12", Some(tcy)), ("章", None)] {
+        p.text.push_str(t);
+        p.runs.push(wordcraft_doc::Run { len: t.len(), props: props(ea) });
+    }
+    let mut d = Document::from_text("");
+    d.body = vec![wordcraft_doc::para_block(p)];
+    d.last_section.text_direction = TextDirection::Down;
+    let l = lay(&d);
+    let para = l
+        .pages
+        .iter()
+        .flat_map(|p| p.items.iter())
+        .find_map(|it| if let Placed::Lines { para, .. } = it { Some(para.as_ref()) } else { None })
+        .unwrap();
+    let c = para.clusters.iter().find(|c| c.start == 3 && c.end == 5).expect("one cluster for 12");
+    let st = &para.styles[c.style as usize];
+    assert!((c.adv - (st.ascent + st.descent)).abs() < 0.05, "advance {} = line height {}", c.adv, st.ascent + st.descent);
+    assert!(c.adv > 11.0 && c.adv < 17.0, "{}", c.adv);
+    assert_eq!(para.tcy.len(), 1);
+    let natural = para.tcy[0].1;
+    assert!(natural > 9.0 && natural < 12.0, "two figures: {natural}");
+    let draws = display::page_display(&d, &l.pages[0], &Default::default());
+    let turned: Vec<&display::Draw> =
+        draws.iter().filter_map(|x| if let display::Draw::Turned { items, .. } = x { Some(items) } else { None }).flatten().collect();
+    let rotated: Vec<(f32, f32, &Vec<display::Draw>)> = turned
+        .iter()
+        .filter_map(|x| match x {
+            display::Draw::Rotated { cx, cy, spin, items } if spin.deg == 270.0 => Some((*cx, *cy, items)),
+            _ => None,
+        })
+        .filter(|(.., items)| items.iter().any(|i| matches!(i, display::Draw::Glyphs { text, .. } if text == "12")))
+        .collect();
+    assert_eq!(rotated.len(), 1, "the figures turn as one piece");
+    let (cx, cy, items) = rotated[0];
+    let Some(display::Draw::Glyphs { glyphs, size, .. }) = items.first() else { panic!() };
+    assert_eq!(glyphs.len(), 2);
+    assert!((*size - 10.5).abs() < 0.01);
+    // Centred: the run starts half its natural width left of the centre; the centre sits on
+    // the text box's middle.
+    let left = x_of_cluster(para, c);
+    assert!((glyphs[0].1 - (left + (c.adv - natural) / 2.0)).abs() < 0.05);
+    assert!((cx - (left + c.adv / 2.0)).abs() < 0.05);
+    assert!((cy - (glyphs[0].2 - (st.ascent - st.descent) / 2.0)).abs() < 0.05);
+    assert!(!turned.iter().any(|x| matches!(x, display::Draw::Glyphs { text, .. } if text.contains("12"))), "not drawn flat as well");
+    // Horizontal text draws the same turned piece (reading bottom to top), as Word does.
+    d.last_section.text_direction = TextDirection::Horizontal;
+    let l = lay(&d);
+    let draws = display::page_display(&d, &l.pages[0], &Default::default());
+    assert_eq!(draws.iter().filter(|x| matches!(x, display::Draw::Rotated { spin, .. } if spin.deg == 270.0)).count(), 1);
+}
+
+fn x_of_cluster(para: &crate::para::ParaLayout, c: &crate::para::Cluster) -> f32 {
+    let k = para.clusters.iter().position(|x| std::ptr::eq(x, c)).unwrap();
+    let line = para.lines.iter().find(|l| (l.c0..l.c1).contains(&k)).unwrap();
+    line.cl_left(k).unwrap()
+}

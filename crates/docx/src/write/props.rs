@@ -1,8 +1,8 @@
 //! Property writers, in ECMA-376 schema element order.
 
 use wordcraft_doc::props::{
-    Align, Border, BorderStyle, Borders, CellProps, CharProps, HeightRule, Highlight, LineSpacing, ParaProps, RowProps, TabAlign, TabLeader,
-    TableFloat, TableLook, TableProps, TextColor, VAlign, VMerge, VertAlign,
+    Align, Border, BorderStyle, Borders, CellProps, CharProps, CombineBrackets, HeightRule, Highlight, LineSpacing, ParaProps, RowProps, TabAlign,
+    TabLeader, TableFloat, TableLook, TableProps, TextColor, VAlign, VMerge, VertAlign,
 };
 
 use crate::units::{n, twips};
@@ -93,6 +93,14 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     if let Some(s) = c.shading {
         w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &s.hex())]);
     }
+    if let Some(f) = c.fit_text {
+        let mut attrs = vec![("w:val", twips(f.width))];
+        if f.id != 0 {
+            attrs.push(("w:id", f.id.to_string()));
+        }
+        let attrs: Vec<(&str, &str)> = attrs.iter().map(|(a, v)| (*a, v.as_str())).collect();
+        w.empty("w:fitText", &attrs);
+    }
     if let Some(v) = c.vert_align {
         w.val(
             "w:vertAlign",
@@ -105,12 +113,36 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     }
     toggle(w, "w:rtl", c.rtl);
     toggle(w, "w:cs", c.cs);
+    if let Some(m) = c.em {
+        w.val("w:em", m.ooxml());
+    }
     let lang: Vec<(&str, &str)> = [("w:val", &c.lang), ("w:eastAsia", &c.lang_ea), ("w:bidi", &c.lang_bidi)]
         .into_iter()
         .filter_map(|(a, v)| v.as_deref().map(|v| (a, v)))
         .collect();
     if !lang.is_empty() {
         w.empty("w:lang", &lang);
+    }
+    if let Some(l) = c.east_asian_layout.filter(|l| l.vert || l.combine) {
+        // Word's attribute order: id, combine, combineBrackets, vert, vertCompress.
+        let id = l.id.to_string();
+        let mut attrs: Vec<(&str, &str)> = Vec::new();
+        if l.id != 0 {
+            attrs.push(("w:id", &id));
+        }
+        if l.combine {
+            attrs.push(("w:combine", "1"));
+            if l.combine_brackets != CombineBrackets::None {
+                attrs.push(("w:combineBrackets", l.combine_brackets.ooxml()));
+            }
+        }
+        if l.vert {
+            attrs.push(("w:vert", "1"));
+            if l.vert_compress {
+                attrs.push(("w:vertCompress", "1"));
+            }
+        }
+        w.empty("w:eastAsianLayout", &attrs);
     }
     if let Some(fx) = &c.text_effects {
         super::wordart::rpr_effects(w, fx);
