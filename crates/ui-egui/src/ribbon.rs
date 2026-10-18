@@ -923,24 +923,43 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                     });
                     mi(ui, app, "None", "para.bullets", json!({"off": true}));
                 });
+                // Word's Numbering and Multilevel libraries depend on the East Asian editing
+                // language: the Japanese ones (①, (ア), 第１章…) with Japanese editing.
+                let japanese = wordcraft_engine::cmd::para::japanese_lists(&app.session);
+                if japanese {
+                    // The galleries' (ア) and 第１章 need the CJK interface font.
+                    app.want_system_cjk = true;
+                }
                 split(ui, app, "numbering", "Numbering", "para.numbering", json!({}), lists.numbering, None, |ui, app| {
-                    for (l, k) in [
-                        ("1. 2. 3.", "numbered"),
-                        ("1) 2) 3)", "numberedParen"),
-                        ("I. II. III.", "outline"),
-                        ("A. B. C.", "upperLetter"),
-                        ("a) b) c)", "lowerLetter"),
-                        ("i. ii. iii.", "lowerRoman"),
-                    ] {
-                        mi(ui, app, l, "para.numbering", json!({"kind": k}));
+                    if japanese {
+                        for k in wordcraft_doc::numbering::ListKind::JA_NUMBERING {
+                            mi_text(ui, app, &k.preview(), "para.numbering", json!({"kind": k.id()}));
+                        }
+                    } else {
+                        for (l, k) in [
+                            ("1. 2. 3.", "numbered"),
+                            ("1) 2) 3)", "numberedParen"),
+                            ("I. II. III.", "outline"),
+                            ("A. B. C.", "upperLetter"),
+                            ("a) b) c)", "lowerLetter"),
+                            ("i. ii. iii.", "lowerRoman"),
+                        ] {
+                            mi(ui, app, l, "para.numbering", json!({"kind": k}));
+                        }
                     }
                     ui.separator();
                     mi(ui, app, "Restart at 1", "para.restartNumbering", json!({}));
                     mi(ui, app, "None", "para.numbering", json!({"off": true}));
                 });
                 split(ui, app, "multilevel", "Multilevel List", "para.multilevel", json!({}), lists.multilevel, None, |ui, app| {
-                    mi(ui, app, "1. 1.1. 1.1.1.", "para.multilevel", json!({"kind": "legal"}));
-                    mi(ui, app, "I. A. 1. a.", "para.multilevel", json!({"kind": "outline"}));
+                    if japanese {
+                        for k in wordcraft_doc::numbering::ListKind::JA_MULTILEVEL {
+                            mi_text(ui, app, &k.preview(), "para.multilevel", json!({"kind": k.id()}));
+                        }
+                    } else {
+                        mi(ui, app, "1. 1.1. 1.1.1.", "para.multilevel", json!({"kind": "legal"}));
+                        mi(ui, app, "I. A. 1. a.", "para.multilevel", json!({"kind": "outline"}));
+                    }
                     ui.separator();
                     mi(ui, app, "Define New Multilevel List…", "list.define", json!({}));
                     ui.separator();

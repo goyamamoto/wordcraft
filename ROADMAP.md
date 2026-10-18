@@ -135,6 +135,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 ## Progress log
 
 | Date | What landed |
+| 2026-10-18 | Word's Japanese Numbering library (1. ① I. A) (ア) イ) i.) and Multilevel library (1 1.1 1.1.1, 1. 1.1. 1.1.1., １-１, １ (ア) ①, 第１章, 第一章, 1. a. i.), every level read from Word for Mac's list galleries, in the ribbon galleries with Japanese editing; the Numbering, Multilevel List and Bullets buttons apply Word's Japanese defaults in a Japanese document (`%1.` and ● at 0 / 22 pt as single-level lists, 1 1.1 1.1.1), written to the file as Word writes them |
 | 2026-10-18 | Japanese paragraph spacing in lines (`w:beforeLines`/`w:afterLines`, the 行 units Word's Japanese Paragraph dialog writes) is kept in the file and laid out as Word for Mac does — one line is the document grid's pitch, or the Normal font size without a grid, and lines win over points (`para.spacing` takes `beforeLines`/`afterLines`); the high kinsoku level (`w:strictFirstAndLastChars`: a line may not start with a small kana or ー) and custom kinsoku lists (`w:noLineBreaksBefore`/`After`) are read, written and applied as Word for Mac does, the lists replacing the standard ones (`tools.kinsokuCharacters`) |
 | 2026-10-18 | Compress punctuation at the start of a line (`w:topLinePunct`, Paragraph › Asian Typography) lays out as Word for Mac does: an opening bracket starting a line hangs half its cell into the margin or indent and the line holds half an em more (half the pitch on a character grid); an opening bracket after any full-width mark loses its blank left half, while the mark before it keeps its width at a line's end so あ、「 wraps together — each case measured in Word |
 | 2026-10-18 | Vertical (縦書き) sections shape East Asian text with the font's vertical forms (OpenType `vert`), compared glyph for glyph with Word for Mac: 、。「」（）ー, the small kana and ：；！？ are drawn as their vertical glyphs, while … and ― keep the horizontal form turned along the line, as Word does |
@@ -419,6 +420,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-18 | trivial | Progress log: Word's Japanese list libraries |
 | 2026-10-18 | trivial | Progress log: spacing in lines, the high kinsoku level and custom kinsoku lists |
 | 2026-10-18 | trivial | Progress log: `w:topLinePunct` and opening-bracket compression |
 | 2026-10-18 | trivial | Progress log: vertical forms (`vert`) in 縦書き |
