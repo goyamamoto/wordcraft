@@ -1410,9 +1410,14 @@ impl DateTimeForm {
 
 fn date_time_ui(app: &mut WordApp, ui: &mut Ui, f: &mut DateTimeForm) -> bool {
     let t = Tokens::get(ui.ctx());
-    ui.set_width(380.0);
+    ui.set_width(440.0);
+    // The Japanese samples (和暦, 曜日) need the CJK interface font (else □).
+    if f.japanese {
+        app.want_system_cjk = true;
+    }
     ui.horizontal_top(|ui| {
         ui.vertical(|ui| {
+            ui.set_max_width(250.0);
             ui.label(tl!("Available formats:"));
             egui::Frame::new().stroke(Stroke::new(1.0, t.border)).inner_margin(2.0).show(ui, |ui| {
                 egui::ScrollArea::vertical()
@@ -1433,6 +1438,7 @@ fn date_time_ui(app: &mut WordApp, ui: &mut Ui, f: &mut DateTimeForm) -> bool {
         });
         ui.add_space(12.0);
         ui.vertical(|ui| {
+            ui.set_min_width(170.0);
             ui.label(tl!("Language:"));
             let shown = if f.japanese { tl!("Japanese") } else { tl!("English (United States)") };
             egui::ComboBox::from_id_salt("date_time_language").selected_text(shown).width(150.0).show_ui(ui, |ui| {
