@@ -1770,14 +1770,34 @@ fn emphasis_mark(em: wordcraft_doc::props::EmphasisMark, x: f32, y: f32, size: f
 /// Top-to-bottom text drawn turned 90° clockwise, with its East Asian characters turned back
 /// upright, each about the centre of its em square (`tbRl`: ideographs stand, Latin lies).
 /// Glyph runs are split where uprightness changes, so the text keeps its order.
+///
+/// A glyph the font substituted for vertical text (OpenType `vert`: the vertical forms of
+/// 、。「」（）ー and the small kana) is a standing form already and stands as it is, with no
+/// correction. Word for Mac keeps the ellipsis and dashes (U+2010–U+2027) lying along the line
+/// instead: those draw their horizontal form turned.
 fn upright_east_asian(items: Vec<Draw>) -> Vec<Draw> {
     let mut out = Vec::with_capacity(items.len());
     for d in items {
-        let Draw::Glyphs { face, size, glyphs, color, alpha, synth_bold, synth_italic, text, link, ranges, text_bg } = d else {
+        let Draw::Glyphs { face, size, mut glyphs, color, alpha, synth_bold, synth_italic, text, link, ranges, text_bg } = d else {
             out.push(d);
             continue;
         };
-        let up = |k: usize| ranges.get(k).and_then(|r| text.get(r.clone())).and_then(|t| t.chars().next()).is_some_and(upright_in_vertical);
+        let char_at = |k: usize| ranges.get(k).and_then(|r| text.get(r.clone())).and_then(|t| t.chars().next());
+        // A vertical alternate: the glyph is not the character's horizontal one.
+        let alternate = |k: usize, gid: u32| char_at(k).is_some_and(|c| !c.is_whitespace() && face.glyph_for(c) != gid && gid != 0);
+        let lies = |c: char| matches!(c, '\u{2010}'..='\u{2027}');
+        if ranges.len() == glyphs.len() {
+            for k in 0..glyphs.len() {
+                if let Some(c) = char_at(k)
+                    && lies(c)
+                    && let Some(g) = glyphs.get_mut(k)
+                    && alternate(k, g.0)
+                {
+                    g.0 = face.glyph_for(c);
+                }
+            }
+        }
+        let up = |k: usize| char_at(k).is_some_and(|c| upright_in_vertical(c) || (!lies(c) && glyphs.get(k).is_some_and(|g| alternate(k, g.0))));
         if ranges.len() != glyphs.len() || !(0..glyphs.len()).any(up) {
             out.push(Draw::Glyphs { face, size, glyphs, color, alpha, synth_bold, synth_italic, text, link, ranges, text_bg });
             continue;
@@ -1798,16 +1818,18 @@ fn upright_east_asian(items: Vec<Draw>) -> Vec<Draw> {
                 out.push(piece(k0, k1));
             } else {
                 for k in k0..k1 {
-                    let Some(&(_, gx, base)) = glyphs.get(k) else { continue };
+                    let Some(&(gid, gx, base)) = glyphs.get(k) else { continue };
                     // The em square: one em along the line (the advance to the next glyph when
                     // known), from about 0.88 em above the baseline to 0.12 em below it.
                     let adv = glyphs.get(k + 1).map(|g| g.1 - gx).filter(|a| *a > 0.0 && *a < size * 2.0).unwrap_or(size);
                     let (cx, cy) = (gx + adv / 2.0, base - size * 0.38);
                     let mut g = piece(k, k + 1);
                     // The ideographic comma and full stop sit in the upper right of their square in
-                    // vertical text (lower left in horizontal): moved there before standing up.
+                    // vertical text (lower left in horizontal): moved there before standing up —
+                    // unless the font's vertical form (which sits there already) was used.
                     if let Draw::Glyphs { text, glyphs, .. } = &mut g
                         && matches!(text.chars().next(), Some('\u{3001}' | '\u{3002}' | '\u{FF0C}' | '\u{FF0E}'))
+                        && !alternate(k, gid)
                     {
                         for (_, x, y) in glyphs.iter_mut() {
                             *x += size * 0.55;

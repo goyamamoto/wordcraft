@@ -413,6 +413,10 @@ pub struct ParaEnv<'a> {
     /// Shrink inline drawings wider than the line to fit it: in text boxes, which don't clip what
     /// runs past their sides. Elsewhere such a drawing keeps its size and the page edge clips it.
     pub fit_objects: bool,
+    /// The section is top-to-bottom (`tbRl`): East Asian text shapes with the font's OpenType
+    /// vertical alternates (`vert`) — the vertical forms of 、。「」ー（）and the small kana, which
+    /// Word uses there — drawn upright by the display (see `display::upright_east_asian`).
+    pub vertical: bool,
 }
 
 /// The section's document grid as layout applies it (`w:docGrid`, ECMA-376 §17.6.5).
@@ -998,8 +1002,12 @@ impl<'a> Builder<'a> {
             segs.push((seg_start, text.len(), p));
         }
         let no_kern = [wordcraft_fonts::feature_value(b"kern", 0)];
+        let vert = [wordcraft_fonts::feature_value(b"vert", 1)];
+        let vert_no_kern = [wordcraft_fonts::feature_value(b"vert", 1), wordcraft_fonts::feature_value(b"kern", 0)];
         for (a, b, key) in segs {
             let Some(sub) = text.get(a..b) else { continue };
+            // Vertical sections: East Asian text takes the font's vertical forms.
+            let vertical = self.env.vertical && sub.chars().any(is_east_asian);
             let rc = match (&rc_cs, key.complex) {
                 (Some(cs), true) => cs.clone(),
                 _ => rc.clone(),
@@ -1046,7 +1054,12 @@ impl<'a> Builder<'a> {
                 }
             };
             // The shaper kerns by default; Word kerns only when Kerning for fonts covers the size.
-            let features: &[wordcraft_fonts::Feature] = if rc.kerned() { &[] } else { &no_kern };
+            let features: &[wordcraft_fonts::Feature] = match (vertical, rc.kerned()) {
+                (true, true) => &vert,
+                (true, false) => &vert_no_kern,
+                (false, true) => &[],
+                (false, false) => &no_kern,
+            };
             let shaped = if use_levels {
                 wordcraft_fonts::shape_run(&st.face, shape_text, features, map, key.rtl)
             } else {
@@ -3099,6 +3112,7 @@ mod label_spacing_tests {
             numeral: crate::NumeralMode::default(),
             read_line_spacing: None,
             fit_objects: false,
+            vertical: false,
         };
         let mut p = Paragraph::with_text(if wrap { "Alpha probe synthetic business text repeated" } else { "Alpha probe" }, Default::default());
         p.props.line_spacing = Some(spacing);
