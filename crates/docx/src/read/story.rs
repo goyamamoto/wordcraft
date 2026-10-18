@@ -7,7 +7,7 @@ use wordcraft_doc::control::{ContentControl, ControlKind, ControlWrap};
 use wordcraft_doc::effects::{Glow, Shadow, ShapeEffects};
 use wordcraft_doc::graphic::{Embedded, Graphic, GraphicItem, GraphicKind};
 use wordcraft_doc::para::{AltText, Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap, WrapText, cap_alt};
-use wordcraft_doc::props::{CharProps, NumChange, PropChange, Rgb, TextColor};
+use wordcraft_doc::props::{CharProps, EastAsianLayout, NumChange, PropChange, Rgb, TextColor};
 use wordcraft_doc::table::{Cell, MAX_COLS, MAX_ROWS, Row, Table};
 use wordcraft_doc::{Block, Blocks, InlineObject, Paragraph, PartKind, RevisionKind, Run, para_block};
 
@@ -804,6 +804,12 @@ impl Reader<'_> {
         });
     }
 
+    /// After the innermost field was popped: whether the field now innermost is collecting its
+    /// code.
+    fn parent_in_instr_now(sc: &StoryCtx) -> bool {
+        sc.fields.last().is_some_and(|p| !p.spilled && !p.range && p.phase == Phase::Instr)
+    }
+
     /// Whether the field below the innermost one is still collecting its code (a field nested
     /// in another's code contributes text to that code, never content).
     fn parent_in_instr(sc: &StoryCtx) -> bool {
@@ -873,6 +879,23 @@ impl Reader<'_> {
                 Item::Text(t) => result.push_str(t),
                 Item::Obj(o) => result.push_str(o.plain_text()),
             }
+        }
+        // Word's Combine Characters (組み文字) is an `EQ \o(\s\up …(…),\s\do …(…))` field
+        // without a result: kept as its text with the layout flag (the begin run's properties
+        // carry the base size; the half size sits on the code runs only).
+        if result.is_empty()
+            && !Self::parent_in_instr_now(sc)
+            && let Some(text) = crate::combine_chars::parse(&f.instr)
+        {
+            let mut props = f.props.clone();
+            let mut h: u32 = 0x811c_9dc5;
+            for b in f.instr.bytes() {
+                h = (h ^ u32::from(b)).wrapping_mul(0x0100_0193);
+            }
+            let id = ((h & 0x7fff_ffff) | 1) as i32;
+            props.east_asian_layout = Some(EastAsianLayout { id, combine_chars: true, ..Default::default() });
+            self.emit_text(sc, pb, &text, &props);
+            return;
         }
         let (instr, result) = match enclosure(&f) {
             // Word writes no result for enclosed characters: the text is their plain text.

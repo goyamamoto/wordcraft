@@ -48,6 +48,45 @@ fn read_body(body: &str) -> Document {
 }
 
 #[test]
+fn words_combine_characters_field_reads_as_text_with_the_layout_flag() {
+    // Word for Mac's 組み文字 (Combine Characters), verbatim from a saved document: an EQ field
+    // whose code runs hold the two half-size pieces, no result.
+    const YU: &str = r#"<w:rFonts w:ascii="Yu Mincho" w:eastAsia="Yu Mincho" w:hAnsi="Yu Mincho" w:hint="eastAsia"/>"#;
+    let field = |up: &str, down: &str, extra: &str| {
+        format!(
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:instrText>eq \o(\s\up 5(</w:instrText></w:r><w:r><w:rPr>{YU}{extra}<w:sz w:val="10"/></w:rPr><w:instrText xml:space="preserve">{up}</w:instrText></w:r><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:instrText>),\s\do 2(</w:instrText></w:r><w:r><w:rPr>{YU}{extra}<w:sz w:val="10"/></w:rPr><w:instrText xml:space="preserve">{down}</w:instrText></w:r><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:instrText>))</w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#
+        )
+    };
+    let body = format!(
+        "<w:p><w:r><w:t>組四：</w:t></w:r>{}<w:r><w:t>テスト。</w:t></w:r></w:p><w:p><w:r><w:t>組二：</w:t></w:r>{}<w:r><w:t>。</w:t></w:r></w:p><w:p><w:r><w:t>組六：</w:t></w:r>{}<w:r><w:t>区。</w:t></w:r></w:p>",
+        field("株式", "会社", ""),
+        field("平\u{3000}", "\u{3000}成", ""),
+        field("東京都", "千代田", r#"<w:w w:val="66"/>"#),
+    );
+    let d = read_body(&body);
+    let paras: Vec<&Paragraph> = d.body.iter().filter_map(|b| b.as_para()).collect();
+    for (p, text, inner) in
+        [(paras[0], "組四：株式会社テスト。", "株式会社"), (paras[1], "組二：平成。", "平成"), (paras[2], "組六：東京都千代田区。", "東京都千代田")]
+    {
+        assert_eq!(p.plain_text(), text);
+        assert!(p.objects.is_empty(), "no field object is left: {text}");
+        let at = p.text.find(inner).unwrap();
+        let c = p.props_of_char(at);
+        assert!(c.east_asian_layout.is_some_and(|l| l.combine_chars && l.id != 0), "{text}");
+        assert_eq!((c.size, c.scale), (None, None), "the half size and scale stay in the code runs: {text}");
+        assert_eq!(p.props_of_char(0).east_asian_layout, None);
+        let after = p.text.find(inner).unwrap() + inner.len();
+        assert_eq!(p.props_of_char(after).east_asian_layout, None);
+    }
+    // Other EQ fields are untouched.
+    let d = read_body(
+        r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>eq \o(=,/)</w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#,
+    );
+    let p = d.body[0].as_para().unwrap();
+    assert!(matches!(p.objects.first(), Some(InlineObject::Field { instr, .. }) if instr == r"eq \o(=,/)"));
+}
+
+#[test]
 fn paragraph_default_presence_survives_repeated_saves() {
     // Omission leaves paragraph defaults application-defined (ISO 29500 pPrDefault).
     // An explicitly empty container must therefore remain distinct from omission.

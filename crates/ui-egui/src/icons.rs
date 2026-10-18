@@ -214,6 +214,19 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             ().then_lines(&pen, 8.0, 17.0, &[7.0, 13.0])
         }
         "justify" => pen.lines(3.0, 17.0, &[4.0, 7.0, 10.0, 13.0, 16.0]),
+        // Distributed: every line spread edge to edge, the last one too.
+        "distribute" => {
+            pen.lines(3.0, 17.0, &[4.0, 10.0, 16.0]);
+            pen.lines(3.0, 17.0, &[7.0, 13.0]);
+        }
+        // Asian Layout: two short stacked bars (two lines in one) beside a tall one.
+        "asianLayout" => {
+            pen.rect(3.0, 4.0, 10.0, 16.0, c);
+            pen.line(&[(4.5, 8.0), (8.5, 8.0)]);
+            pen.line(&[(4.5, 12.0), (8.5, 12.0)]);
+            pen.line_c(&[(14.0, 4.0), (14.0, 16.0)], a);
+            pen.line_c(&[(17.0, 4.0), (17.0, 16.0)], a);
+        }
         // Text direction: lines set from the start edge, an arrow in the reading direction.
         "textLtr" => {
             pen.lines(3.0, 14.0, &[4.0, 8.0]);

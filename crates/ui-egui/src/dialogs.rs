@@ -170,6 +170,8 @@ pub enum Dialog {
         hidden: bool,
         color: String,
         spacing: f32,
+        /// Emphasis mark (傍点): `none|dot|comma|circle|underDot`.
+        em: String,
         /// The properties the fields stood for when the dialog opened: OK sends only what the
         /// user changed, so formatting the dialog can't show (a double underline) or left
         /// alone stays as it is.
@@ -908,6 +910,10 @@ impl Dialog {
                     hidden: b("hidden"),
                     color: s("color"),
                     spacing: st.get("spacing").and_then(Value::as_f64).unwrap_or(0.0) as f32,
+                    em: {
+                        let m = s("emphasisMark");
+                        if m.is_empty() { "none".to_string() } else { m }
+                    },
                     start: serde_json::Map::new(),
                 };
                 let props = font_props(&d);
@@ -1446,8 +1452,11 @@ pub(crate) fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
 }
 
 /// The character properties the Font dialog's fields stand for.
+/// The Font dialog's emphasis marks: `w:em` value and label.
+pub const EMPHASIS_MARKS: [(&str, &str); 5] = [("none", "None"), ("dot", "Dot"), ("comma", "Comma"), ("circle", "Circle"), ("underDot", "Under dot")];
+
 fn font_props(d: &Dialog) -> serde_json::Map<String, Value> {
-    let Dialog::Font { font, font_ea, size, bold, italic, underline, strike, sup, sub, small_caps, caps, hidden, color, spacing, .. } = d else {
+    let Dialog::Font { font, font_ea, size, bold, italic, underline, strike, sup, sub, small_caps, caps, hidden, color, spacing, em, .. } = d else {
         return serde_json::Map::new();
     };
     let mut props = serde_json::Map::new();
@@ -1467,6 +1476,9 @@ fn font_props(d: &Dialog) -> serde_json::Map<String, Value> {
     props.insert("caps".into(), json!(*caps));
     props.insert("hidden".into(), json!(*hidden));
     props.insert("spacing".into(), json!(*spacing));
+    if EMPHASIS_MARKS.iter().any(|(v, _)| v == em) {
+        props.insert("em".into(), json!(em));
+    }
     if !font.trim().is_empty() {
         props.insert("font".into(), json!(font.trim()));
     }
@@ -1539,7 +1551,9 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             false
         }
 
-        Dialog::Font { font, font_ea, asian, size, bold, italic, underline, strike, sup, sub, small_caps, caps, hidden, color, spacing, .. } => {
+        Dialog::Font {
+            font, font_ea, asian, size, bold, italic, underline, strike, sup, sub, small_caps, caps, hidden, color, spacing, em, ..
+        } => {
             // Build the sample text format for the preview pane below.
             let preview_size = size.trim().parse::<f32>().unwrap_or(12.0).clamp(6.0, 72.0);
             let preview_color = wordcraft_doc::Rgb::parse(color).map(crate::theme::c32).unwrap_or_else(|| ui.visuals().text_color());
@@ -1599,6 +1613,15 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 ui.end_row();
                 ui.label(tl!("Spacing (pt):"));
                 ui.add(egui::DragValue::new(spacing).speed(0.1).range(-20.0..=20.0));
+                ui.end_row();
+                // Word's emphasis mark (傍点), in the Font dialog with an East Asian editing language.
+                ui.label(tl!("Emphasis mark:"));
+                let shown = EMPHASIS_MARKS.iter().find(|(v, _)| v == em).map(|(_, l)| tl!(l).to_string()).unwrap_or_default();
+                egui::ComboBox::from_id_salt("font_em").selected_text(shown).show_ui(ui, |ui| {
+                    for (v, l) in EMPHASIS_MARKS {
+                        ui.selectable_value(em, v.to_string(), tl!(l));
+                    }
+                });
                 ui.end_row();
             });
             ui.separator();
@@ -4131,6 +4154,32 @@ mod tests {
         apply_font(&mut app, &d);
         let c = app.session.doc.para_at(&wordcraft_doc::Pos::body(0, 0)).map(|p| p.props_of_char(0).clone()).unwrap_or_default();
         assert_eq!((c.small_caps, c.caps, c.size), (Some(false), Some(true), Some(14.0)));
+    }
+
+    /// The Font dialog's emphasis mark (傍点) reads the selection's mark and applies
+    /// `format.emphasisMark` only when changed; an untouched combo changes nothing.
+    #[test]
+    fn font_dialog_emphasis_mark_applies_when_changed() {
+        let mut app = app_with("強調します");
+        let _ = app.run("select.all", json!({}));
+        let Some(d) = Dialog::open("font", &mut app) else { panic!("no font dialog") };
+        if let Dialog::Font { em, .. } = &d {
+            assert_eq!(em, "none");
+        }
+        let before = app.session.doc.clone();
+        apply_font(&mut app, &d);
+        assert_eq!(app.session.doc, before, "nothing changed, nothing applied");
+        let Some(mut d) = Dialog::open("font", &mut app) else { panic!("no font dialog") };
+        if let Dialog::Font { em, .. } = &mut d {
+            *em = "underDot".into();
+        }
+        apply_font(&mut app, &d);
+        let c = app.session.doc.para_at(&wordcraft_doc::Pos::body(0, 0)).map(|p| p.props_of_char(0).clone()).unwrap_or_default();
+        assert_eq!(c.em, Some(wordcraft_doc::props::EmphasisMark::UnderDot));
+        let Some(d) = Dialog::open("font", &mut app) else { panic!("no font dialog") };
+        if let Dialog::Font { em, .. } = &d {
+            assert_eq!(em, "underDot", "the dialog shows the current mark");
+        }
     }
 
     /// #1178: Modify Style's font box is the ribbon's font box, so typing part of a name picks the

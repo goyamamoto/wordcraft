@@ -963,6 +963,17 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                 small(ui, app, "alignCenter", None, "Center", "para.alignCenter", json!({}), align == A::Center);
                 small(ui, app, "alignRight", None, "Align Right", "para.alignRight", json!({}), align == A::Right);
                 small(ui, app, "justify", None, "Justify", "para.justify", json!({}), align == A::Justify);
+                small(ui, app, "distribute", None, "Distributed", "para.distribute", json!({}), align == A::Distribute);
+                // Word's Asian Layout menu (with an East Asian editing language): each item is a
+                // dialog over `format.horizontalInVertical`, `format.combineCharacters`,
+                // `format.twoLinesInOne` and `format.fitText`.
+                menu_button(ui, app, "asianLayout", None, "Asian Layout", false, "", |ui, app| {
+                    mi(ui, app, "Horizontal in Vertical…", "ui.dialog", json!({"name": "horizontalInVertical"}));
+                    mi(ui, app, "Combine Characters…", "ui.dialog", json!({"name": "combineCharacters"}));
+                    mi(ui, app, "Two Lines in One…", "ui.dialog", json!({"name": "twoLinesInOne"}));
+                    ui.separator();
+                    mi(ui, app, "Adjust Width…", "ui.dialog", json!({"name": "adjustWidth"}));
+                });
                 ui.add_space(4.0);
                 small(ui, app, "textLtr", None, "Left-to-Right Text Direction", "para.ltr", json!({}), !rtl);
                 small(ui, app, "textRtl", None, "Right-to-Left Text Direction", "para.rtl", json!({}), rtl);

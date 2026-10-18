@@ -751,6 +751,8 @@ fn lines(
             let mut glyphs = Vec::new();
             let mut text = String::new();
             let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+            // Horizontal-in-vertical clusters, drawn turned after the run (with its colour).
+            let mut turned: Vec<(usize, f32)> = Vec::new();
             let run_start = k;
             while k < line.c1 {
                 let Some(c) = pl.clusters.get(k) else { break };
@@ -758,6 +760,11 @@ fn lines(
                     break;
                 }
                 let cx = x + line.cl_left(k).unwrap_or(0.0);
+                if let Ok(i) = pl.tcy.binary_search_by_key(&k, |t| t.0) {
+                    turned.push((k, pl.tcy.get(i).map(|t| t.1).unwrap_or(0.0)));
+                    k += 1;
+                    continue;
+                }
                 if matches!(c.kind, ClKind::Text | ClKind::Space) {
                     let a = text.len();
                     // An object's cluster (a field, a note number) stands for the text it shows.
@@ -913,6 +920,42 @@ fn lines(
                     text_bg,
                 });
             }
+            // 縦中横: the run's glyphs centred in the cluster's box, turned a quarter anticlockwise
+            // about its centre. A turned (`tbRl`) page turns them back upright, reading left to
+            // right across the column; on a horizontal page they read bottom to top, as Word
+            // draws them.
+            for (k, natural) in turned {
+                let (Some(c), Some(left)) = (pl.clusters.get(k), line.cl_left(k)) else { continue };
+                let cg = pl.glyphs.get(c.g0 as usize..c.g1 as usize).unwrap_or(&[]);
+                if cg.is_empty() {
+                    continue;
+                }
+                let (text, shown) = match pl.shown.binary_search_by_key(&k, |(i, _, _)| *i).ok().and_then(|i| pl.shown.get(i)) {
+                    Some((_, t, r)) => (t.clone(), Some(r)),
+                    None => (para.and_then(|p| p.text.get(c.start..c.end)).unwrap_or("").to_string(), None),
+                };
+                let cx = x + left + (c.adv - natural) / 2.0;
+                let cy = base - st.shift - (st.ascent - st.descent) / 2.0;
+                let glyphs: Vec<(u32, f32, f32)> = cg.iter().map(|g| (g.gid, cx + g.dx, base - st.shift - g.dy)).collect();
+                let ranges: Vec<std::ops::Range<usize>> = match shown.filter(|r| r.len() == cg.len()) {
+                    Some(r) => r.iter().map(|r| r.start.min(text.len())..r.end.min(text.len())).collect(),
+                    None => cg.iter().map(|_| 0..text.len()).collect(),
+                };
+                let item = Draw::Glyphs {
+                    face: st.face,
+                    size: st.size,
+                    glyphs,
+                    color,
+                    alpha,
+                    synth_bold: st.synth_bold,
+                    synth_italic: st.synth_italic,
+                    text,
+                    link: rc.link.clone(),
+                    ranges,
+                    text_bg,
+                };
+                out.push(Draw::Rotated { cx: x + left + c.adv / 2.0, cy, spin: Spin::new(-90.0, false, false), items: vec![item] });
+            }
             // Decorations across the run (underline skips trailing spaces of the line). Right-to-left
             // text inside a run can split it into several visual spans.
             let mut end_k = run_end;
@@ -957,6 +1000,22 @@ fn lines(
                     let sy = base - st.shift - st.size * 0.28;
                     let stroke = if double { Stroke::Double } else { Stroke::Solid };
                     out.push(Draw::Line { x0, y0: sy, x1, y1: sy, width: thick, color, stroke, alpha, text_bg });
+                }
+            }
+            // Emphasis marks (傍点): one mark over (or under) each character, in the text's colour.
+            let em = rc.em;
+            if em != wordcraft_doc::props::EmphasisMark::None {
+                // Word for Mac draws the mark glyph's box right above the text box (below it for
+                // under dot): with 游明朝 at 10.5 pt the dot's centre is 1.17 em above the
+                // baseline, the under dot's 0.32 em below. Measured from the baseline so a
+                // substitute font's larger ascent doesn't lift the mark.
+                let my = if em.below() { base - st.shift + st.size * 0.32 } else { base - st.shift - st.size * 1.17 };
+                for kk in run_start..run_end {
+                    let (Some(c), Some(a), Some(b)) = (pl.clusters.get(kk), line.cl_left(kk), line.cl_right(kk)) else { continue };
+                    if c.kind != ClKind::Text || b <= a {
+                        continue;
+                    }
+                    out.extend(emphasis_mark(em, x + (a + b) / 2.0, my, st.size, color));
                 }
             }
         }
@@ -1659,6 +1718,53 @@ pub fn upright_in_vertical(c: char) -> bool {
         | '\u{FFE0}'..='\u{FFE6}'
         | '\u{20000}'..='\u{3FFFF}'
     )
+}
+
+/// An emphasis mark centred at (`x`, `y`) for text of `size`: a filled dot, a sesame dot (the
+/// comma-like ﹅ Word draws for "comma"), an open circle, or a filled dot below the text.
+fn emphasis_mark(em: wordcraft_doc::props::EmphasisMark, x: f32, y: f32, size: f32, color: Rgb) -> Option<Draw> {
+    use wordcraft_doc::props::EmphasisMark;
+    let size = size.clamp(1.0, 1638.0);
+    match em {
+        EmphasisMark::None => None,
+        EmphasisMark::Dot | EmphasisMark::UnderDot => {
+            let d = size * 0.18;
+            Some(Draw::Shape {
+                rect: Rect::new(x - d / 2.0, y - d / 2.0, d, d),
+                kind: ShapeKind::Ellipse,
+                fill: Some(color),
+                stroke: None,
+                stroke_width: 0.0,
+                effects: Default::default(),
+                corner: None,
+            })
+        }
+        EmphasisMark::Circle => {
+            let d = size * 0.22;
+            Some(Draw::Shape {
+                rect: Rect::new(x - d / 2.0, y - d / 2.0, d, d),
+                kind: ShapeKind::Ellipse,
+                fill: None,
+                stroke: Some(color),
+                stroke_width: (size / 20.0).max(0.4),
+                effects: Default::default(),
+                corner: None,
+            })
+        }
+        EmphasisMark::Comma => {
+            // A sesame dot: a teardrop leaning to the upper right.
+            let r = size * 0.11;
+            let (x0, y0) = (x - r * 0.9, y + r * 0.9);
+            let (x1, y1) = (x + r * 1.1, y - r * 1.1);
+            let segs = vec![
+                PathSeg::Move(x1, y1),
+                PathSeg::Cubic(x1 - r * 0.2, y1 + r * 0.9, x0 + r * 0.9, y0 - r * 0.3, x0, y0),
+                PathSeg::Cubic(x0 - r * 0.7, y0 - r * 0.9, x0 + r * 0.5, y1 - r * 0.2, x1, y1),
+                PathSeg::Close,
+            ];
+            Some(Draw::Path { segs, fill: Some(color), stroke: None, stroke_width: 0.0 })
+        }
+    }
 }
 
 /// Top-to-bottom text drawn turned 90° clockwise, with its East Asian characters turned back

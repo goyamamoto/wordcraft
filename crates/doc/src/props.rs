@@ -155,6 +155,127 @@ impl Underline {
     }
 }
 
+/// Word's emphasis mark (傍点, `w:em`): a mark drawn above each character (below for
+/// `UnderDot`) of East Asian text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum EmphasisMark {
+    #[default]
+    None,
+    /// Filled dot above (Word: "over solid circle").
+    Dot,
+    /// A 、-shaped mark above (Word: "over comma").
+    Comma,
+    /// Ring above (Word: "over white circle").
+    Circle,
+    /// Filled dot below (Word: "under solid circle").
+    UnderDot,
+}
+
+impl EmphasisMark {
+    pub const ALL: [EmphasisMark; 5] = [EmphasisMark::None, EmphasisMark::Dot, EmphasisMark::Comma, EmphasisMark::Circle, EmphasisMark::UnderDot];
+    /// The OOXML `w:em/@w:val` name.
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            EmphasisMark::None => "none",
+            EmphasisMark::Dot => "dot",
+            EmphasisMark::Comma => "comma",
+            EmphasisMark::Circle => "circle",
+            EmphasisMark::UnderDot => "underDot",
+        }
+    }
+    pub fn from_ooxml(s: &str) -> Option<EmphasisMark> {
+        EmphasisMark::ALL.iter().copied().find(|m| m.ooxml() == s)
+    }
+    /// Whether the mark sits below the text (else above).
+    pub fn below(self) -> bool {
+        self == EmphasisMark::UnderDot
+    }
+}
+
+/// Word's 均等割り付け (`w:fitText`): the run is spread (or squeezed) to exactly `width` points.
+/// Runs with the same `id` form one block; Word splits a block into several runs when it also
+/// writes the spacing it computed.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FitText {
+    /// Width in points.
+    pub width: f32,
+    /// Block id (`w:id`), 0 when none.
+    #[serde(default)]
+    pub id: i32,
+}
+
+/// Brackets around a two-lines-in-one block (割注, `w:combineBrackets`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum CombineBrackets {
+    #[default]
+    None,
+    Round,
+    Square,
+    Angle,
+    Curly,
+}
+
+impl CombineBrackets {
+    pub const ALL: [CombineBrackets; 5] =
+        [CombineBrackets::None, CombineBrackets::Round, CombineBrackets::Square, CombineBrackets::Angle, CombineBrackets::Curly];
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            CombineBrackets::None => "none",
+            CombineBrackets::Round => "round",
+            CombineBrackets::Square => "square",
+            CombineBrackets::Angle => "angle",
+            CombineBrackets::Curly => "curly",
+        }
+    }
+    pub fn from_ooxml(s: &str) -> Option<CombineBrackets> {
+        CombineBrackets::ALL.iter().copied().find(|b| b.ooxml() == s)
+    }
+    /// The bracket characters drawn at full size before and after the block (Word draws the
+    /// ASCII brackets, as observed in Word for Mac).
+    pub fn chars(self) -> Option<(char, char)> {
+        match self {
+            CombineBrackets::None => None,
+            CombineBrackets::Round => Some(('(', ')')),
+            CombineBrackets::Square => Some(('[', ']')),
+            CombineBrackets::Angle => Some(('<', '>')),
+            CombineBrackets::Curly => Some(('{', '}')),
+        }
+    }
+}
+
+/// Word's Asian layout of a run (`w:eastAsianLayout`): 縦中横 (`vert`: the run lies horizontal
+/// in vertical text) or 割注 (`combine`: the run is set as two half-size lines in one).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct EastAsianLayout {
+    /// Block id (`w:id`), 0 when none.
+    pub id: i32,
+    /// Horizontal in vertical (縦中横).
+    pub vert: bool,
+    /// Compress the horizontal-in-vertical run to the line width (`w:vertCompress`); kept for
+    /// the file, Word for Mac draws the run at its natural width either way (observed).
+    pub vert_compress: bool,
+    /// Two lines in one (割注).
+    pub combine: bool,
+    pub combine_brackets: CombineBrackets,
+    /// Combine characters (組み文字): up to six characters set as two half-size lines in one
+    /// character cell. Word keeps this as an `EQ \o(\s\up …(…),\s\do …(…))` field whose code
+    /// runs are half size; WordCraft keeps the text and this flag, and writes Word's field.
+    pub combine_chars: bool,
+}
+
+impl EastAsianLayout {
+    /// Nothing set: Word writes nothing.
+    pub fn is_none(&self) -> bool {
+        !self.vert && !self.combine && !self.combine_chars
+    }
+    /// Word's limit for Combine Characters.
+    pub const COMBINE_CHARS_MAX: usize = 6;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum VertAlign {
@@ -339,6 +460,15 @@ pub struct CharProps {
     pub emboss: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub engrave: Option<bool>,
+    /// Emphasis mark (傍点, `w:em`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub em: Option<EmphasisMark>,
+    /// 均等割り付け (`w:fitText`): the run spread to a fixed width.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fit_text: Option<FitText>,
+    /// 縦中横 / 割注 (`w:eastAsianLayout`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub east_asian_layout: Option<EastAsianLayout>,
     /// WordArt text effects: fill, outline, shadow, glow, reflection ([MS-DOCX] `w14:` run
     /// properties). Overlaid effect by effect.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -445,8 +575,8 @@ impl CharProps {
     /// overlaid on `base`.
     pub fn minus(mut self, base: &CharProps) -> CharProps {
         drop_same_fields!(self, base; style, font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
-            shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl,
-            cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, link, ins, del);
+            shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, em, fit_text,
+            east_asian_layout, lang, no_proof, rtl, cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, link, ins, del);
         self
     }
 
@@ -456,8 +586,8 @@ impl CharProps {
     /// format both scripts must set both values explicitly.
     pub fn overlay(&mut self, patch: &CharProps) {
         overlay_fields!(self, patch; style, font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
-            shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl,
-            cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, link, ins, del, fmt_change);
+            shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, em, fit_text,
+            east_asian_layout, lang, no_proof, rtl, cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, link, ins, del, fmt_change);
         if let Some(p) = &patch.text_effects {
             self.text_effects.get_or_insert_with(Default::default).overlay(p);
         }
