@@ -2967,7 +2967,8 @@ fn word_count_counts_east_asian_characters_as_word_for_mac_does() {
         ("。、", 2, 2, 2, 2),
         ("ＡＢＣ", 3, 3, 3, 3),
         ("a  b", 2, 2, 4, 0),
-        ("한국어 단어", 2, 5, 6, 2),
+        ("한국어 단어", 5, 5, 6, 5),
+        ("日本語と한국어の混在", 10, 10, 10, 10),
     ] {
         let mut s = Session::new(wordcraft_doc::Document::from_text(text));
         let v = run(&mut s, "review.wordCount", json!({}));

@@ -951,7 +951,7 @@ fn lines(
                     text_bg,
                 };
                 if pl.vertical {
-                    stand_up(item, Some(base - st.shift - dy), out);
+                    stand_up(item, Some(base - st.shift - dy - st.v_centre), out);
                 } else {
                     out.push(item);
                 }
@@ -1081,7 +1081,9 @@ fn lines(
             if em != wordcraft_doc::props::EmphasisMark::None {
                 use wordcraft_doc::props::EmphasisMark;
                 let s = st.size.clamp(1.0, 1638.0);
-                let y = base - st.shift - dy;
+                // In a column the marks sit beside the standing em squares, which centre
+                // `v_centre` toward the ascent side of the centre line.
+                let y = base - st.shift - dy - if pl.vertical { st.v_centre } else { 0.0 };
                 for kk in run_start..run_end {
                     let (Some(c), Some(a), Some(b)) = (pl.clusters.get(kk), line.cl_left(kk), line.cl_right(kk)) else { continue };
                     if c.kind != ClKind::Text || b <= a {
@@ -1210,8 +1212,8 @@ fn lines(
             }
             let cx = x + line.cl_left(r.cluster).unwrap_or(0.0);
             // The ruby's baseline `raise` above the base text's — in a vertical column, the
-            // ruby's centre line that far to the right of the base's.
-            let y = base - bst.shift - pl.align_dy.get(r.cluster).copied().unwrap_or(0.0) - r.raise;
+            // ruby's centre line that far to the right of the base's em squares' centre.
+            let y = base - bst.shift - pl.align_dy.get(r.cluster).copied().unwrap_or(0.0) - r.raise - if pl.vertical { bst.v_centre } else { 0.0 };
             let mut i = 0;
             while let Some(&(style, _)) = r.glyphs.get(i) {
                 let n = r.glyphs.get(i..).map_or(0, |g| g.iter().take_while(|(s, _)| *s == style).count()).max(1);
@@ -1234,7 +1236,7 @@ fn lines(
                     text_bg: st.rc.highlight.or(st.rc.shading),
                 };
                 if pl.vertical {
-                    stand_up(item, Some(y), out);
+                    stand_up(item, Some(y - st.v_centre), out);
                 } else {
                     out.push(item);
                 }
@@ -1914,8 +1916,9 @@ struct DecoGeo {
 /// - A vertical column: a 0.72-pt line at every size, its near edge 0.025 em beyond the
 ///   standing characters' em square (0.30 pt at 10.5, 0.44 at 16, 0.48 at 24); lying Latin
 ///   text's line is its ascent beyond its baseline (9.6 pt right of 10.5-pt Aptos's, 14.9 of
-///   16-pt's); a mixed run's line is the outer one. The strikethrough runs along the column's
-///   centre line, the faces' own thickness.
+///   16-pt's); a mixed run's line is the outer one. The strikethrough runs along the standing
+///   em squares' centre (the column's centre line, `v_centre` toward the ascent side), the
+///   faces' own thickness.
 fn decoration_geometry(
     pl: &ParaLayout,
     para: Option<&wordcraft_doc::Paragraph>,
@@ -1944,13 +1947,20 @@ fn decoration_geometry(
     let st_t = faces.iter().map(|(_, st, _)| st.deco.strike_thickness).fold(0.0f32, f32::max).max(0.1);
     let ea = faces.iter().any(|(_, st, _)| st.face.get().is_east_asian());
     if pl.vertical {
+        // The standing em squares sit `v_centre` toward the ascent side of the centre line.
         let near = faces
             .iter()
-            .map(|(_, st, stands)| if *stands { baseline - 0.525 * st.size } else { baseline + (st.ascent - st.descent) / 2.0 - st.glyph_ascent })
+            .map(
+                |(_, st, stands)| {
+                    if *stands { baseline - st.v_centre - 0.525 * st.size } else { baseline + (st.ascent - st.descent) / 2.0 - st.glyph_ascent }
+                },
+            )
             .fold(f32::INFINITY, f32::min);
         let size = faces.iter().map(|(_, st, _)| st.size).fold(0.0f32, f32::max);
         let ul = if near.is_finite() { near } else { baseline - 0.525 * size };
-        return DecoGeo { vertical: true, ul, ul_t: 0.72, st: baseline, st_t, ea };
+        let standing: Vec<f32> = faces.iter().filter(|(_, _, stands)| *stands).map(|(_, st, _)| st.v_centre).collect();
+        let v = if standing.is_empty() { 0.0 } else { standing.iter().sum::<f32>() / standing.len() as f32 };
+        return DecoGeo { vertical: true, ul, ul_t: 0.72, st: baseline - v, st_t, ea };
     }
     let ul = baseline + faces.iter().map(|(_, st, _)| st.deco.underline_top).sum::<f32>() / n;
     let ul_t = faces.iter().map(|(_, st, _)| st.deco.underline_thickness).fold(0.0f32, f32::max).max(0.1);
