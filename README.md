@@ -1,7 +1,7 @@
 <h1 align="center">WordCraft-ja</h1>
 
 <p align="center">
-  <b>WordCraft の日本語強化版</b> — Microsoft Word をクリーンルームで再実装したオープンソースのワープロ <a href="https://github.com/storytold/wordcraft">WordCraft</a> に、Word と同じ日本語組版を加えています。<br>
+  <b>WordCraft の日本語強化版</b> — Microsoft Word をクリーンルームで再実装したオープンソースの文書作成アプリ <a href="https://github.com/storytold/wordcraft">WordCraft</a> に、Word と同じ日本語組版を加えています。<br>
   <b>A Japanese-enhanced WordCraft</b>: the open-source, clean-room reimplementation of Microsoft Word in pure Rust, with Japanese typography done the way Word does it.
 </p>
 
