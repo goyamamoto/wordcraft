@@ -633,8 +633,16 @@ pub(crate) fn caret_language(app: &WordApp) -> String {
 /// The language tag at the caret, resolved through the styles and the document default.
 fn caret_lang_tag(app: &WordApp) -> Option<String> {
     let s = &app.session;
-    let style = s.doc.para_at(&s.sel.focus).and_then(|p| p.props.style.clone());
-    s.doc.styles.resolve_char(style.as_deref(), &s.typing_props()).lang
+    let para = s.doc.para_at(&s.sel.focus);
+    let style = para.and_then(|p| p.props.style.clone());
+    let r = s.doc.styles.resolve_char(style.as_deref(), &s.typing_props());
+    // After East Asian text the East Asian language (Japanese on 漢字), as Word's status bar.
+    let east_asian =
+        para.and_then(|p| p.text.get(..s.sel.focus.off)).and_then(|t| t.chars().next_back()).is_some_and(wordcraft_doc::east_asian::is_east_asian);
+    if east_asian && let Some(lang_ea) = r.lang_ea {
+        return Some(lang_ea);
+    }
+    r.lang
 }
 
 /// The Hunspell dictionary the caret's language needs but doesn't have (`pl_PL`), if any (#1167).
@@ -2986,5 +2994,17 @@ mod tests {
         assert_eq!(resolve_tab("Picture Format", &["Home"]), "Home");
         assert_eq!(resolve_tab("Table Design", &["Home"]), "Home");
         assert_eq!(resolve_tab("Home", &["Home"]), "Home");
+    }
+
+    /// Word's status bar says Japanese after 漢字 and English (United States) after abc in the
+    /// same Japanese document.
+    #[test]
+    fn status_bar_names_japanese_after_east_asian_text() {
+        let doc = wordcraft_engine::blank_document(&wordcraft_engine::Region::from_tag("ja-JP"));
+        let mut app = WordApp::new(Session::new(doc), crate::Services::default());
+        app.run("text.insert", json!({"text": "漢字"})).unwrap();
+        assert_eq!(caret_language(&app), "Japanese");
+        app.run("text.insert", json!({"text": "abc"})).unwrap();
+        assert_eq!(caret_language(&app), "English (United States)");
     }
 }

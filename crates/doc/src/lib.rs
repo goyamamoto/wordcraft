@@ -1415,9 +1415,26 @@ impl PermRange {
     }
 }
 
-/// Words in `s` (tokens separated by whitespace that contain at least one alphanumeric char).
+/// Words in `s` as Word counts them: tokens separated by whitespace that contain a letter or
+/// digit, and — since Chinese and Japanese put no spaces between words — every East Asian
+/// character, punctuation included, as a word of its own (漢字かなabc 123、「テスト」。Hello world
+/// is 15 words in Word for Mac).
 pub fn count_words(s: &str) -> usize {
-    s.split(|c: char| c.is_whitespace() || c == para::OBJ).filter(|w| w.chars().any(char::is_alphanumeric)).count()
+    let mut n = 0usize;
+    for token in s.split(|c: char| c.is_whitespace() || c == para::OBJ) {
+        // A run of other characters with a letter or digit in it: one word.
+        let mut word = false;
+        for c in token.chars() {
+            if east_asian::is_east_asian(c) {
+                n = n.saturating_add(1 + usize::from(word));
+                word = false;
+            } else if c.is_alphanumeric() {
+                word = true;
+            }
+        }
+        n = n.saturating_add(usize::from(word));
+    }
+    n
 }
 
 fn walk(bl: &Blocks, prefix: &mut Vec<u32>, out: &mut Vec<Path>, depth: usize) {

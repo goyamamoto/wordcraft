@@ -79,6 +79,25 @@ pub fn script_of_lang(tag: &str) -> Option<&'static str> {
     })
 }
 
+/// Whether `c` is East Asian text as Word counts and formats it: CJK ideographs, kana, bopomofo,
+/// CJK symbols and punctuation, fullwidth and halfwidth forms. Not Hangul (Korean words are
+/// separated by spaces, and Word counts them so) and not the ideographic space.
+pub fn is_east_asian(c: char) -> bool {
+    matches!(u32::from(c),
+        0x2E80..=0x2FFF          // radicals, ideographic description
+        | 0x3001..=0x303F        // CJK symbols and punctuation
+        | 0x3041..=0x30FF        // hiragana, katakana, sound marks
+        | 0x3100..=0x312F        // bopomofo
+        | 0x3190..=0x31FF        // kanbun, CJK strokes, katakana extensions
+        | 0x3400..=0x4DBF        // CJK extension A
+        | 0x4E00..=0x9FFF        // CJK unified ideographs
+        | 0xF900..=0xFAFF        // compatibility ideographs
+        | 0xFE30..=0xFE4F        // CJK compatibility forms
+        | 0xFF01..=0xFF60        // fullwidth forms
+        | 0xFF61..=0xFFEF        // halfwidth forms
+        | 0x20000..=0x3FFFF) // supplementary ideographs
+}
+
 /// The script a character alone tells: kana → `Jpan`, Hangul → `Hang`, bopomofo → `Hant`.
 /// `None` for Han ideographs and everything else (they belong to several scripts).
 pub fn script_of_char(c: char) -> Option<&'static str> {
