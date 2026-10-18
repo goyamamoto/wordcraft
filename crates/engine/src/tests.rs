@@ -4618,6 +4618,41 @@ fn asian_typography_sets_flags_on_selected_paragraphs_and_undoes() {
     assert_eq!(r["asianTypography"]["kinsoku"], true);
 }
 
+#[test]
+fn asian_typography_text_alignment_and_grid_options_are_set_reported_and_saved() {
+    use wordcraft_doc::props::TextAlignment;
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "小大"}));
+    let r = run(&mut s, "para.asianTypography", json!({"textAlignment": "center", "snapToGrid": false, "adjustRightInd": false}));
+    assert_eq!(
+        (&r["asianTypography"]["textAlignment"], &r["asianTypography"]["snapToGrid"], &r["asianTypography"]["adjustRightInd"]),
+        (&json!("center"), &json!(false), &json!(false))
+    );
+    let p = s.doc.para_at(&s.sel.focus).unwrap();
+    assert_eq!((p.props.text_alignment, p.props.snap_to_grid, p.props.adjust_right_ind), (Some(TextAlignment::Center), Some(false), Some(false)));
+    // Written as Word writes them, and read back.
+    let docx = wordcraft_docx::write(&s.doc).unwrap();
+    let back = wordcraft_docx::read(&docx).unwrap();
+    let bp = back.body.iter().find_map(|b| b.as_para()).unwrap();
+    assert_eq!((bp.props.text_alignment, bp.props.adjust_right_ind), (Some(TextAlignment::Center), Some(false)));
+    let xml = {
+        let mut z = zip::ZipArchive::new(std::io::Cursor::new(docx)).unwrap();
+        let mut f = z.by_name("word/document.xml").unwrap();
+        let mut t = String::new();
+        std::io::Read::read_to_string(&mut f, &mut t).unwrap();
+        t
+    };
+    assert!(xml.contains(r#"<w:adjustRightInd w:val="0"/>"#) && xml.contains(r#"<w:textAlignment w:val="center"/>"#), "{xml}");
+    assert!(xml.find("w:adjustRightInd").unwrap() < xml.find("w:snapToGrid").unwrap(), "CT_PPrBase order");
+    assert!(xml.find("w:textAlignment").unwrap() > xml.find("<w:jc").map_or(0, |i| i), "CT_PPrBase order");
+    // An unknown alignment is refused, nothing changes; one undo takes the setting back.
+    assert!(s.run("para.asianTypography", &json!({"textAlignment": "sideways"})).is_err());
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().props.text_alignment, Some(TextAlignment::Center));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().props.text_alignment, None);
+    assert_eq!(run(&mut s, "para.asianTypography", json!({}))["asianTypography"]["textAlignment"], "auto");
+}
+
 /// Word's 行 units for paragraph spacing: lines win over points, points typed replace lines.
 #[test]
 fn paragraph_spacing_in_lines() {

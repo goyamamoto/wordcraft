@@ -2672,3 +2672,7 @@ preview	Title	Esempio
 	Match half/full-width forms	Distingui forme a mezza/piena larghezza
 	Sounds like (Japanese)	Simili (giapponese)
 	Kinsoku Characters	Caratteri kinsoku
+	Text alignment:	Allineamento testo:
+	Baseline	Linea di base
+	Snap to grid when document grid is defined	Allinea alla griglia se è definita la griglia del documento
+	Automatically adjust right indent when document grid is defined	Regola automaticamente il rientro destro se è definita la griglia del documento
