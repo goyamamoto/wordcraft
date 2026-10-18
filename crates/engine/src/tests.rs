@@ -5394,6 +5394,62 @@ fn list_buttons_follow_the_paragraphs_own_level() {
 }
 
 #[test]
+fn japanese_documents_take_words_japanese_list_libraries() {
+    use wordcraft_doc::numbering::ListKind;
+    use wordcraft_doc::section::NumFormat;
+    // A Japanese document (Word's East Asian editing language Japanese): the Numbering button
+    // applies Word's `%1.` at 0 / 22 pt, one level (`singleLevel`, `w:ind w:left="440"
+    // w:hanging="440"` in the file Word writes), the Multilevel List button `1 1.1 1.1.1` at
+    // Word's positions (left 425 hanging 425; 992 / 567…), Bullets ● at 0 / 22 pt.
+    let mut s = s();
+    crate::session::japanese_normal(&mut s.doc);
+    assert!(crate::cmd::para::japanese_lists(&s));
+    run(&mut s, "text.insert", json!({"text": "いち"}));
+    run(&mut s, "para.numbering", json!({}));
+    let level = |s: &Session, i: u8| {
+        let n = s.doc.para_at(&s.sel.focus).unwrap().props.numbering.unwrap();
+        s.doc.numbering.level(n.num, i).cloned()
+    };
+    let l = level(&s, 0).unwrap();
+    assert_eq!((l.format, l.text.as_str(), l.indent, l.hanging), (NumFormat::Decimal, "%1.", 22.0, 22.0));
+    assert_eq!(level(&s, 1), None, "Word's Japanese numbering is a single-level list");
+    let docx = wordcraft_docx::write(&s.doc).unwrap();
+    let numbering = {
+        let mut z = zip::ZipArchive::new(std::io::Cursor::new(docx)).unwrap();
+        let mut f = z.by_name("word/numbering.xml").unwrap();
+        let mut t = String::new();
+        std::io::Read::read_to_string(&mut f, &mut t).unwrap();
+        t
+    };
+    assert!(numbering.contains(r#"<w:multiLevelType w:val="singleLevel"/>"#), "{numbering}");
+    assert!(numbering.contains(r#"<w:ind w:left="440" w:hanging="440"/>"#), "{numbering}");
+    // The same button toggles it off; the Multilevel List button gives Word's default outline.
+    run(&mut s, "para.numbering", json!({}));
+    assert!(s.doc.para_at(&s.sel.focus).unwrap().props.numbering.is_none_or(|n| n.num == 0));
+    run(&mut s, "para.multilevel", json!({}));
+    let l = level(&s, 1).unwrap();
+    assert_eq!((l.text.as_str(), l.indent), ("%1.%2", 49.6));
+    assert!((l.hanging - 28.35).abs() < 0.01, "{}", l.hanging);
+    run(&mut s, "para.multilevel", json!({"kind": "jaChapterKanji"}));
+    run(&mut s, "para.listLevel", json!({"level": 1}));
+    assert_eq!(level(&s, 1).map(|l| l.text), Some("第%2節".into()));
+    run(&mut s, "para.bullets", json!({}));
+    let l = level(&s, 0).unwrap();
+    assert_eq!((l.format, l.text.as_str(), l.indent), (NumFormat::Bullet, "●", 22.0));
+    // Every library kind applies by its id, and an English document keeps the English defaults.
+    for k in ListKind::JA_NUMBERING.iter().chain(&ListKind::JA_MULTILEVEL) {
+        run(&mut s, "para.numbering", json!({"off": true}));
+        run(&mut s, "para.numbering", json!({"kind": k.id()}));
+        assert_eq!(level(&s, 0).map(|l| l.text), wordcraft_doc::numbering::levels_for(*k).first().map(|l| l.text.clone()), "{k:?}");
+    }
+    let mut e = Session::new(wordcraft_doc::Document::new());
+    assert!(!crate::cmd::para::japanese_lists(&e));
+    run(&mut e, "text.insert", json!({"text": "one"}));
+    run(&mut e, "para.numbering", json!({}));
+    assert_eq!(level(&e, 0).map(|l| l.indent), Some(36.0));
+}
+
+#[test]
 fn replace_all_splits_paragraphs_at_a_paragraph_mark_in_the_replacement() {
     // Issue #423: untracked Replace All left `\r` in the paragraph instead of splitting it.
     for with in ["A\rB", "A\u{2029}B"] {

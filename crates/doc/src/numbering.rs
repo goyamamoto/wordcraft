@@ -133,6 +133,43 @@ pub enum ListKind {
     LowerRoman,
     /// 1. 1.1. 1.1.1.
     Legal,
+    /// Word's Japanese Numbering library (an East Asian language of Japanese), read from Word
+    /// for Mac's list galleries: each is a single-level list with the number at 0 pt and the
+    /// text at 22 pt (`%1.`, `%1)` for letters, `(%1)` for aiueo), except uppercase roman whose
+    /// text sits at 33 pt and lowercase roman whose number sits at 22 pt and text at 33 pt.
+    /// ● at 0 / 22 pt: Word's default bullet in a Japanese document (Wingdings l), one level.
+    JaBullet,
+    /// 1. 2. 3.
+    JaNumbered,
+    /// ① ② ③
+    Circled,
+    /// I. II. III.
+    JaUpperRoman,
+    /// A) B) C)
+    UpperLetterParen,
+    /// (ア) (イ) (ウ)
+    Aiueo,
+    /// イ) ロ) ハ)
+    Iroha,
+    /// i. ii. iii.
+    JaLowerRoman,
+    /// Word's Japanese Multilevel library, in gallery order (positions in points as Word for Mac
+    /// reads them back: number position / text position).
+    /// 1 1.1 1.1.1 — numbers at 0, 21.25, 42.55…, text at 21.25, 49.6, 70.9, 99.2, 127.55, 163,
+    /// 191.35, 219.7, 255.1 (Word's default Multilevel List in a Japanese document).
+    JaNumbers,
+    /// 1. 1.1. 1.1.1. — every number at 0, text at 21.25, 28.35, 35.45… (7.1 pt a level).
+    JaLegal,
+    /// １ １-１ １-１-１ — full-width digits, no indent, nothing after the number.
+    JaFullWidthDash,
+    /// １ (ア) ① (ア) then no number — full-width digit, aiueo, circled, iroha.
+    JaMixed,
+    /// 第１章 第１節 第１項, then no number.
+    JaChapter,
+    /// 第一章 第一節 第一項 (kanji digits), then no number.
+    JaChapterKanji,
+    /// 1. a. i. 1) (a) (i) (1) (a) (i)
+    JaOutline,
 }
 
 impl ListKind {
@@ -147,14 +184,104 @@ impl ListKind {
             "lowerLetterDot" => ListKind::LowerLetterDot,
             "lowerRoman" => ListKind::LowerRoman,
             "legal" | "multilevel" => ListKind::Legal,
+            "jaBullet" => ListKind::JaBullet,
+            "jaNumbered" => ListKind::JaNumbered,
+            "circled" => ListKind::Circled,
+            "jaUpperRoman" => ListKind::JaUpperRoman,
+            "upperLetterParen" => ListKind::UpperLetterParen,
+            "aiueo" => ListKind::Aiueo,
+            "iroha" => ListKind::Iroha,
+            "jaLowerRoman" => ListKind::JaLowerRoman,
+            "jaNumbers" => ListKind::JaNumbers,
+            "jaLegal" => ListKind::JaLegal,
+            "jaFullWidthDash" => ListKind::JaFullWidthDash,
+            "jaMixed" => ListKind::JaMixed,
+            "jaChapter" => ListKind::JaChapter,
+            "jaChapterKanji" => ListKind::JaChapterKanji,
+            "jaOutline" => ListKind::JaOutline,
             s if s.chars().count() == 1 => ListKind::BulletChar(s.chars().next()?),
             _ => return None,
         })
     }
     pub fn is_bullet(self) -> bool {
-        matches!(self, ListKind::Bullet | ListKind::BulletChar(_))
+        matches!(self, ListKind::Bullet | ListKind::BulletChar(_) | ListKind::JaBullet)
+    }
+    /// Word's Japanese Numbering library, in gallery order.
+    pub const JA_NUMBERING: [ListKind; 7] = [
+        ListKind::JaNumbered,
+        ListKind::Circled,
+        ListKind::JaUpperRoman,
+        ListKind::UpperLetterParen,
+        ListKind::Aiueo,
+        ListKind::Iroha,
+        ListKind::JaLowerRoman,
+    ];
+    /// Word's Japanese Multilevel library, in gallery order.
+    pub const JA_MULTILEVEL: [ListKind; 7] = [
+        ListKind::JaNumbers,
+        ListKind::JaLegal,
+        ListKind::JaFullWidthDash,
+        ListKind::JaMixed,
+        ListKind::JaChapter,
+        ListKind::JaChapterKanji,
+        ListKind::JaOutline,
+    ];
+    /// The `kind` parameter that names this kind.
+    pub fn id(self) -> String {
+        match self {
+            ListKind::Bullet => "bullet".into(),
+            ListKind::BulletChar(c) => c.to_string(),
+            ListKind::Numbered => "numbered".into(),
+            ListKind::NumberedParen => "numberedParen".into(),
+            ListKind::Outline => "outline".into(),
+            ListKind::UpperLetter => "upperLetter".into(),
+            ListKind::LowerLetter => "lowerLetter".into(),
+            ListKind::LowerLetterDot => "lowerLetterDot".into(),
+            ListKind::LowerRoman => "lowerRoman".into(),
+            ListKind::Legal => "legal".into(),
+            ListKind::JaBullet => "jaBullet".into(),
+            ListKind::JaNumbered => "jaNumbered".into(),
+            ListKind::Circled => "circled".into(),
+            ListKind::JaUpperRoman => "jaUpperRoman".into(),
+            ListKind::UpperLetterParen => "upperLetterParen".into(),
+            ListKind::Aiueo => "aiueo".into(),
+            ListKind::Iroha => "iroha".into(),
+            ListKind::JaLowerRoman => "jaLowerRoman".into(),
+            ListKind::JaNumbers => "jaNumbers".into(),
+            ListKind::JaLegal => "jaLegal".into(),
+            ListKind::JaFullWidthDash => "jaFullWidthDash".into(),
+            ListKind::JaMixed => "jaMixed".into(),
+            ListKind::JaChapter => "jaChapter".into(),
+            ListKind::JaChapterKanji => "jaChapterKanji".into(),
+            ListKind::JaOutline => "jaOutline".into(),
+        }
+    }
+    /// Whether the kind numbers its levels together (a Multilevel List), as opposed to a
+    /// Numbering library entry.
+    pub fn is_multilevel(self) -> bool {
+        matches!(self, ListKind::Legal | ListKind::Outline) || ListKind::JA_MULTILEVEL.contains(&self)
+    }
+    /// How a gallery shows this kind: the first three labels (`1. 2. 3.`), or for a multilevel
+    /// kind the first label of its first three numbered levels (`1 1.1 1.1.1`).
+    pub fn preview(self) -> String {
+        let levels = levels_for(self);
+        let label = |l: &Level, n: u32| -> String { (1..=9u32).fold(l.text.clone(), |t, k| t.replace(&format!("%{k}"), &l.format.format(n))) };
+        if self.is_multilevel() {
+            levels.iter().filter(|l| l.format != NumFormat::None).take(3).map(|l| label(l, 1)).collect::<Vec<_>>().join(" ")
+        } else {
+            levels.first().map(|l| (1..=3).map(|n| label(l, n)).collect::<Vec<_>>().join(" ")).unwrap_or_default()
+        }
     }
 }
+
+/// A level of Word's Japanese libraries: `number` and `text` positions in points, as Word for
+/// Mac reads them back (`w:ind` left = text, hanging = text − number).
+fn ja_level(format: NumFormat, text: &str, number: f32, text_pos: f32, suffix: LevelSuffix) -> Level {
+    Level { format, text: text.into(), indent: text_pos, hanging: (text_pos - number).max(0.0), suffix, ..Level::default() }
+}
+
+/// Number positions of Word's Japanese multilevel templates: 21.25 pt a level.
+const JA_STEP: [f32; 9] = [0.0, 21.25, 42.55, 63.8, 85.05, 106.3, 127.55, 148.8, 170.1];
 
 fn bullet_level(i: usize, c: char) -> Level {
     Level {
@@ -175,8 +302,11 @@ fn bullet_level(i: usize, c: char) -> Level {
     }
 }
 
-/// Nine levels for a list kind.
+/// Nine levels for a list kind (one for Word's Japanese Numbering library).
 pub fn levels_for(kind: ListKind) -> Vec<Level> {
+    if kind == ListKind::JaBullet || ListKind::JA_NUMBERING.contains(&kind) || ListKind::JA_MULTILEVEL.contains(&kind) {
+        return ja_levels(kind);
+    }
     (0..9)
         .map(|i| {
             let ind = 36.0 * (i as f32 + 1.0);
@@ -207,9 +337,98 @@ pub fn levels_for(kind: ListKind) -> Vec<Level> {
                     let text: String = (1..=n).map(|k| format!("%{k}.")).collect();
                     Level { format: NumFormat::Decimal, text, indent: 18.0 + 25.0 * i as f32, hanging: 18.0 + 7.0 * i as f32, ..Level::default() }
                 }
+                ListKind::JaBullet
+                | ListKind::JaNumbered
+                | ListKind::Circled
+                | ListKind::JaUpperRoman
+                | ListKind::UpperLetterParen
+                | ListKind::Aiueo
+                | ListKind::Iroha
+                | ListKind::JaLowerRoman
+                | ListKind::JaNumbers
+                | ListKind::JaLegal
+                | ListKind::JaFullWidthDash
+                | ListKind::JaMixed
+                | ListKind::JaChapter
+                | ListKind::JaChapterKanji
+                | ListKind::JaOutline => Level::default(),
             }
         })
         .collect()
+}
+
+/// The levels of Word's Japanese Numbering library (one level each, as Word writes them:
+/// `w:multiLevelType singleLevel`) and Multilevel library (nine), as read from Word for Mac.
+fn ja_levels(kind: ListKind) -> Vec<Level> {
+    use LevelSuffix::{Nothing, Tab};
+    use NumFormat::*;
+    let step = |i: usize| JA_STEP.get(i).copied().unwrap_or(0.0);
+    let next = |i: usize| JA_STEP.get(i + 1).copied().unwrap_or(191.35);
+    match kind {
+        // Wingdings l in Word's file; ● in the paragraph's font draws the same disc.
+        ListKind::JaBullet => vec![ja_level(Bullet, "●", 0.0, 22.0, Tab)],
+        ListKind::JaNumbered => vec![ja_level(Decimal, "%1.", 0.0, 22.0, Tab)],
+        ListKind::Circled => vec![ja_level(DecimalEnclosedCircle, "%1", 0.0, 22.0, Tab)],
+        ListKind::JaUpperRoman => vec![ja_level(UpperRoman, "%1.", 0.0, 33.0, Tab)],
+        ListKind::UpperLetterParen => vec![ja_level(UpperLetter, "%1)", 0.0, 22.0, Tab)],
+        ListKind::Aiueo => vec![ja_level(AiueoFullWidth, "(%1)", 0.0, 22.0, Tab)],
+        ListKind::Iroha => vec![ja_level(IrohaFullWidth, "%1)", 0.0, 22.0, Tab)],
+        ListKind::JaLowerRoman => vec![ja_level(LowerRoman, "%1.", 22.0, 33.0, Tab)],
+        ListKind::JaNumbers => {
+            let text_pos = [21.25, 49.6, 70.9, 99.2, 127.55, 163.0, 191.35, 219.7, 255.1];
+            (0..9)
+                .map(|i| {
+                    let text: String = (1..=i + 1).map(|k| format!("%{k}")).collect::<Vec<_>>().join(".");
+                    ja_level(Decimal, &text, step(i), text_pos.get(i).copied().unwrap_or(0.0), Tab)
+                })
+                .collect()
+        }
+        ListKind::JaLegal => (0..9)
+            .map(|i| {
+                let text: String = (1..=i + 1).map(|k| format!("%{k}.")).collect();
+                ja_level(Decimal, &text, 0.0, 21.25 + 7.1 * i as f32, Tab)
+            })
+            .collect(),
+        ListKind::JaFullWidthDash => (0..9)
+            .map(|i| {
+                let text: String = (1..=i + 1).map(|k| format!("%{k}")).collect::<Vec<_>>().join("-");
+                ja_level(DecimalFullWidth, &text, 0.0, 0.0, Nothing)
+            })
+            .collect(),
+        ListKind::JaMixed => (0..9)
+            .map(|i| match i {
+                0 => ja_level(DecimalFullWidth, "%1", step(0), next(0), Tab),
+                1 => ja_level(AiueoFullWidth, "(%2)", step(1), next(1), Tab),
+                2 => ja_level(DecimalEnclosedCircle, "%3", step(2), next(2), Tab),
+                3 => ja_level(IrohaFullWidth, "(%4)", step(3), next(3), Tab),
+                _ => ja_level(None, "", step(i), next(i), Nothing),
+            })
+            .collect(),
+        ListKind::JaChapter | ListKind::JaChapterKanji => {
+            let digits = if kind == ListKind::JaChapter { DecimalFullWidth } else { JapaneseCounting };
+            (0..9)
+                .map(|i| match i {
+                    0 => ja_level(digits, "第%1章", step(0), next(0), Tab),
+                    1 => ja_level(digits, "第%2節", step(1), next(1), Tab),
+                    2 => ja_level(digits, "第%3項", step(2), next(2), Tab),
+                    _ => ja_level(None, "", step(i), next(i), Nothing),
+                })
+                .collect()
+        }
+        ListKind::JaOutline => (0..9)
+            .map(|i| {
+                let format = [Decimal, LowerLetter, LowerRoman].get(i % 3).copied().unwrap_or(Decimal);
+                let n = i + 1;
+                let text = match i {
+                    0..=2 => format!("%{n}."),
+                    3 => format!("%{n})"),
+                    _ => format!("(%{n})"),
+                };
+                ja_level(format, &text, step(i), next(i), Tab)
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 impl Numbering {
@@ -362,6 +581,114 @@ impl Counters {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn words_japanese_numbering_library_is_single_level_at_words_positions() {
+        // Word for Mac's Numbering library with an East Asian language of Japanese, read from its
+        // list galleries (number position / text position in points) and from the file its
+        // default numbering writes (`singleLevel`, `w:ind w:left="440" w:hanging="440"`).
+        let one = |kind: ListKind| {
+            let l = levels_for(kind);
+            assert_eq!(l.len(), 1, "{kind:?}");
+            l.into_iter().next().unwrap()
+        };
+        let l = one(ListKind::JaNumbered);
+        assert_eq!((l.format, l.text.as_str(), l.indent, l.hanging, l.suffix), (NumFormat::Decimal, "%1.", 22.0, 22.0, LevelSuffix::Tab));
+        let l = one(ListKind::JaBullet);
+        assert_eq!((l.format, l.text.as_str(), l.indent, l.hanging), (NumFormat::Bullet, "●", 22.0, 22.0));
+        assert!(ListKind::JaBullet.is_bullet() && ListKind::parse("jaBullet") == Some(ListKind::JaBullet));
+        assert_eq!(one(ListKind::Circled).format, NumFormat::DecimalEnclosedCircle);
+        let l = one(ListKind::JaUpperRoman);
+        assert_eq!((l.format, l.text.as_str(), l.indent, l.hanging), (NumFormat::UpperRoman, "%1.", 33.0, 33.0));
+        assert_eq!(one(ListKind::UpperLetterParen).text, "%1)");
+        let l = one(ListKind::Aiueo);
+        assert_eq!((l.format, l.text.as_str()), (NumFormat::AiueoFullWidth, "(%1)"));
+        let l = one(ListKind::Iroha);
+        assert_eq!((l.format, l.text.as_str()), (NumFormat::IrohaFullWidth, "%1)"));
+        let l = one(ListKind::JaLowerRoman);
+        assert_eq!((l.format, l.indent, l.hanging), (NumFormat::LowerRoman, 33.0, 11.0));
+        // The gallery tiles, with the labels the formats render.
+        let previews: Vec<String> = ListKind::JA_NUMBERING.iter().map(|k| k.preview()).collect();
+        assert_eq!(previews, ["1. 2. 3.", "① ② ③", "I. II. III.", "A) B) C)", "(ア) (イ) (ウ)", "イ) ロ) ハ)", "i. ii. iii."]);
+        for k in ListKind::JA_NUMBERING.iter().chain(&ListKind::JA_MULTILEVEL) {
+            assert_eq!(ListKind::parse(&k.id()), Some(*k));
+            assert_eq!(k.is_multilevel(), ListKind::JA_MULTILEVEL.contains(k));
+        }
+    }
+
+    #[test]
+    fn words_japanese_multilevel_library_has_words_nine_levels() {
+        // Word for Mac's Multilevel library (Japanese), every level read from the galleries.
+        let at = |kind: ListKind, i: usize| levels_for(kind).get(i).cloned().unwrap();
+        let pos = |l: &Level| (l.indent - l.hanging, l.indent);
+        // 1 1.1 1.1.1: Word's default Multilevel List in a Japanese document (left 425, hanging
+        // 425; 992/567; 1418/567; 1984/708; 2551/850; 3260/1134; 3827/1276; 4394/1418; 5102/1700).
+        let l = at(ListKind::JaNumbers, 0);
+        assert_eq!((l.text.as_str(), pos(&l)), ("%1", (0.0, 21.25)));
+        let l = at(ListKind::JaNumbers, 1);
+        assert_eq!((l.text.as_str(), pos(&l)), ("%1.%2", (21.25, 49.6)));
+        let l = at(ListKind::JaNumbers, 8);
+        assert_eq!((l.text.as_str(), pos(&l).1), ("%1.%2.%3.%4.%5.%6.%7.%8.%9", 255.1));
+        assert!((pos(&l).0 - 170.1).abs() < 0.01);
+        // 1. 1.1. 1.1.1.: numbers all at 0, text 7.1 pt further a level.
+        let l = at(ListKind::JaLegal, 2);
+        assert_eq!(l.text, "%1.%2.%3.");
+        assert!((l.indent - 35.45).abs() < 0.01 && (l.hanging - 35.45).abs() < 0.01);
+        // １ １-１ １-１-１: full-width digits, no indent, nothing after the number.
+        let l = at(ListKind::JaFullWidthDash, 1);
+        assert_eq!(
+            (l.format, l.text.as_str(), l.indent, l.hanging, l.suffix),
+            (NumFormat::DecimalFullWidth, "%1-%2", 0.0, 0.0, LevelSuffix::Nothing)
+        );
+        // １ (ア) ① (ア), then unnumbered levels.
+        let formats: Vec<NumFormat> = levels_for(ListKind::JaMixed).iter().map(|l| l.format).collect();
+        assert_eq!(
+            formats,
+            [
+                NumFormat::DecimalFullWidth,
+                NumFormat::AiueoFullWidth,
+                NumFormat::DecimalEnclosedCircle,
+                NumFormat::IrohaFullWidth,
+                NumFormat::None,
+                NumFormat::None,
+                NumFormat::None,
+                NumFormat::None,
+                NumFormat::None
+            ]
+        );
+        let l = at(ListKind::JaMixed, 3);
+        assert_eq!((l.text.as_str(), pos(&l)), ("(%4)", (63.8, 85.05)));
+        assert_eq!(at(ListKind::JaMixed, 4).suffix, LevelSuffix::Nothing);
+        // 第１章 第１節 第１項 and the kanji-digit one.
+        let l = at(ListKind::JaChapter, 1);
+        assert_eq!((l.format, l.text.as_str(), pos(&l)), (NumFormat::DecimalFullWidth, "第%2節", (21.25, 42.55)));
+        assert_eq!(at(ListKind::JaChapterKanji, 2).format, NumFormat::JapaneseCounting);
+        assert_eq!(at(ListKind::JaChapter, 3).format, NumFormat::None);
+        // 1. a. i. 1) (a) (i) (1) (a) (i).
+        let texts: Vec<String> = levels_for(ListKind::JaOutline).iter().map(|l| l.text.clone()).collect();
+        assert_eq!(texts, ["%1.", "%2.", "%3.", "%4)", "(%5)", "(%6)", "(%7)", "(%8)", "(%9)"]);
+        assert_eq!(at(ListKind::JaOutline, 5).format, NumFormat::LowerRoman);
+        assert_eq!(pos(&at(ListKind::JaOutline, 8)), (170.1, 191.35));
+        let previews: Vec<String> = ListKind::JA_MULTILEVEL.iter().map(|k| k.preview()).collect();
+        assert_eq!(
+            previews,
+            ["1 1.1 1.1.1", "1. 1.1. 1.1.1.", "１ １-１ １-１-１", "１ (ア) ①", "第１章 第１節 第１項", "第一章 第一節 第一項", "1. a. i."]
+        );
+        // The labels a document shows: ⑩ ⑫, コ シ, ヌ ヲ, １０, 十 十二, as Word renders them.
+        let mut n = Numbering::default();
+        let mut c = Counters::default();
+        for (kind, labels) in [
+            (ListKind::Circled, ["⑩", "⑫"]),
+            (ListKind::Aiueo, ["(コ)", "(シ)"]),
+            (ListKind::Iroha, ["ヌ)", "ヲ)"]),
+            (ListKind::JaChapter, ["第１０章", "第１２章"]),
+            (ListKind::JaChapterKanji, ["第十章", "第十二章"]),
+        ] {
+            let id = n.add_list(kind);
+            let got: Vec<String> = (1..=12).map(|_| c.next_label(&n, id, 0).unwrap().0).collect();
+            assert_eq!((got[9].as_str(), got[11].as_str()), (labels[0], labels[1]), "{kind:?}");
+        }
+    }
 
     #[test]
     fn a_list_s_own_level_definitions_win() {
