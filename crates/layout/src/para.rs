@@ -369,6 +369,11 @@ pub struct ParaLayout {
     /// Per cluster, how far above its line's baseline the cluster's own baseline sits for the
     /// paragraph's text alignment (`w:textAlignment` top, center or bottom); empty otherwise.
     pub align_dy: Vec<f32>,
+    /// Laid out for a vertical (`tbRl`) section: each line's `baseline` is the centre line of its
+    /// column, on which the em squares of its upright characters are centred (see
+    /// [`break_lines`]'s vertical metrics); the display draws lying text on a baseline
+    /// (ascent − descent) / 2 from it and stands East Asian characters up about it.
+    pub vertical: bool,
 }
 
 /// A shape drawn over a cluster (an enclosed character's circle, square, triangle or diamond),
@@ -874,7 +879,10 @@ impl<'a> Builder<'a> {
     }
 
     /// Style index for a resolved char in `face` (caps-scaled `size` override for small caps).
-    fn style(&mut self, rc: &Arc<ResolvedChar>, face_override: Option<FaceRef>, small: bool) -> u32 {
+    /// `ea_family`: the East Asian font the run asked for (`w:eastAsia` or the theme's) when
+    /// `face_override` stands in for it — Word's own Yu Mincho/Yu Gothic keep Word's line
+    /// metrics whatever face draws them.
+    fn style(&mut self, rc: &Arc<ResolvedChar>, face_override: Option<FaceRef>, small: bool, ea_family: Option<&str>) -> u32 {
         let r = wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &rc.font), rc.bold, rc.italic);
         let face = face_override.unwrap_or(r.face);
         // The display list reads every run's format (link target, strike kind, underline colour,
@@ -884,7 +892,7 @@ impl<'a> Builder<'a> {
         let key = {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
-            (face.id(), small, &rc.font, rc.size.to_bits(), rc.bold, rc.italic, rc.color, rc.highlight, rc.shading).hash(&mut h);
+            (face.id(), small, &rc.font, ea_family, rc.size.to_bits(), rc.bold, rc.italic, rc.color, rc.highlight, rc.shading).hash(&mut h);
             (rc.underline_color, rc.strike, rc.double_strike, &rc.link, rc.ins, rc.del, rc.hidden).hash(&mut h);
             h.finish()
         };
@@ -901,7 +909,10 @@ impl<'a> Builder<'a> {
             }
         }
         let size = rc.draw_size() * if small { 0.8 } else { 1.0 };
-        let (a, d) = wordcraft_fonts::word::line_metrics(&face);
+        // Word's own Yu Mincho/Yu Gothic builds have Word's line metrics whatever face stands
+        // in for them here.
+        let (a, d) = wordcraft_fonts::word::office_line_metrics(ea_family.unwrap_or(&rc.font), &face)
+            .unwrap_or_else(|| wordcraft_fonts::word::line_metrics(&face));
         let k = size as f64 / face.upem.max(1.0);
         // A fallback face (letters the requested font lacks) is emboldened or slanted when it has
         // no bold or italic of its own.
@@ -960,11 +971,8 @@ impl<'a> Builder<'a> {
         } else {
             None
         };
-        let primary_ea = rc
-            .font_ea
-            .as_deref()
-            .or(theme_ea.as_deref())
-            .filter(|f| has_ea && !f.eq_ignore_ascii_case(&rc.font))
+        let ea_named = rc.font_ea.as_deref().or(theme_ea.as_deref()).filter(|f| has_ea && !f.eq_ignore_ascii_case(&rc.font));
+        let primary_ea = ea_named
             .map(|f| (f, wordcraft_fonts::word::resolve(lookup_family(self.env.doc, f), rc.bold, rc.italic)))
             .filter(|(f, r)| !r.substituted || wordcraft_fonts::word::is_cjk_family(f))
             .map(|(_, r)| r.face);
@@ -1045,7 +1053,8 @@ impl<'a> Builder<'a> {
             };
             let rc = &rc;
             let small = key.small;
-            let si = self.style(rc, key.face, small);
+            let ea_family = ea_named.filter(|_| key.face.is_some() && key.face.map(|f| f.id()) == primary_ea.map(|f| f.id()));
+            let si = self.style(rc, key.face, small, ea_family);
             let Some(st) = self.styles.get(si as usize).cloned() else { continue };
             let upper = rc.caps || small;
             // All Caps and Small Caps draw a letter's full capital, which can be several
@@ -1156,7 +1165,7 @@ impl<'a> Builder<'a> {
         self.shape_with(text, start, rc, None, false);
         let added: Vec<Cluster> = self.clusters.drain(before..).collect();
         let Some(first) = added.first() else {
-            let si = self.style(rc, None, false);
+            let si = self.style(rc, None, false, None);
             let g = self.glyphs.len() as u32;
             self.clusters.push(Cluster {
                 start,
@@ -1212,7 +1221,7 @@ impl<'a> Builder<'a> {
         let split = if !chars || n == 3 { n.div_ceil(2) } else { (n / 2).max(1) };
         let at = text.char_indices().nth(split).map(|(i, _)| i).unwrap_or(text.len());
         let (upper, lower) = (text.get(..at).unwrap_or(""), text.get(at..).unwrap_or(""));
-        let full = self.style(rc, None, false);
+        let full = self.style(rc, None, false, None);
         let (asc, desc) = self.styles.get(full as usize).map(|s| (s.ascent, s.descent)).unwrap_or((size * 0.9, size * 0.2));
         let mut hr = (**rc).clone();
         hr.size = half;
@@ -1380,7 +1389,7 @@ impl<'a> Builder<'a> {
         let (g0, g1) = if g0 <= g1 { (g0, g1) } else { (g, g) };
         let style = match added.iter().find(|c| c.kind == ClKind::Text) {
             Some(c) => c.style,
-            None => self.style(rc, None, false),
+            None => self.style(rc, None, false, None),
         };
         let k = self.clusters.len();
         if !text.is_empty() {
@@ -1500,9 +1509,15 @@ impl Builder<'_> {
         let base_w = self.clusters.get(ci).map_or(0.0, |c| c.adv);
         let w = base_w.max(ruby_w);
         let n = cl.len().max(1) as f32;
+        // In a vertical column the ruby runs beside its base, centred along it for the
+        // right-vertical alignment, its centre line `raise` to the right of the base's (0.73 of
+        // the raise for right-vertical), as measured in Word for Mac (see `break_lines`).
+        let vertical = self.env.vertical;
+        let raise = if vertical && align == RubyAlign::RightVertical { raise * 0.73 } else { raise };
         // Where the narrower text starts, and the extra gap between its letters (ruby only).
         let lead = |room: f32| match align {
             RubyAlign::Left => 0.0,
+            RubyAlign::RightVertical if vertical => room / 2.0,
             RubyAlign::Right | RubyAlign::RightVertical => room,
             _ => room / 2.0,
         };
@@ -1607,7 +1622,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         tcy: Vec::new(),
     };
     let mark_rc = resolve(&p.mark);
-    let mark_style = b.style(&mark_rc, None, false);
+    let mark_style = b.style(&mark_rc, None, false, None);
     let mut has_page_fields = false;
     let mut notes = Vec::new();
     let mut obj_index = 0usize;
@@ -1673,7 +1688,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                 Some(last) if last.end == range.start => last.end = range.end,
                 _ => left.push(range.clone()),
             }
-            let si = b.style(&rc, None, false);
+            let si = b.style(&rc, None, false, None);
             let g = b.glyphs.len() as u32;
             // Word still prints the note of a hidden reference mark (and numbers it); a deleted
             // reference is gone from the final text, note and all.
@@ -1742,7 +1757,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
             }
             seg = i + c.len_utf8();
             let (start, end) = (range.start + i, range.start + i + c.len_utf8());
-            let si = b.style(&rc, None, false);
+            let si = b.style(&rc, None, false, None);
             let g = b.glyphs.len() as u32;
             let push = |b: &mut Builder, kind: ClKind, adv: f32, h: f32| {
                 b.clusters.push(Cluster { start, end, adv, kind, style: si, g0: g, g1: g, break_after: false, obj_h: h, obj_d: 0.0, dot: false })
@@ -2011,6 +2026,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         tcy: b.tcy,
         openings: Vec::new(),
         align_dy: Vec::new(),
+        vertical: env.vertical,
     };
     if pl.rp.top_line_punct {
         pl.openings = pl
@@ -2498,6 +2514,24 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                         obj_asc = obj_asc.max(c.obj_h);
                         (st.ascent, st.descent)
                     }
+                } else if env.vertical {
+                    // A vertical column: the em square of each character is centred on the
+                    // column's centre line and the run's line (ascent + descent) spreads equally
+                    // either side of it — 0.715 em each way for Word's 游明朝 — and a ruby's own
+                    // line runs beside the base's, its centre `raise` towards the right (the
+                    // ascent side): the column reaches raise + ascent − 0.38 em of the ruby's size
+                    // that way. Measured in Word for Mac: 10.5-pt columns 15.0 pt apart (16.04
+                    // with a 5-pt ruby raised 5, 19.2 with a 7-pt ruby raised 7), each centred
+                    // in whole 18-pt grid lines (the 7-pt ruby's column takes two), a 20-pt
+                    // character sharing the 10.5-pt text's centre line.
+                    let half = (st.ascent + st.descent) / 2.0;
+                    let ruby_reach = pl
+                        .rubies
+                        .iter()
+                        .find(|r| r.cluster == c0 + k)
+                        .and_then(|r| r.glyphs.first().and_then(|(s, _)| pl.styles.get(*s as usize)).map(|rs| r.raise + rs.ascent - rs.size * 0.38))
+                        .unwrap_or(0.0);
+                    (half.max(ruby_reach), half)
                 } else {
                     // `obj_h` is set on text clusters under ruby text and emphasis marks, which the
                     // line grows to fit; `obj_d` under emphasis marks below the text.
