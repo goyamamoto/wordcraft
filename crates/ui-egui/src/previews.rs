@@ -197,10 +197,20 @@ impl Previews {
     }
 
     /// The name the font box shows for the document's font `family`: its name in the interface
-    /// language when the font has one.
+    /// language when the installed font has one; one of Word's CJK fonts (游明朝, the Office
+    /// theme's Japanese font, or MS Mincho) by its native name in that language's interface and
+    /// its English name elsewhere (Yu Mincho, as Word for Mac shows it in English); any other
+    /// font by the document's name.
     pub fn font_shown(&mut self, family: &str) -> String {
         self.families();
-        self.local_names.get(&family.to_lowercase()).cloned().unwrap_or_else(|| family.to_string())
+        if let Some(l) = self.local_names.get(&family.to_lowercase()) {
+            return l.clone();
+        }
+        if let Some((english, native, lang)) = wordcraft_fonts::word::cjk_font_names(family) {
+            let ui = crate::i18n::current().code();
+            return if wordcraft_fonts::name_language_matches(ui, lang) { native.to_string() } else { english.to_string() };
+        }
+        family.to_string()
     }
 
     /// The family name a font chosen in the font box is stored as: the English name for a font
@@ -663,6 +673,18 @@ pub fn table_style_tile(ui: &mut Ui, app: &mut WordApp, style: &str) -> Response
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The font box names Word's CJK fonts as Word's does: the English name in an English
+    /// interface (Yu Mincho for the theme's 游明朝, as Word for Mac shows it), the document's name
+    /// for any other font.
+    #[test]
+    fn font_box_names_cjk_fonts_in_the_interface_language() {
+        let mut p = Previews::default();
+        assert_eq!(p.font_shown("游明朝"), "Yu Mincho");
+        assert_eq!(p.font_shown("ＭＳ Ｐ明朝"), "MS PMincho");
+        assert_eq!(p.font_shown("Aptos"), "Aptos");
+        assert_eq!(p.font_shown("Not A Font"), "Not A Font");
+    }
 
     /// #848: each trip through the Font box loaded every family it showed, for good. Entries are
     /// now drawn with a face read for the preview alone: installed families stay unloaded.

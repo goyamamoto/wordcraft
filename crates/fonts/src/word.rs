@@ -109,6 +109,73 @@ fn substitutes(family: &str) -> &'static [&'static str] {
 /// when running there), then the open pan-CJK families (Noto / Source Han, BIZ UD, IPAex, Nanum).
 /// `None` for a name that isn't one of them.
 fn cjk_substitutes(lower: &str) -> Option<&'static [&'static str]> {
+    let base = fold_cjk_name(lower);
+    cjk_chain(&base)
+}
+
+/// A CJK font name folded for matching: full-width ASCII (ＭＳ Ｐ明朝) as ASCII, lower case,
+/// single spaces.
+fn fold_cjk_name(name: &str) -> String {
+    let mut base = String::with_capacity(name.len());
+    for c in name.trim().chars() {
+        let c = match u32::from(c) {
+            0xFF01..=0xFF5E => char::from_u32(u32::from(c) - 0xFF01 + 0x21).unwrap_or(c),
+            0x3000 => ' ',
+            _ => c,
+        };
+        if c == ' ' && base.ends_with(' ') {
+            continue;
+        }
+        base.extend(c.to_lowercase());
+    }
+    base
+}
+
+/// Word's Chinese, Japanese and Korean theme and template fonts by their English and native
+/// names, with the language of the native name: a document names them either way (the Office
+/// theme says 游明朝; a Windows document ＭＳ 明朝 or MS Mincho), and Word's font box shows the
+/// one in its interface language. `None` for other names.
+pub fn cjk_font_names(family: &str) -> Option<(&'static str, &'static str, &'static str)> {
+    const NAMES: &[(&str, &str, &str)] = &[
+        ("Yu Mincho", "游明朝", "ja"),
+        ("Yu Mincho Demibold", "游明朝 Demibold", "ja"),
+        ("Yu Mincho Light", "游明朝 Light", "ja"),
+        ("Yu Gothic", "游ゴシック", "ja"),
+        ("Yu Gothic Light", "游ゴシック Light", "ja"),
+        ("Yu Gothic Medium", "游ゴシック Medium", "ja"),
+        ("MS Mincho", "ＭＳ 明朝", "ja"),
+        ("MS PMincho", "ＭＳ Ｐ明朝", "ja"),
+        ("MS Gothic", "ＭＳ ゴシック", "ja"),
+        ("MS PGothic", "ＭＳ Ｐゴシック", "ja"),
+        ("Meiryo", "メイリオ", "ja"),
+        ("Hiragino Mincho ProN", "ヒラギノ明朝 ProN", "ja"),
+        ("Hiragino Mincho Pro", "ヒラギノ明朝 Pro", "ja"),
+        ("Hiragino Kaku Gothic ProN", "ヒラギノ角ゴ ProN", "ja"),
+        ("Hiragino Kaku Gothic Pro", "ヒラギノ角ゴ Pro", "ja"),
+        ("Hiragino Sans", "ヒラギノ角ゴシック", "ja"),
+        ("DengXian", "等线", "zh-hans"),
+        ("DengXian Light", "等线 Light", "zh-hans"),
+        ("SimSun", "宋体", "zh-hans"),
+        ("SimHei", "黑体", "zh-hans"),
+        ("KaiTi", "楷体", "zh-hans"),
+        ("FangSong", "仿宋", "zh-hans"),
+        ("Microsoft YaHei", "微软雅黑", "zh-hans"),
+        ("PMingLiU", "新細明體", "zh-hant"),
+        ("MingLiU", "細明體", "zh-hant"),
+        ("DFKai-SB", "標楷體", "zh-hant"),
+        ("Microsoft JhengHei", "微軟正黑體", "zh-hant"),
+        ("Malgun Gothic", "맑은 고딕", "ko"),
+        ("Batang", "바탕", "ko"),
+        ("Gulim", "굴림", "ko"),
+        ("Dotum", "돋움", "ko"),
+        ("Gungsuh", "궁서", "ko"),
+    ];
+    let base = fold_cjk_name(family);
+    NAMES.iter().copied().find(|(e, n, _)| fold_cjk_name(e) == base || fold_cjk_name(n) == base)
+}
+
+/// The substitute chain for a folded CJK font name.
+fn cjk_chain(base: &str) -> Option<&'static [&'static str]> {
     const MINCHO: &[&str] = &[
         "Yu Mincho",
         "YuMincho",
@@ -219,20 +286,7 @@ fn cjk_substitutes(lower: &str) -> Option<&'static [&'static str]> {
         "Nanum Myeongjo",
         "Gungsuh",
     ];
-    // Full-width ASCII (ＭＳ Ｐ明朝) as ASCII, lower case, single spaces.
-    let mut base = String::with_capacity(lower.len());
-    for c in lower.trim().chars() {
-        let c = match u32::from(c) {
-            0xFF01..=0xFF5E => char::from_u32(u32::from(c) - 0xFF01 + 0x21).unwrap_or(c),
-            0x3000 => ' ',
-            _ => c,
-        };
-        if c == ' ' && base.ends_with(' ') {
-            continue;
-        }
-        base.extend(c.to_lowercase());
-    }
-    let chain = match base.as_str() {
+    let chain = match base {
         "游明朝"
         | "yu mincho"
         | "yumincho"
@@ -590,6 +644,11 @@ mod tests {
         assert_eq!(chain("等线"), chain("DengXian"));
         assert_eq!(chain("宋体"), chain("SimSun"));
         assert_eq!(chain("新細明體"), chain("PMingLiU"));
+        // The names Word shows in its English and native interfaces.
+        assert_eq!(cjk_font_names("游明朝"), Some(("Yu Mincho", "游明朝", "ja")));
+        assert_eq!(cjk_font_names("ms p明朝"), Some(("MS PMincho", "ＭＳ Ｐ明朝", "ja")));
+        assert_eq!(cjk_font_names("맑은 고딕").map(|n| n.0), Some("Malgun Gothic"));
+        assert_eq!(cjk_font_names("Aptos"), None);
         assert_eq!(chain("맑은 고딕"), chain("Malgun Gothic"));
         assert!(is_cjk_family("ＭＳ 明朝") && is_cjk_family("yu gothic ui") && !is_cjk_family("Arial") && !is_cjk_family(""));
         // A CJK name resolves to a face (installed, a substitute, or the last resort) without panicking.
