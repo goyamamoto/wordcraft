@@ -473,7 +473,7 @@ struct Key {
     excl: u64,
     eq: u32,
     read_spacing: Option<u32>,
-    grid: (u32, u32, u32, bool),
+    grid: (u32, u32, u32, bool, u32),
     fit: bool,
     hide_deleted: bool,
     /// STYLEREF results in headers and footers ([`FieldCtx::styleref_key`]).

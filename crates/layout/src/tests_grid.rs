@@ -79,15 +79,19 @@ fn character_grid_places_east_asian_text_on_the_pitch() {
     let (g, p) = (first(&l), first(&plain));
     let line = &g.lines[0];
     let latin = text.find('a').unwrap();
+    let last_ea = text.chars().take_while(|c| *c != 'a').count() - 1;
     for (k, c) in g.clusters.iter().enumerate() {
         let x = line.xs[k] - line.xs[0];
         if c.start < latin {
-            // Ideographs and kana sit on the pitch, one cell each.
+            // Ideographs and kana sit on the pitch, one cell each (Word for Mac: their size plus
+            // the grid's gap); the last gains the automatic space before the Latin text, a
+            // quarter of the pitch there (a quarter of the size without a character grid).
             assert!((x - pitch * k as f32).abs() < 0.01, "cluster {k} at {x}, pitch {pitch}");
-            assert!((c.adv - pitch).abs() < 0.01);
+            let auto = if k == last_ea { pitch / 4.0 } else { 0.0 };
+            assert!((c.adv - pitch - auto).abs() < 0.01, "cluster {k}: {} vs {pitch} + {auto}", c.adv);
         } else {
-            // Latin text keeps its own advances.
-            assert!((c.adv - p.clusters[k].adv).abs() < 0.01, "latin cluster {k}");
+            // Latin text keeps its own advances plus half the gap each (measured in Word for Mac).
+            assert!((c.adv - p.clusters[k].adv - 1.25).abs() < 0.01, "latin cluster {k}: {} vs {}", c.adv, p.clusters[k].adv);
         }
     }
 }
