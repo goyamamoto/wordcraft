@@ -831,6 +831,20 @@ impl SectionProps {
     pub fn grid_char_pitch(&self, font_size: f32) -> Option<f32> {
         self.doc_grid.filter(|g| matches!(g.kind, DocGridType::LinesAndChars | DocGridType::SnapToChars)).map(|g| g.char_pitch(font_size))
     }
+    /// The width of a cell of the character grid, points: the character pitch on a
+    /// lines-and-characters grid; snapping to characters (`snapToChars`) divides the text width
+    /// into the whole number of pitches it holds, so the cells fill the line exactly (Word for
+    /// Mac: 468 pt at a 10.5 pt pitch holds 44 cells of 10.636 pt).
+    pub fn grid_char_cell(&self, font_size: f32) -> Option<f32> {
+        let pitch = self.grid_char_pitch(font_size)?;
+        match self.doc_grid.map(|g| g.kind) {
+            Some(DocGridType::SnapToChars) => {
+                let n = self.grid_chars_per_line(font_size).max(1) as f32;
+                Some((self.text_width() / n).clamp(MIN_GRID_PITCH, MAX_GRID_PITCH))
+            }
+            _ => Some(pitch),
+        }
+    }
     /// Lines per page the line pitch gives (at least 1).
     pub fn grid_lines_per_page(&self) -> u32 {
         let pitch = self.doc_grid.unwrap_or_default().line_pitch();
