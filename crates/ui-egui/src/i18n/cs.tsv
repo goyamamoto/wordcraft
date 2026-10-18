@@ -200,6 +200,8 @@
 	Characters	Znaky
 	Characters (no spaces)	Znaky (bez mezer)
 	Characters (with spaces)	Znaky (včetně mezer)
+	Non-Asian words	Neasijská slova
+	Asian characters and Korean words	Asijské znaky a korejská slova
 	Chart	Graf
 	Check Accessibility	Kontrola přístupnosti
 	Check Compatibility	Kontrola kompatibility
@@ -349,6 +351,7 @@
 	Don't Save	Neukládat
 	Dot dash	Čerchované
 	Dot-dash	Čerchované
+	Dot-dot-dash	Čerchovaná dvojitá
 	Dotted	Tečkované
 	Double	Dvojité
 	Double Closing Quote	Koncové dvojité uvozovky
@@ -705,6 +708,7 @@
 	Modify…	Upravit…
 	More Columns…	Další sloupce…
 	More Symbols…	Další symboly…
+	More Underlines…	Další podtržení…
 	More templates →	Další šablony →
 	Move in Equation	Pohyb v rovnici
 	Move or Resize	Přesunout nebo změnit velikost
@@ -2638,6 +2642,7 @@ preview	Title	Ukázka
 	Adjust Width	Upravit šířku
 	Emphasis Mark	Zvýrazňovací značka
 	Emphasis mark:	Zvýrazňovací značka:
+	Underline style:	Styl podtržení:
 	Enclose in characters:	Uzavřít do znaků:
 	Fit in line	Přizpůsobit řádku
 	Current text width:	Aktuální šířka textu:

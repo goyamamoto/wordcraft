@@ -199,6 +199,8 @@
 	Character Border	Zeichenrahmen
 	Characters (no spaces)	Zeichen (ohne Leerzeichen)
 	Characters (with spaces)	Zeichen (mit Leerzeichen)
+	Non-Asian words	Nicht-asiatische Wörter
+	Asian characters and Korean words	Asiatische Zeichen und koreanische Wörter
 	Chart	Diagramm
 	Check Accessibility	Barrierefreiheit prüfen
 	Check Compatibility	Kompatibilität prüfen
@@ -304,6 +306,7 @@
 	Document Title	Dokumenttitel
 	Documents you open will show up here.	Geöffnete Dokumente werden hier angezeigt.
 	Dot-dash	Punkt-Strich
+	Dot-dot-dash	Strich-Punkt-Punkt
 	Dotted	Gepunktet
 	Double	Doppelt
 	Double Spacing	Doppelter Zeilenabstand
@@ -1182,6 +1185,7 @@
 	Mail Merge	Seriendruck
 	More Columns…	Weitere Spalten…
 	More Symbols…	Weitere Symbole…
+	More Underlines…	Weitere Unterstreichungen…
 	No-Width Non Break	Breitenloses geschütztes Leerzeichen
 	No-Width Optional Break	Breitenloser optionaler Umbruch
 	Paragraph Mark	Absatzmarke
@@ -2246,6 +2250,7 @@
 	Adjust Width	Breite anpassen
 	Emphasis Mark	Hervorhebungszeichen
 	Emphasis mark:	Hervorhebungszeichen:
+	Underline style:	Unterstreichung:
 	Enclose in characters:	In Zeichen einschließen:
 	Fit in line	An Zeile anpassen
 	Current text width:	Aktuelle Textbreite:

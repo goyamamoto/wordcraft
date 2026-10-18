@@ -1141,8 +1141,8 @@ impl Exporter<'_> {
                 s.set_stroke(Some(stroke(w, Some(StrokeDash { array: vec![w * 4.0, w * 2.0], offset: 0.0 }), LineCap::Butt)));
                 seg(s, 0.0, 0.0);
             }
-            LineStyle::Dashes { on, off } => {
-                let dash = (on.is_finite() && off.is_finite() && on > 0.0 && off >= 0.0).then(|| StrokeDash { array: vec![on, off], offset: 0.0 });
+            LineStyle::Dashes { .. } => {
+                let dash = style.dash_pattern().map(|array| StrokeDash { array, offset: 0.0 });
                 s.set_stroke(Some(stroke(w, dash, LineCap::Butt)));
                 seg(s, 0.0, 0.0);
             }

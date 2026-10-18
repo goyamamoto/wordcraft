@@ -233,6 +233,8 @@
 	Character Spacing	Espaçamento entre caracteres
 	Characters (no spaces)	Caracteres (sem espaços)
 	Characters (with spaces)	Caracteres (com espaços)
+	Non-Asian words	Palavras não asiáticas
+	Asian characters and Korean words	Caracteres asiáticos e palavras coreanas
 	Chart	Gráfico
 	Check Accessibility	Verificar acessibilidade
 	Check Compatibility	Verificar compatibilidade
@@ -361,6 +363,7 @@
 	Document Title	Título do documento
 	Documents you open will show up here.	Os documentos que você abrir aparecerão aqui.
 	Dot-dash	Ponto-traço
+	Dot-dot-dash	Ponto-ponto-traço
 	Dotted	Pontilhada
 	Double	Dupla
 	Double Spacing	Espaçamento duplo
@@ -1271,6 +1274,7 @@
 	Mail Merge	Mala direta
 	More Columns…	Mais colunas…
 	More Symbols…	Mais símbolos…
+	More Underlines…	Mais sublinhados…
 	No-Width Non Break	Junção sem largura
 	No-Width Optional Break	Quebra opcional sem largura
 	Paragraph Mark	Marca de parágrafo
@@ -2259,6 +2263,7 @@
 	Adjust Width	Ajustar largura
 	Emphasis Mark	Marca de ênfase
 	Emphasis mark:	Marca de ênfase:
+	Underline style:	Estilo de sublinhado:
 	Enclose in characters:	Delimitar com caracteres:
 	Fit in line	Ajustar à linha
 	Current text width:	Largura atual do texto:

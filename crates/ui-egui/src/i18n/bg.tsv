@@ -188,6 +188,8 @@
 	Characters	Знаци
 	Characters (no spaces)	Знаци (без интервали)
 	Characters (with spaces)	Знаци (с интервали)
+	Non-Asian words	Неазиатски думи
+	Asian characters and Korean words	Азиатски знаци и корейски думи
 	Chart	Диаграма
 	Check Accessibility	Проверка на достъпността
 	Check Compatibility	Проверка на съвместимостта
@@ -298,6 +300,7 @@
 	Document Title	Заглавие на документа
 	Documents you open will show up here.	Документите, които отваряте, ще се показват тук.
 	Dot-dash	Точка-тире
+	Dot-dot-dash	Точка-точка-тире
 	Dotted	Точкова
 	Double	Двойна
 	Double Spacing	Двойно междуредие
@@ -1201,6 +1204,7 @@
 	Mail Merge	Обединяване на кореспонденция
 	More Columns…	Още колони…
 	More Symbols…	Още символи…
+	More Underlines…	Още подчертавания…
 	No-Width Non Break	Неразделящ знак с нулева ширина
 	No-Width Optional Break	Незадължително прекъсване с нулева ширина
 	Paragraph Mark	Знак за абзац
@@ -2635,6 +2639,7 @@
 	Adjust Width	Настройване на ширината
 	Emphasis Mark	Знак за акцент
 	Emphasis mark:	Знак за акцент:
+	Underline style:	Стил на подчертаване:
 	Enclose in characters:	Огради със знаци:
 	Fit in line	Побиране в реда
 	Current text width:	Текуща ширина на текста:

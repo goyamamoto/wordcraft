@@ -121,6 +121,8 @@
 	Character Spacing	Межзнаковый интервал
 	Characters (no spaces)	Знаков (без пробелов)
 	Characters (with spaces)	Знаков (с пробелами)
+	Non-Asian words	Неазиатские слова
+	Asian characters and Korean words	Азиатские знаки и корейские слова
 	Chart	Диаграмма
 	Check Accessibility	Проверить доступность
 	Check Compatibility	Проверить совместимость
@@ -219,6 +221,7 @@
 	Document Title	Название документа
 	Documents you open will show up here.	Здесь появятся документы, которые вы открываете.
 	Dot-dash	Штрихпунктирный
+	Dot-dot-dash	Штрих-точка-точка
 	Dotted	Точечный
 	Double	Двойной
 	Double Spacing	Двойной интервал
@@ -1670,6 +1673,7 @@ preview	Title	Пример
 	Mail Merge	Слияние
 	More Columns…	Другие колонки…
 	More Symbols…	Другие символы…
+	More Underlines…	Другие подчеркивания…
 	No-Width Non Break	Неразрывный знак нулевой ширины
 	No-Width Optional Break	Необязательный разрыв нулевой ширины
 	Paragraph Mark	Знак абзаца
@@ -2644,6 +2648,7 @@ preview	Title	Пример
 	Adjust Width	Настроить ширину
 	Emphasis Mark	Знак выделения
 	Emphasis mark:	Знак выделения:
+	Underline style:	Подчеркивание:
 	Enclose in characters:	Заключить в знаки:
 	Fit in line	Вписать в строку
 	Current text width:	Текущая ширина текста:

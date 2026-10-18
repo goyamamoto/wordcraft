@@ -185,6 +185,8 @@
 	Characters	Caratteri
 	Characters (no spaces)	Caratteri (spazi esclusi)
 	Characters (with spaces)	Caratteri (spazi inclusi)
+	Non-Asian words	Parole non asiatiche
+	Asian characters and Korean words	Caratteri asiatici e parole coreane
 	Chart	Grafico
 	Check Accessibility	Verifica accessibilità
 	Check Compatibility	Verifica compatibilità
@@ -293,6 +295,7 @@
 	Document Title	Titolo del documento
 	Documents you open will show up here.	I documenti che apri compariranno qui.
 	Dot-dash	Punto linea
+	Dot-dot-dash	Punto-punto-linea
 	Dotted	Punteggiato
 	Double	Doppio
 	Double Spacing	Interlinea doppia
@@ -1188,6 +1191,7 @@
 	Mail Merge	Stampa unione
 	More Columns…	Altre colonne…
 	More Symbols…	Altri simboli…
+	More Underlines…	Altre sottolineature…
 	No-Width Non Break	Unione senza larghezza
 	No-Width Optional Break	Interruzione facoltativa senza larghezza
 	Paragraph Mark	Segno di paragrafo
@@ -2655,6 +2659,7 @@ preview	Title	Esempio
 	Adjust Width	Adatta larghezza
 	Emphasis Mark	Segno di enfasi
 	Emphasis mark:	Segno di enfasi:
+	Underline style:	Stile sottolineatura:
 	Enclose in characters:	Racchiudi tra caratteri:
 	Fit in line	Adatta alla riga
 	Current text width:	Larghezza attuale del testo:
