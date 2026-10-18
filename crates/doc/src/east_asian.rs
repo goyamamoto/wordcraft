@@ -22,6 +22,25 @@ pub struct ScriptFonts {
     pub minor: String,
 }
 
+/// Custom kinsoku characters for a language (`w:noLineBreaksBefore` / `w:noLineBreaksAfter` in
+/// the settings, Word's Options › Typography › Custom): when a document has them they replace
+/// the standard lists — a line may then break before or after any East Asian character not in
+/// them (Word for Mac, measured: with `noLineBreaksBefore="あ"` a 。 starts a line and あ no
+/// longer does).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct KinsokuChars {
+    /// The language the lists are for (`w:lang`, e.g. `ja-JP`).
+    pub lang: String,
+    /// Characters a line may not start with (`w:noLineBreaksBefore`).
+    pub no_start: String,
+    /// Characters a line may not end with (`w:noLineBreaksAfter`).
+    pub no_end: String,
+}
+
+/// Longest custom kinsoku list kept, in characters.
+pub const MAX_KINSOKU_CHARS: usize = 4096;
+
 /// Word's `w:characterSpacingControl`: which full-width punctuation is compressed to half width
 /// when it meets other punctuation (Word's Japanese Normal template chooses `compressPunctuation`,
 /// the English one `doNotCompress`).

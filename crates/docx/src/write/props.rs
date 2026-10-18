@@ -341,15 +341,23 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
             LineSpacing::AtLeast(v) => (twips(v.abs()), "atLeast"),
             LineSpacing::Exactly(v) => (twips(v.abs()), "exact"),
         });
+        let hundredths = |l: Option<f32>| l.filter(|l| l.is_finite()).map(|l| round(l.clamp(0.0, 1000.0) * 100.0).to_string());
+        let (before_lines, after_lines) = (hundredths(p.space_before_lines), hundredths(p.space_after_lines));
         let mut a: Vec<(&str, &str)> = Vec::new();
         if let Some(b) = &before {
             a.push(("w:before", b));
+        }
+        if let Some(l) = &before_lines {
+            a.push(("w:beforeLines", l));
         }
         if let Some(on) = p.space_before_auto {
             a.push(("w:beforeAutospacing", if on { "1" } else { "0" }));
         }
         if let Some(x) = &after {
             a.push(("w:after", x));
+        }
+        if let Some(l) = &after_lines {
+            a.push(("w:afterLines", l));
         }
         if let Some(on) = p.space_after_auto {
             a.push(("w:afterAutospacing", if on { "1" } else { "0" }));

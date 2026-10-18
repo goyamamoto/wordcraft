@@ -176,6 +176,12 @@ pub struct ResolvedPara {
     pub before_auto: bool,
     #[serde(default)]
     pub after_auto: bool,
+    /// Space before and after in lines (`ParaProps::space_before_lines`), when set and not zero:
+    /// the layout turns them into points from the section's line pitch.
+    #[serde(default)]
+    pub space_before_lines: Option<f32>,
+    #[serde(default)]
+    pub space_after_lines: Option<f32>,
     pub line_spacing: LineSpacing,
     pub contextual_spacing: bool,
     /// Left/right indents are inside/outside: they swap on even pages.
@@ -251,6 +257,8 @@ impl ResolvedPara {
             space_after: if p.space_after_auto == Some(true) { AUTO_SPACING } else { p.space_after.unwrap_or(0.0).clamp(0.0, 1584.0) },
             before_auto: p.space_before_auto == Some(true),
             after_auto: p.space_after_auto == Some(true),
+            space_before_lines: p.space_before_lines.filter(|l| l.is_finite() && *l > 0.0).map(|l| l.min(1000.0)),
+            space_after_lines: p.space_after_lines.filter(|l| l.is_finite() && *l > 0.0).map(|l| l.min(1000.0)),
             line_spacing: match p.line_spacing.unwrap_or_default() {
                 LineSpacing::Multiple(m) => LineSpacing::Multiple(if m.is_finite() { m.clamp(0.06, 132.0) } else { 1.0 }),
                 LineSpacing::AtLeast(v) => LineSpacing::AtLeast(if v.is_finite() { v.clamp(0.0, 1584.0) } else { 0.0 }),

@@ -889,6 +889,16 @@ pub struct ParaProps {
     /// HTML-style automatic space after (`w:afterAutospacing`): 14 pt, none at the end of a cell.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub space_after_auto: Option<bool>,
+    /// Space before in lines (`w:beforeLines`, hundredths of a line in the file), as Word's
+    /// Japanese Paragraph dialog takes it: when set and not zero it replaces `space_before`, a
+    /// line being the section grid's line pitch, or the Normal style's font size without a
+    /// grid (Word for Mac, measured: 1 line = 18 pt on an 18 pt grid, 12 pt with Normal at 12
+    /// pt and no grid, whatever the paragraph's own size).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub space_before_lines: Option<f32>,
+    /// Space after in lines (`w:afterLines`), like `space_before_lines`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub space_after_lines: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line_spacing: Option<LineSpacing>,
     /// Ignore space before/after between paragraphs of the same style.
@@ -965,7 +975,7 @@ pub struct ParaProps {
 
 impl ParaProps {
     pub fn overlay(&mut self, patch: &ParaProps) {
-        overlay_fields!(self, patch; style, align, indent_left, indent_right, indent_first, indent_left_chars, indent_right_chars, indent_first_chars, space_before, space_after, space_before_auto, space_after_auto, line_spacing,
+        overlay_fields!(self, patch; style, align, indent_left, indent_right, indent_first, indent_left_chars, indent_right_chars, indent_first_chars, space_before, space_after, space_before_auto, space_after_auto, space_before_lines, space_after_lines, line_spacing,
             contextual_spacing, mirror_indents, keep_next, keep_lines, page_break_before, widow_control, outline_level, numbering, tabs, shading, borders,
             suppress_hyphens, suppress_line_numbers, bidi, drop_cap, frame, kinsoku, word_wrap, overflow_punct, top_line_punct, auto_space_de, auto_space_dn,
             snap_to_grid);
