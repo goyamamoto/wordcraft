@@ -2630,3 +2630,7 @@ preview	Title	Título
 	Match half/full-width forms	Distinguir formas de ancho medio/completo
 	Sounds like (Japanese)	Suena como (japonés)
 	Kinsoku Characters	Caracteres kinsoku
+	Text alignment:	Alineación del texto:
+	Baseline	Línea base
+	Snap to grid when document grid is defined	Ajustar a la cuadrícula cuando se defina la cuadrícula del documento
+	Automatically adjust right indent when document grid is defined	Ajustar automáticamente la sangría derecha cuando se defina la cuadrícula del documento

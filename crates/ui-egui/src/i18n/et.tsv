@@ -2299,3 +2299,7 @@
 	Match half/full-width forms	Erista pool-/täislaiuses vorme
 	Sounds like (Japanese)	Kõlab nagu (jaapani)
 	Kinsoku Characters	Kinsoku märgid
+	Text alignment:	Teksti joondus:
+	Baseline	Baasjoon
+	Snap to grid when document grid is defined	Kinnita ruudustikule, kui dokumendi ruudustik on määratud
+	Automatically adjust right indent when document grid is defined	Kohanda paremtaanet automaatselt, kui dokumendi ruudustik on määratud

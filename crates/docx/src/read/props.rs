@@ -320,6 +320,8 @@ impl PropCtx {
                 "w:autoSpaceDE" => p.auto_space_de = Some(on_off(k)),
                 "w:autoSpaceDN" => p.auto_space_dn = Some(on_off(k)),
                 "w:snapToGrid" => p.snap_to_grid = Some(on_off(k)),
+                "w:adjustRightInd" => p.adjust_right_ind = Some(on_off(k)),
+                "w:textAlignment" => p.text_alignment = k.attr("w:val").map(wordcraft_doc::props::TextAlignment::from_ooxml),
                 "w:framePr" => {
                     if matches!(k.attr("w:dropCap"), Some("drop") | Some("margin")) {
                         p.drop_cap = Some(k.attr("w:lines").and_then(u32_of).unwrap_or(3).clamp(1, 10) as u8);

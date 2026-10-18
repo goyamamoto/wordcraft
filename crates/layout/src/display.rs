@@ -754,6 +754,8 @@ fn lines(
             // Horizontal-in-vertical clusters, drawn turned after the run (with its colour).
             let mut turned: Vec<(usize, f32)> = Vec::new();
             let run_start = k;
+            // The run's text alignment offset (`w:textAlignment`), the same for every cluster of a run on a line.
+            let dy = pl.align_dy.get(run_start).copied().unwrap_or(0.0);
             while k < line.c1 {
                 let Some(c) = pl.clusters.get(k) else { break };
                 if c.style != si {
@@ -814,7 +816,7 @@ fn lines(
                                     from..to
                                 }
                             };
-                            glyphs.push((g.gid, cx + g.dx, base - st.shift - g.dy));
+                            glyphs.push((g.gid, cx + g.dx, base - st.shift - dy - g.dy));
                             ranges.push(r.start..r.end.max(r.start));
                         }
                         k += 1;
@@ -829,7 +831,7 @@ fn lines(
                         }
                     }
                     for g in cg {
-                        glyphs.push((g.gid, cx + g.dx, base - st.shift - g.dy));
+                        glyphs.push((g.gid, cx + g.dx, base - st.shift - dy - g.dy));
                         ranges.push(a..b);
                     }
                 }
@@ -935,8 +937,8 @@ fn lines(
                     None => (para.and_then(|p| p.text.get(c.start..c.end)).unwrap_or("").to_string(), None),
                 };
                 let cx = x + left + (c.adv - natural) / 2.0;
-                let cy = base - st.shift - (st.ascent - st.descent) / 2.0;
-                let glyphs: Vec<(u32, f32, f32)> = cg.iter().map(|g| (g.gid, cx + g.dx, base - st.shift - g.dy)).collect();
+                let cy = base - st.shift - dy - (st.ascent - st.descent) / 2.0;
+                let glyphs: Vec<(u32, f32, f32)> = cg.iter().map(|g| (g.gid, cx + g.dx, base - st.shift - dy - g.dy)).collect();
                 let ranges: Vec<std::ops::Range<usize>> = match shown.filter(|r| r.len() == cg.len()) {
                     Some(r) => r.iter().map(|r| r.start.min(text.len())..r.end.min(text.len())).collect(),
                     None => cg.iter().map(|_| 0..text.len()).collect(),
@@ -976,7 +978,7 @@ fn lines(
             let spans = if underline != Underline::None || struck { line.spans(run_start, end_k) } else { Vec::new() };
             for (x0, x1) in spans.into_iter().map(|(a, b)| (x + a, x + b)).filter(|(a, b)| b > a) {
                 if underline != Underline::None {
-                    let uy = base - st.shift + st.size * 0.12;
+                    let uy = base - st.shift - dy + st.size * 0.12;
                     let ucolor = rc.underline_color.unwrap_or(color);
                     if underline == Underline::Words {
                         for kk in run_start..end_k {
@@ -997,7 +999,7 @@ fn lines(
                     }
                 }
                 if struck {
-                    let sy = base - st.shift - st.size * 0.28;
+                    let sy = base - st.shift - dy - st.size * 0.28;
                     let stroke = if double { Stroke::Double } else { Stroke::Solid };
                     out.push(Draw::Line { x0, y0: sy, x1, y1: sy, width: thick, color, stroke, alpha, text_bg });
                 }
@@ -1009,7 +1011,7 @@ fn lines(
                 // under dot): with 游明朝 at 10.5 pt the dot's centre is 1.17 em above the
                 // baseline, the under dot's 0.32 em below. Measured from the baseline so a
                 // substitute font's larger ascent doesn't lift the mark.
-                let my = if em.below() { base - st.shift + st.size * 0.32 } else { base - st.shift - st.size * 1.17 };
+                let my = if em.below() { base - st.shift - dy + st.size * 0.32 } else { base - st.shift - dy - st.size * 1.17 };
                 for kk in run_start..run_end {
                     let (Some(c), Some(a), Some(b)) = (pl.clusters.get(kk), line.cl_left(kk), line.cl_right(kk)) else { continue };
                     if c.kind != ClKind::Text || b <= a {
@@ -1107,7 +1109,8 @@ fn lines(
             }
             let (Some(c), Some(left)) = (pl.clusters.get(*k), line.cl_left(*k)) else { continue };
             let Some(st) = pl.styles.get(c.style as usize) else { continue };
-            let rect = Rect::new(x + left + e.x, base - st.shift - e.top, e.w, e.h);
+            let dy = pl.align_dy.get(*k).copied().unwrap_or(0.0);
+            let rect = Rect::new(x + left + e.x, base - st.shift - dy - e.top, e.w, e.h);
             out.push(Draw::Shape {
                 rect,
                 kind: e.kind,
@@ -1125,7 +1128,7 @@ fn lines(
                 continue;
             }
             let cx = x + line.cl_left(r.cluster).unwrap_or(0.0);
-            let y = base - bst.shift - r.raise;
+            let y = base - bst.shift - pl.align_dy.get(r.cluster).copied().unwrap_or(0.0) - r.raise;
             let mut i = 0;
             while let Some(&(style, _)) = r.glyphs.get(i) {
                 let n = r.glyphs.get(i..).map_or(0, |g| g.iter().take_while(|(s, _)| *s == style).count()).max(1);

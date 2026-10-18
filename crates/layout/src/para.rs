@@ -7,7 +7,7 @@ use std::sync::Arc;
 use wordcraft_doc::math::MathJc;
 use wordcraft_doc::numbering::{Level, LevelSuffix};
 use wordcraft_doc::para::{COLUMN_BREAK, InlineObject, LINE_BREAK, NoteKind, OBJ, PAGE_BREAK, RubyAlign, SOFT_HYPHEN, WrapText};
-use wordcraft_doc::props::{Align, CharProps, LineSpacing, ParaProps, TabAlign, TabLeader, TabStop};
+use wordcraft_doc::props::{Align, CharProps, LineSpacing, ParaProps, TabAlign, TabLeader, TabStop, TextAlignment};
 use wordcraft_doc::resolve::{ResolvedChar, ResolvedPara};
 use wordcraft_doc::{Document, Paragraph};
 use wordcraft_fonts::FaceRef;
@@ -73,6 +73,9 @@ pub struct StyleRun {
     /// Line ascent/descent at this size, points.
     pub ascent: f32,
     pub descent: f32,
+    /// The font's ascender at this size (no line gap), points: what `w:textAlignment` top
+    /// lines up.
+    pub glyph_ascent: f32,
     /// Baseline shift (superscript etc.), points, positive up.
     pub shift: f32,
 }
@@ -363,6 +366,9 @@ pub struct ParaLayout {
     /// Clusters that are full-width opening brackets (「（『…), sorted: with `w:topLinePunct`
     /// one that starts a line takes half its cell (see `break_lines`).
     pub openings: Vec<u32>,
+    /// Per cluster, how far above its line's baseline the cluster's own baseline sits for the
+    /// paragraph's text alignment (`w:textAlignment` top, center or bottom); empty otherwise.
+    pub align_dy: Vec<f32>,
 }
 
 /// A shape drawn over a cluster (an enclosed character's circle, square, triangle or diamond),
@@ -911,6 +917,7 @@ impl<'a> Builder<'a> {
             rc: rc.clone(),
             ascent: (a * k) as f32,
             descent: (d * k) as f32,
+            glyph_ascent: (face.ascent.max(0.0) * k) as f32,
             shift: rc.baseline_shift(),
         };
         // A `u32` index (like the glyph ranges) counts more distinct formats than a paragraph can
@@ -2003,6 +2010,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         enclosures,
         tcy: b.tcy,
         openings: Vec::new(),
+        align_dy: Vec::new(),
     };
     if pl.rp.top_line_punct {
         pl.openings = pl
@@ -2429,6 +2437,39 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
         pending_tab = None;
         let _ = pending_tab;
 
+        // Text alignment (`w:textAlignment`): runs of different sizes line up on their ascent
+        // lines (top), the centres of their ascent–descent boxes (center) or their descents
+        // (bottom) instead of their baselines, as measured in Word for Mac with 游明朝 and Aptos
+        // at 10.5, 24 and 48 pt (top: the small run rises by the ascenders' difference, 0.88 em
+        // a point of size for 游明朝; center: by half the difference of ascender minus descender).
+        let text_cl = |c: &Cluster| !matches!(c.kind, ClKind::Marker | ClKind::Space | ClKind::Tab);
+        if !matches!(rp.text_alignment, TextAlignment::Auto | TextAlignment::Baseline) {
+            let (mut ga, mut gd) = (0.0f32, 0.0f32);
+            for c in pl.clusters.get(c0..c1).into_iter().flatten().filter(|c| text_cl(c)) {
+                if let Some(st) = pl.styles.get(c.style as usize) {
+                    ga = ga.max(st.glyph_ascent + st.shift);
+                    gd = gd.max(st.descent - st.shift);
+                }
+            }
+            if pl.align_dy.len() < pl.clusters.len() {
+                pl.align_dy.resize(pl.clusters.len(), 0.0);
+            }
+            for k in c0..c1 {
+                let Some(c) = pl.clusters.get(k) else { continue };
+                let Some(st) = pl.styles.get(c.style as usize) else { continue };
+                let up = ga - (st.glyph_ascent + st.shift);
+                let down = gd - (st.descent - st.shift);
+                let dy = match rp.text_alignment {
+                    TextAlignment::Top => up,
+                    TextAlignment::Center => (up - down) / 2.0,
+                    TextAlignment::Bottom => -down,
+                    TextAlignment::Auto | TextAlignment::Baseline => 0.0,
+                };
+                if let Some(d) = pl.align_dy.get_mut(k) {
+                    *d = if text_cl(c) { dy } else { 0.0 };
+                }
+            }
+        }
         // Vertical metrics.
         let (mut asc, mut desc) = (0.0f32, 0.0f32);
         // The tallest picture on the line (it sits on the baseline).
@@ -2445,6 +2486,8 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 continue;
             }
             if let Some(st) = pl.styles.get(c.style as usize) {
+                // The run's baseline shift plus its text alignment offset.
+                let shift = st.shift + pl.align_dy.get(c0 + k).copied().unwrap_or(0.0);
                 // A picture sits on the baseline of its run: the line keeps that font's ascent
                 // and descent, and grows above the baseline to fit a taller picture.
                 let (a, d) = if matches!(c.kind, ClKind::Object(_)) && c.obj_h > 0.0 {
@@ -2458,7 +2501,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 } else {
                     // `obj_h` is set on text clusters under ruby text and emphasis marks, which the
                     // line grows to fit; `obj_d` under emphasis marks below the text.
-                    ((st.ascent + st.shift.max(0.0)).max(c.obj_h + st.shift), (st.descent + (-st.shift).max(0.0)).max(c.obj_d - st.shift))
+                    ((st.ascent + shift.max(0.0)).max(c.obj_h + shift), (st.descent + (-shift).max(0.0)).max(c.obj_d - shift))
                 };
                 asc = asc.max(a);
                 desc = desc.max(d);
