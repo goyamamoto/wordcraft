@@ -1368,7 +1368,7 @@ pub fn blank_document(region: &wordcraft_geom::Region) -> Document {
 /// for Mac 16.113 (a Normal.dotm it created afresh): 10.5 pt body text (Latin and East Asian
 /// sizes `w:sz="21"`), single line spacing with no space after and no widow control, a line grid
 /// of 18 pt (`w:docGrid w:type="lines" w:linePitch="360"`), 42 pt default tabs, header and
-/// footer 851 and 992 twips from the edge, punctuation compression on, the East Asian language
+/// footer 851 and 992 twips from the edge, 425 twips between columns, punctuation compression on, the East Asian language
 /// `ja-JP` in the document defaults and `w:themeFontLang`. The paper follows the region as before.
 pub fn japanese_normal(d: &mut Document) {
     let chr = &mut d.styles.default_chr;
@@ -1386,4 +1386,5 @@ pub fn japanese_normal(d: &mut Document) {
     sect.doc_grid = Some(wordcraft_doc::section::DocGrid { kind: wordcraft_doc::section::DocGridType::Lines, line_pitch: 18.0, char_space: 0 });
     sect.header = 851.0 / 20.0;
     sect.footer = 992.0 / 20.0;
+    sect.columns.space = 425.0 / 20.0;
 }
