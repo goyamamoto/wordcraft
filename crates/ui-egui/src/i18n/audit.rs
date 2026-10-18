@@ -144,6 +144,15 @@ impl Exempt {
             names.extend(c.categories.iter().cloned());
             names.extend(c.series.iter().map(|s| s.name.clone()));
         }
+        // The Date and Time and Field dialogs' samples: today's date in each listed picture,
+        // which goes into the document as shown (English pictures spell English month names, the
+        // Japanese ones 和暦 and 曜日), as Word inserts it.
+        names.extend(
+            crate::dialogs_insert::DATE_FORMATS
+                .iter()
+                .chain(crate::dialogs_insert::DATE_FORMATS_JA)
+                .map(|pic| wordcraft_engine::cmd::insert::format_date(pic)),
+        );
         for m in crate::credits::MODELS {
             names.extend([m.company, m.model, m.version].map(str::to_string));
         }
