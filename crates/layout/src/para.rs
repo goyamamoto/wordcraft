@@ -778,7 +778,7 @@ fn cluster_char(text: &str, c: &Cluster) -> Option<char> {
 /// letter or digit (measured in Word for Mac, `cg17`/`cg18`: ＡＢＣabc, １２３abc and abcＡＢＣ
 /// get none; ｱｲｳabc and 한글abc get the quarter em).
 fn ea_letter(c: char) -> bool {
-    !matches!(c as u32, 0xFF01..=0xFF5E) && (crate::kinsoku::is_east_asian(c) || is_east_asian(c)) && c.is_alphanumeric()
+    !matches!(c as u32, 0xFF01..=0xFF5E) && (crate::kinsoku::is_east_asian(c) || is_east_asian(c) || is_hangul(c)) && c.is_alphanumeric()
 }
 
 /// A Hangul syllable or jamo: on a snap-to-characters line two of them stay together (Word for
@@ -812,11 +812,25 @@ fn auto_space(b: &mut Builder, text: &str, letters: bool, digits: bool, grid: &G
             continue;
         }
         let size = b.styles.get(prev.style as usize).map_or(0.0, |st| st.size);
+        // The East Asian character's advance per em scales the space: an em for a full-width
+        // character; 0.865 for Apple SD Gothic Neo's Hangul across a line and 1.2 standing in a
+        // column (Word for Mac: 5.19 and 7.2 pt beside its 24-pt Hangul, 2026-10-19).
+        let ea = if ea_letter(pc) { prev } else { next };
+        let per_em = b
+            .glyphs
+            .get(ea.g0 as usize)
+            .zip(b.styles.get(ea.style as usize))
+            .map_or(1.0, |(g, st)| {
+                let adv =
+                    if b.env.vertical { st.face.vertical_advance(g.gid).unwrap_or_else(|| st.face.advance(g.gid)) } else { st.face.advance(g.gid) };
+                (adv / st.face.upem.max(1.0)) as f32
+            })
+            .clamp(0.25, 4.0);
         if size.is_finite() && size > 0.0 {
             let space = match (snapped, grid.chars, grid.cell) {
                 (true, Some(_), Some(_)) => size * 15.0 / 64.0,
                 (true, Some(_), None) => (size + grid.gap()) / 4.0,
-                _ => size / 4.0,
+                _ => size * per_em / 4.0,
             };
             gaps.push((i - 1, space.max(0.0)));
         }
@@ -1077,10 +1091,21 @@ fn east_asian(c: char) -> bool {
 const MISSING_ROMAN_FONT: &str = "Cambria";
 
 /// The family to look `font` up as: [`MISSING_ROMAN_FONT`] for a missing roman font, else `font`.
+/// Word's own Chinese, Japanese and Korean fonts (游明朝, ＭＳ 明朝, SimSun, Batang…) come with
+/// Office, so a font table calling 游明朝 roman never makes it Cambria here: its substitute
+/// (`wordcraft_fonts::word::resolve`, 游明朝体 on a Mac) draws it.
 fn lookup_family<'f>(doc: &Document, font: &'f str) -> &'f str {
     let db = wordcraft_fonts::FontDb::global();
     let roman = doc.settings.roman_fonts.iter().any(|f| f.eq_ignore_ascii_case(font));
-    if roman && !db.has_family(font) && !db.has_family(wordcraft_fonts::word::charset_base_family(font)) { MISSING_ROMAN_FONT } else { font }
+    if roman
+        && !wordcraft_fonts::word::is_cjk_family(font)
+        && !db.has_family(font)
+        && !db.has_family(wordcraft_fonts::word::charset_base_family(font))
+    {
+        MISSING_ROMAN_FONT
+    } else {
+        font
+    }
 }
 
 impl<'a> Builder<'a> {
@@ -1208,8 +1233,23 @@ impl<'a> Builder<'a> {
             if ea.is_empty() {
                 None
             } else {
-                wordcraft_fonts::FontDb::global().fallback_for_east_asian(&ea, primary.id(), rc.bold, rc.italic).map(|f| FaceRef::of(&f))
+                // Word's own choice first (ＭＳ 明朝, `han_fallback`), then any face covering them all.
+                wordcraft_fonts::word::han_fallback(&ea, rc.bold, rc.italic).or_else(|| {
+                    wordcraft_fonts::FontDb::global().fallback_for_east_asian(&ea, primary.id(), rc.bold, rc.italic).map(|f| FaceRef::of(&f))
+                })
             }
+        };
+        // Hangul the run's fonts lack: Word for Mac draws it in Batang when the run's East Asian
+        // font (`w:eastAsia` or the theme's, else its font) is an oldstyle serif or one of Word's
+        // serif CJK families, in Malgun Gothic otherwise (`hangul_fallback`, 2026-10-19).
+        let hangul: Option<FaceRef> = if text.chars().any(|c| is_hangul(c) && !primary.covers(c) && !primary_ea.is_some_and(|f| f.covers(c))) {
+            let serif = match ea_named {
+                Some(name) => wordcraft_fonts::word::is_cjk_serif_family(name) || primary_ea.is_some_and(|f| f.is_oldstyle_serif()),
+                None => wordcraft_fonts::word::is_cjk_serif_family(&rc.font) || primary.is_oldstyle_serif(),
+            };
+            wordcraft_fonts::word::hangul_fallback(serif, rc.bold, rc.italic)
+        } else {
+            None
         };
         // Split by font coverage (fallback faces), small caps case, script formatting and direction.
         let mut seg_start = 0;
@@ -1233,6 +1273,8 @@ impl<'a> Builder<'a> {
                 Some(k) if mark => k.face,
                 _ if !complex && east_asian(c) && primary_ea.is_some_and(|f| f.covers(c)) => primary_ea,
                 _ if prim.covers(dc) || c.is_whitespace() || c.is_control() || c == SOFT_HYPHEN => None,
+                // Hangul the fonts lack: Word's Korean face for the run's East Asian font.
+                _ if !complex && hangul.is_some() && is_hangul(c) => hangul,
                 // Stay in the fallback face the word started in while it covers the letters.
                 Some(SegKey { face: Some(f), .. }) if f.covers(dc) => Some(f),
                 // The run's unified East Asian face, when one face covers the whole run.
@@ -1337,18 +1379,26 @@ impl<'a> Builder<'a> {
             for (bi, &gs) in bounds.iter().enumerate() {
                 let ge = bounds.get(bi + 1).copied().unwrap_or(shape_text.len());
                 let g0 = self.glyphs.len() as u32;
+                let s = shape_text.get(gs..ge).unwrap_or("");
+                let ch = s.chars().next().unwrap_or(' ');
                 let mut adv = 0.0f32;
                 while let Some(g) = shaped.get(gi) {
                     if g.cluster >= ge {
                         break;
                     }
                     self.glyphs.push(Glyph { gid: g.gid, dx: adv + g.x_offset as f32 * k * hscale, dy: g.y_offset as f32 * k });
-                    adv += g.x_advance as f32 * k * hscale;
+                    // Standing upright in a vertical column, a glyph moves the column on by its
+                    // vertical advance — Apple SD Gothic Neo's Hangul 1.2 em (28.8 pt at 24 pt in
+                    // Word for Mac, 2026-10-19), a Japanese font's full-width glyphs an em.
+                    let x_advance = if self.env.vertical && crate::display::stands_in_vertical(ch, &st.face, g.gid) {
+                        st.face.vertical_advance(g.gid).map_or(g.x_advance as f32, |v| v as f32)
+                    } else {
+                        g.x_advance as f32
+                    };
+                    adv += x_advance * k * hscale;
                     gi += 1;
                 }
                 let g1 = self.glyphs.len() as u32;
-                let s = shape_text.get(gs..ge).unwrap_or("");
-                let ch = s.chars().next().unwrap_or(' ');
                 let kind = kind_override.unwrap_or(if ch == ' ' || ch == '\u{3000}' {
                     ClKind::Space
                 } else if ch == SOFT_HYPHEN {

@@ -1787,6 +1787,20 @@ fn canvas_background(rect: Rect, c: &wordcraft_doc::para::CanvasStyle) -> Draw {
 /// the line: ideographs, kana, Hangul, full-width letters and digits, and the ideographic comma
 /// and full stop (an approximation of Unicode's vertical orientation, UAX #50). Brackets, dashes
 /// and the prolonged sound mark turn with the line, as their vertical forms do.
+/// Dashes and quotation marks (U+2010–U+2027) lie along a vertical column even when the font
+/// has vertical alternates for them.
+fn lies_in_vertical(c: char) -> bool {
+    matches!(c, '\u{2010}'..='\u{2027}')
+}
+
+/// Does character `c`, shaped as glyph `gid` of `face`, stand upright in a vertical column?
+/// East Asian characters do ([`upright_in_vertical`]), and so does any character the font gave a
+/// vertical alternate (`vert`: its glyph is not the character's horizontal one) unless it lies
+/// by rule ([`lies_in_vertical`]).
+pub fn stands_in_vertical(c: char, face: &wordcraft_fonts::FontFace, gid: u32) -> bool {
+    upright_in_vertical(c) || (!lies_in_vertical(c) && !c.is_whitespace() && gid != 0 && face.glyph_for(c) != gid)
+}
+
 pub fn upright_in_vertical(c: char) -> bool {
     matches!(c,
         '\u{1100}'..='\u{11FF}'
@@ -2097,11 +2111,10 @@ fn stand_up(d: Draw, centre: Option<f32>, out: &mut Vec<Draw>) {
     let char_at = |k: usize| ranges.get(k).and_then(|r| text.get(r.clone())).and_then(|t| t.chars().next());
     // A vertical alternate: the glyph is not the character's horizontal one.
     let alternate = |k: usize, gid: u32| char_at(k).is_some_and(|c| !c.is_whitespace() && face.glyph_for(c) != gid && gid != 0);
-    let lies = |c: char| matches!(c, '\u{2010}'..='\u{2027}');
     if ranges.len() == glyphs.len() {
         for k in 0..glyphs.len() {
             if let Some(c) = char_at(k)
-                && lies(c)
+                && lies_in_vertical(c)
                 && let Some(g) = glyphs.get_mut(k)
                 && alternate(k, g.0)
             {
@@ -2109,7 +2122,7 @@ fn stand_up(d: Draw, centre: Option<f32>, out: &mut Vec<Draw>) {
             }
         }
     }
-    let up = |k: usize| char_at(k).is_some_and(|c| upright_in_vertical(c) || (!lies(c) && glyphs.get(k).is_some_and(|g| alternate(k, g.0))));
+    let up = |k: usize| char_at(k).is_some_and(|c| glyphs.get(k).is_some_and(|g| stands_in_vertical(c, &face, g.0)));
     if ranges.len() != glyphs.len() || !(0..glyphs.len()).any(up) {
         out.push(Draw::Glyphs { face, size, glyphs, color, alpha, synth_bold, synth_italic, text, link, ranges, text_bg });
         return;
@@ -2131,20 +2144,28 @@ fn stand_up(d: Draw, centre: Option<f32>, out: &mut Vec<Draw>) {
         } else {
             for k in k0..k1 {
                 let Some(&(gid, gx, base)) = glyphs.get(k) else { continue };
-                // The em square: one em along the line (less when the glyph advances less, a
-                // compressed punctuation mark; never more: a gap to the next glyph — distributed
-                // ruby letters, expanded spacing — isn't the square's), from about 0.88 em above
-                // the baseline to 0.12 em below it.
-                let adv = glyphs.get(k + 1).map(|g| g.1 - gx).filter(|a| *a > 0.0 && *a < size).unwrap_or(size);
-                let (cx, cy) = (gx + adv / 2.0, centre.unwrap_or(base - size * 0.38));
+                // The glyph's own box: its horizontal advance wide (an em for a full-width
+                // character, 0.865 em for Apple SD Gothic Neo's Hangul — never the layout's
+                // distance to the next glyph, which a compressed mark shortens and distributed
+                // ruby letters or expanded spacing lengthen), hanging from its pen by its
+                // vertical origin (`FontFace::vertical_origin`: 0.88 em for Hiragino and 游明朝,
+                // 0.9 for Apple SD Gothic Neo, 0.80 for Songti SC). Standing it up about the
+                // box's centre puts the box across the column centred on `centre` and its
+                // origin at the pen, as Word for Mac places them — every glyph of a run on one
+                // line across the column, the last one too (vt6/vt7, 2026-10-19).
+                let k_em = size / face.upem.max(1.0) as f32;
+                let hadv = (face.advance(gid) as f32 * k_em).clamp(0.0, size * 4.0);
+                let origin = (face.vertical_origin(gid) as f32 * k_em).clamp(-size * 4.0, size * 4.0);
+                let lift = origin - hadv / 2.0;
+                let (cx, cy) = (gx + hadv / 2.0, centre.unwrap_or(base - lift));
                 let mut g = piece(k, k + 1);
-                // On a column's centre line the square stands centred: its baseline moves
-                // to 0.38 em below the centre first.
+                // On a column's centre line the box stands centred: its baseline moves below the
+                // centre by the origin less half the box first.
                 if let Some(c) = centre
                     && let Draw::Glyphs { glyphs, .. } = &mut g
                 {
                     for (_, _, y) in glyphs.iter_mut() {
-                        *y = c + size * 0.38;
+                        *y = c + lift;
                     }
                 }
                 // The ideographic comma and full stop sit in the upper right of their square in
