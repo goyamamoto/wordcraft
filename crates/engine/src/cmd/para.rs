@@ -188,7 +188,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"value"?: bool}"#),
         CommandSpec::new("tools.kinsokuCharacters", "Kinsoku Characters", "Home › Paragraph › Asian Typography", kinsoku_characters).params(
-            r#"{"lang"?: "ja-JP" (default: the document's East Asian language, else the first list), "noStart"?: str (characters a line may not start with), "noEnd"?: str (may not end with), "standard"?: true (drop the custom lists for the language)} — custom lists replace Word's standard kinsoku for the whole document; returns the lists"#,
+            r#"{"level"?: "standard|strict" (Word's standard or high kinsoku level: at the high level a line may not start with a small kana or ー either), "lang"?: "ja-JP" (default: the document's East Asian language, else the first list), "noStart"?: str (characters a line may not start with), "noEnd"?: str (may not end with), "standard"?: true (drop the custom lists for the language)} — custom lists replace Word's standard kinsoku for the whole document; returns the level and the lists"#,
         ),
         CommandSpec::new("para.asianTypography", "Asian Typography", "Home › Paragraph › Asian Typography", asian_typography).params(
             r#"{"kinsoku"?: bool (East Asian line-breaking rules), "wordWrap"?: bool (false: Latin words may break at any character), "overflowPunct"?: bool (hanging punctuation), "topLinePunct"?: bool (compress punctuation at the start of a line), "autoSpaceDE"?: bool (space between Asian and Latin text), "autoSpaceDN"?: bool (space between Asian text and numbers)} — flags left out stay as they are; returns the flags at the caret"#,
@@ -1283,6 +1283,12 @@ fn kinsoku_characters(s: &mut Session, v: &Value) -> Result<Value, CmdError> {
         .unwrap_or_else(|| "ja-JP".into());
     let take = |k: &str| -> Option<String> { p::str(v, k).map(|t| t.chars().filter(|c| !c.is_control()).take(MAX_KINSOKU_CHARS).collect()) };
     let (no_start, no_end, standard) = (take("noStart"), take("noEnd"), p::bool(v, "standard") == Some(true));
+    match p::str(v, "level").map(str::trim) {
+        Some("strict") | Some("high") => s.doc.settings.strict_kinsoku = true,
+        Some("standard") => s.doc.settings.strict_kinsoku = false,
+        Some(other) => return Err(CmdError::Params(format!("unknown kinsoku level {other:?}"))),
+        None => {}
+    }
     if standard || no_start.is_some() || no_end.is_some() {
         let lists = &mut s.doc.settings.kinsoku_chars;
         if standard {
@@ -1309,5 +1315,5 @@ fn kinsoku_characters(s: &mut Session, v: &Value) -> Result<Value, CmdError> {
         }
     }
     let lists: Vec<Value> = s.doc.settings.kinsoku_chars.iter().map(|k| json!({"lang": k.lang, "noStart": k.no_start, "noEnd": k.no_end})).collect();
-    Ok(json!({"kinsokuCharacters": lists}))
+    Ok(json!({"level": if s.doc.settings.strict_kinsoku { "strict" } else { "standard" }, "kinsokuCharacters": lists}))
 }

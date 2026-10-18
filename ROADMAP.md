@@ -135,7 +135,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 ## Progress log
 
 | Date | What landed |
-| 2026-10-18 | Japanese paragraph spacing in lines (`w:beforeLines`/`w:afterLines`, the 行 units Word's Japanese Paragraph dialog writes) is kept in the file and laid out as Word for Mac does — one line is the document grid's pitch, or the Normal font size without a grid, and lines win over points (`para.spacing` takes `beforeLines`/`afterLines`); custom kinsoku lists (`w:noLineBreaksBefore`/`After`) are read, written and applied, replacing Word's standard lists as Word does (`tools.kinsokuCharacters`) |
+| 2026-10-18 | Japanese paragraph spacing in lines (`w:beforeLines`/`w:afterLines`, the 行 units Word's Japanese Paragraph dialog writes) is kept in the file and laid out as Word for Mac does — one line is the document grid's pitch, or the Normal font size without a grid, and lines win over points (`para.spacing` takes `beforeLines`/`afterLines`); the high kinsoku level (`w:strictFirstAndLastChars`: a line may not start with a small kana or ー) and custom kinsoku lists (`w:noLineBreaksBefore`/`After`) are read, written and applied as Word for Mac does, the lists replacing the standard ones (`tools.kinsokuCharacters`) |
 | 2026-10-18 | Compress punctuation at the start of a line (`w:topLinePunct`, Paragraph › Asian Typography) lays out as Word for Mac does: an opening bracket starting a line hangs half its cell into the margin or indent and the line holds half an em more (half the pitch on a character grid); an opening bracket after any full-width mark loses its blank left half, while the mark before it keeps its width at a line's end so あ、「 wraps together — each case measured in Word |
 | 2026-10-18 | Vertical (縦書き) sections shape East Asian text with the font's vertical forms (OpenType `vert`), compared glyph for glyph with Word for Mac: 、。「」（）ー, the small kana and ：；！？ are drawn as their vertical glyphs, while … and ― keep the horizontal form turned along the line, as Word does |
 | 2026-10-18 | The input method's composition (変換前の文字) is shown inline in the document as Word draws it — at the caret, in the typing font, underlined, the clause being converted thick — instead of beside the caret in the interface font, which drew □ on a Mac account without the CJK interface font loaded; the composition is provisional (no undo step, no dirty flag, never saved, cleared by any command), and the committed text is typed (`Session::set_composition`) |
@@ -419,7 +419,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-18 | trivial | Progress log: spacing in lines and custom kinsoku lists |
+| 2026-10-18 | trivial | Progress log: spacing in lines, the high kinsoku level and custom kinsoku lists |
 | 2026-10-18 | trivial | Progress log: `w:topLinePunct` and opening-bracket compression |
 | 2026-10-18 | trivial | Progress log: vertical forms (`vert`) in 縦書き |
 | 2026-10-18 | trivial | Progress log: IME composition inline |

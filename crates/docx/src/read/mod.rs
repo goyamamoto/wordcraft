@@ -1153,6 +1153,7 @@ impl Reader<'_> {
                     }
                 }
                 "w:evenAndOddHeaders" => s.even_odd_headers = on_off(k),
+                "w:strictFirstAndLastChars" => s.strict_kinsoku = on_off(k),
                 "w:drawingGridHorizontalSpacing" | "w:drawingGridVerticalSpacing" => {
                     if let Some(v) = tw(k, "w:val").filter(|v| *v > 0.0) {
                         let v = v.clamp(0.5, 1584.0);
