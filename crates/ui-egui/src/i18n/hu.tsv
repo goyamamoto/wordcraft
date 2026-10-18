@@ -2631,3 +2631,7 @@
 	A free, open-source word processor written from scratch in Rust.\nA Japanese-enhanced build of WordCraft.	Ingyenes, nyílt forráskódú szövegszerkesztő, a nulláról Rustban írva.\nA WordCraft japán nyelvi támogatással bővített változata.
 	Source code: github.com/goyamamoto/wordcraft	Forráskód: github.com/goyamamoto/wordcraft
 	Upstream project: github.com/storytold/wordcraft	Eredeti projekt: github.com/storytold/wordcraft
+	Half-width	Félszélességű
+	Full-width	Teljes szélességű
+	Hiragana	Hiragana
+	Katakana	Katakana

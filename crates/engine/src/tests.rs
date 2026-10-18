@@ -7281,6 +7281,36 @@ fn a_japanese_region_starts_from_words_japanese_normal_template() {
 /// Word's font box names the East Asian font on 漢字 (Yu Mincho there) and the Latin font on abc in
 /// the same paragraph; a selection goes by its first character.
 #[test]
+fn change_case_converts_japanese_kinds_as_word() {
+    // Word's Change Case with an East Asian editing language adds Half-width, Full-width,
+    // Hiragana and Katakana (文字種の変換); outputs observed in Word for Mac (2026-10-18).
+    let mut s = Session::new(crate::blank_document(&wordcraft_geom::Region::from_tag("ja-JP")));
+    run(&mut s, "text.insert", json!({"text": "ｶﾞｷﾞ アイウ Hello"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.changeCase", json!({"mode": "fullWidth"}));
+    assert_eq!(text(&s), "ガギ\u{3000}アイウ\u{3000}Ｈｅｌｌｏ");
+    run(&mut s, "format.changeCase", json!({"mode": "hiragana"}));
+    assert_eq!(text(&s), "がぎ\u{3000}あいう\u{3000}Ｈｅｌｌｏ");
+    run(&mut s, "format.changeCase", json!({"mode": "katakana"}));
+    assert_eq!(text(&s), "ガギ\u{3000}アイウ\u{3000}Ｈｅｌｌｏ");
+    run(&mut s, "format.changeCase", json!({"mode": "halfWidth"}));
+    assert_eq!(text(&s), "ｶﾞｷﾞ ｱｲｳ Hello");
+    // The Latin kinds leave kana alone and handle fullwidth letters too.
+    run(&mut s, "format.changeCase", json!({"mode": "upper"}));
+    assert_eq!(text(&s), "ｶﾞｷﾞ ｱｲｳ HELLO");
+    // A dropped sound mark shortens the text without losing the run formatting around it.
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "text.insert", json!({"text": "ﾜﾞ"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "format.changeCase", json!({"mode": "hiragana"}));
+    assert_eq!(text(&s), "ﾜ");
+    assert_eq!(run(&mut s, "format.state", json!({}))["bold"], true);
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(text(&s), "ﾜﾞ");
+}
+
+#[test]
 fn format_state_names_the_east_asian_font_on_japanese_text() {
     let mut s = Session::new(crate::blank_document(&wordcraft_geom::Region::from_tag("ja-JP")));
     run(&mut s, "text.insert", json!({"text": "漢字"}));

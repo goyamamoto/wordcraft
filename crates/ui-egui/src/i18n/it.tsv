@@ -2644,3 +2644,7 @@ preview	Title	Esempio
 	A free, open-source word processor written from scratch in Rust.\nA Japanese-enhanced build of WordCraft.	Un elaboratore di testi gratuito e open source, scritto da zero in Rust.\nUna versione di WordCraft con supporto esteso al giapponese.
 	Source code: github.com/goyamamoto/wordcraft	Codice sorgente: github.com/goyamamoto/wordcraft
 	Upstream project: github.com/storytold/wordcraft	Progetto originale: github.com/storytold/wordcraft
+	Half-width	Larghezza dimezzata
+	Full-width	Larghezza intera
+	Hiragana	Hiragana
+	Katakana	Katakana

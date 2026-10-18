@@ -2270,3 +2270,7 @@
 	A free, open-source word processor written from scratch in Rust.\nA Japanese-enhanced build of WordCraft.	Tasuta avatud lähtekoodiga tekstitöötlusprogramm, nullist Rustis kirjutatud.\nWordCrafti väljaanne laiendatud jaapani keele toega.
 	Source code: github.com/goyamamoto/wordcraft	Lähtekood: github.com/goyamamoto/wordcraft
 	Upstream project: github.com/storytold/wordcraft	Algne projekt: github.com/storytold/wordcraft
+	Half-width	Poollaiusega
+	Full-width	Täislaiusega
+	Hiragana	Hiragana
+	Katakana	Katakana

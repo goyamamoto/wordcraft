@@ -816,6 +816,11 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                     mi(ui, app, "UPPERCASE", "format.changeCase", json!({"mode": "upper"}));
                     mi(ui, app, "Capitalize Each Word", "format.changeCase", json!({"mode": "title"}));
                     mi(ui, app, "tOGGLE cASE", "format.changeCase", json!({"mode": "toggle"}));
+                    ui.separator();
+                    mi(ui, app, "Half-width", "format.changeCase", json!({"mode": "halfWidth"}));
+                    mi(ui, app, "Full-width", "format.changeCase", json!({"mode": "fullWidth"}));
+                    mi(ui, app, "Hiragana", "format.changeCase", json!({"mode": "hiragana"}));
+                    mi(ui, app, "Katakana", "format.changeCase", json!({"mode": "katakana"}));
                 });
                 small(ui, app, "clear", None, "Clear All Formatting", "format.clear", json!({}), false);
                 small(ui, app, "phonetic", None, "Phonetic Guide", "format.phonetic", json!({}), false);

@@ -25,6 +25,7 @@ pub mod eq;
 pub mod fields;
 pub mod freeform;
 pub mod graphic;
+pub mod kana;
 pub mod link;
 pub mod locale_number;
 pub mod math;
