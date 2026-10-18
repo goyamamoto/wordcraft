@@ -2672,3 +2672,6 @@ template	Letter	Thư
 # Reading Mode column widths (#1040)
 	Narrow	Hẹp
 	Medium	Trung bình
+	A free, open-source word processor written from scratch in Rust.\nA Japanese-enhanced build of WordCraft.	Trình soạn thảo văn bản miễn phí, mã nguồn mở, viết từ đầu bằng Rust.\nBản WordCraft tăng cường hỗ trợ tiếng Nhật.
+	Source code: github.com/goyamamoto/wordcraft	Mã nguồn: github.com/goyamamoto/wordcraft
+	Upstream project: github.com/storytold/wordcraft	Dự án gốc: github.com/storytold/wordcraft

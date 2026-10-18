@@ -2599,3 +2599,6 @@ preview	Title	Título
 # Reading Mode column widths (#1040)
 	Narrow	Estrecha
 	Medium	Media
+	A free, open-source word processor written from scratch in Rust.\nA Japanese-enhanced build of WordCraft.	Un procesador de textos libre y de código abierto, escrito desde cero en Rust.\nUna versión de WordCraft con compatibilidad ampliada con el japonés.
+	Source code: github.com/goyamamoto/wordcraft	Código fuente: github.com/goyamamoto/wordcraft
+	Upstream project: github.com/storytold/wordcraft	Proyecto original: github.com/storytold/wordcraft
