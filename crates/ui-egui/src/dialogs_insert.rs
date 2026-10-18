@@ -1,7 +1,8 @@
-//! Columns, Symbol and Field dialogs (#321): Layout › Columns › More Columns…, Insert › Symbol ›
-//! More Symbols… and Insert › Quick Parts › Field…. Each ends by running one command
-//! (`layout.columns`, `insert.symbol`, `insert.field`), so scripts and agents get the same result
-//! without the dialog. Shown through [`crate::dialogs::Dialog::Insert`].
+//! Columns, Symbol, Field and Date and Time dialogs (#321): Layout › Columns › More Columns…,
+//! Insert › Symbol › More Symbols…, Insert › Quick Parts › Field… and Insert › Date & Time. Each
+//! ends by running one command (`layout.columns`, `insert.symbol`, `insert.field`,
+//! `insert.dateTime`), so scripts and agents get the same result without the dialog. Shown
+//! through [`crate::dialogs::Dialog::Insert`].
 
 use egui::{Color32, Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,7 @@ pub enum InsertDialog {
     Columns(ColumnsForm),
     Symbol(SymbolForm),
     Field(FieldForm),
+    DateTime(DateTimeForm),
     SmartArt(crate::dialogs_smart_art::SmartArtForm),
     ChartType(crate::dialogs_chart::ChartTypeForm),
     ChartData(crate::dialogs_chart::ChartDataForm),
@@ -28,6 +30,7 @@ impl InsertDialog {
             InsertDialog::Columns(_) => "columns",
             InsertDialog::Symbol(_) => "symbol",
             InsertDialog::Field(_) => "field",
+            InsertDialog::DateTime(_) => "dateTime",
             InsertDialog::SmartArt(_) => "insertSmartArt",
             InsertDialog::ChartType(f) if f.change => "changeChartType",
             InsertDialog::ChartType(_) => "insertChart",
@@ -41,6 +44,7 @@ impl InsertDialog {
             InsertDialog::Columns(_) => "Columns",
             InsertDialog::Symbol(_) => "Symbol",
             InsertDialog::Field(_) => "Field",
+            InsertDialog::DateTime(_) => "Date and Time",
             InsertDialog::SmartArt(_) => "Insert SmartArt",
             InsertDialog::ChartType(f) if f.change => "Change Chart Type",
             InsertDialog::ChartType(_) => "Insert Chart",
@@ -50,7 +54,7 @@ impl InsertDialog {
 }
 
 /// The dialog `ui.dialog` opens by `name`: `columns`, `symbol`, `specialCharacters`, `field`,
-/// `insertChart`, `changeChartType` or `chartData` (the last two for the selected chart), or
+/// `dateTime`, `insertChart`, `changeChartType` or `chartData` (the last two for the selected chart), or
 /// `insertSmartArt`.
 pub fn open(name: &str, app: &WordApp) -> Option<InsertDialog> {
     Some(match name {
@@ -58,6 +62,7 @@ pub fn open(name: &str, app: &WordApp) -> Option<InsertDialog> {
         "symbol" => InsertDialog::Symbol(SymbolForm::new(app, 0)),
         "specialCharacters" => InsertDialog::Symbol(SymbolForm::new(app, 1)),
         "field" => InsertDialog::Field(FieldForm::new(app)),
+        "dateTime" => InsertDialog::DateTime(DateTimeForm::new(app)),
         "insertSmartArt" => InsertDialog::SmartArt(crate::dialogs_smart_art::SmartArtForm::new(app)),
         "insertChart" => InsertDialog::ChartType(crate::dialogs_chart::ChartTypeForm::new(app, false)?),
         "changeChartType" => InsertDialog::ChartType(crate::dialogs_chart::ChartTypeForm::new(app, true)?),
@@ -72,6 +77,7 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, d: &mut InsertDialog) -> bool {
         InsertDialog::Columns(f) => columns_ui(app, ui, f),
         InsertDialog::Symbol(f) => symbol_ui(app, ui, f),
         InsertDialog::Field(f) => field_ui(app, ui, f),
+        InsertDialog::DateTime(f) => date_time_ui(app, ui, f),
         InsertDialog::SmartArt(f) => crate::dialogs_smart_art::picker_ui(app, ui, f),
         InsertDialog::ChartType(f) => crate::dialogs_chart::type_ui(app, ui, f),
         InsertDialog::ChartData(f) => crate::dialogs_chart::data_ui(app, ui, f),
@@ -985,6 +991,44 @@ pub const DATE_FORMATS: &[&str] = &[
     "HH:mm:ss",
 ];
 
+/// Word's date pictures for Japanese (the Date and Time and Field dialogs' list with Japanese as
+/// the language): 和暦 with `ggg`/`gg`/`g` and `e`, the weekday with `aaa`, 午前/午後 with
+/// `ampm` — the tokens Word for Mac evaluates (see `wordcraft_engine::cmd::wareki`).
+pub const DATE_FORMATS_JA: &[&str] = &[
+    "yyyy年M月d日",
+    "yyyy年M月d日 aaa曜日",
+    "yyyy/M/d",
+    "yyyy/M/d H:mm",
+    "yyyy/M/d H:mm:ss",
+    "yyyy-MM-dd",
+    "ggge年M月d日",
+    "ggge年M月d日 aaa曜日",
+    "yy.M.d",
+    "gge.M.d",
+    "ge.M.d",
+    "yyyy年M月",
+    "M月d日",
+    "H:mm",
+    "H:mm:ss",
+    "ampmh時m分",
+    "ampmh時m分ss秒",
+    "H時m分",
+    "H時m分ss秒",
+];
+
+/// The date pictures the dialogs list for a language.
+pub fn date_formats(japanese: bool) -> &'static [&'static str] {
+    if japanese { DATE_FORMATS_JA } else { DATE_FORMATS }
+}
+
+/// Whether the text at the caret is Japanese (its East Asian language), which picks the
+/// Japanese date pictures as Word's dialogs do for the language of the text at the insertion
+/// point.
+fn caret_is_japanese(app: &WordApp) -> bool {
+    let st = wordcraft_engine::cmd::format::state(&app.session);
+    st.get("langEastAsia").and_then(Value::as_str).is_some_and(|t| t.len() >= 2 && t.get(..2).is_some_and(|p| p.eq_ignore_ascii_case("ja")))
+}
+
 /// Number formats for the `\*` switch: (switch value, example).
 pub const NUMBER_FORMATS: &[(&str, &str)] = &[
     ("", "(none)"),
@@ -1020,6 +1064,8 @@ pub struct FieldForm {
     pub name: String,
     /// `\@` picture for date fields.
     pub date_format: String,
+    /// The date pictures listed are Japanese (the text at the caret is Japanese).
+    pub japanese: bool,
     /// `\*` value for number fields (empty = none).
     pub number_format: String,
     /// Bookmark (REF, PAGEREF), sequence name (SEQ), merge field (MERGEFIELD) or style name
@@ -1051,7 +1097,8 @@ impl FieldForm {
         let mut f = FieldForm {
             category: FIELD_CATEGORIES.first().copied().unwrap_or("(All)").to_string(),
             name: "DATE".into(),
-            date_format: DATE_FORMATS.first().copied().unwrap_or("M/d/yyyy").to_string(),
+            date_format: date_formats(caret_is_japanese(app)).first().copied().unwrap_or("M/d/yyyy").to_string(),
+            japanese: caret_is_japanese(app),
             number_format: String::new(),
             target: String::new(),
             preserve: true,
@@ -1098,7 +1145,13 @@ impl FieldForm {
         };
         self.style_switches.clear();
         if field_kind(name) == FieldKind::Date {
-            self.date_format = if name == "TIME" { "h:mm am/pm" } else { "M/d/yyyy" }.into();
+            self.date_format = match (self.japanese, name == "TIME") {
+                (true, true) => "H:mm",
+                (true, false) => "yyyy年M月d日",
+                (false, true) => "h:mm am/pm",
+                (false, false) => "M/d/yyyy",
+            }
+            .into();
         }
         self.code = self.instruction();
     }
@@ -1244,7 +1297,7 @@ fn field_options(ui: &mut Ui, f: &mut FieldForm, t: &Tokens) {
             ui.add(egui::TextEdit::singleline(&mut f.date_format).desired_width(f32::INFINITY));
             egui::Frame::new().stroke(Stroke::new(1.0, t.border)).inner_margin(2.0).show(ui, |ui| {
                 egui::ScrollArea::vertical().id_salt("field_dates").max_height(170.0).auto_shrink([false, false]).show(ui, |ui| {
-                    for pic in DATE_FORMATS {
+                    for pic in date_formats(f.japanese) {
                         let sample = wordcraft_engine::cmd::insert::format_date(pic);
                         if ui.selectable_label(f.date_format == *pic, sample).on_hover_text(*pic).clicked() {
                             f.date_format = (*pic).to_string();
@@ -1319,6 +1372,89 @@ fn field_options(ui: &mut Ui, f: &mut FieldForm, t: &Tokens) {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Date and Time (Insert › Text › Date & Time)
+
+/// The Date and Time dialog: Word's list of formats for a language (the text at the caret's,
+/// Japanese on Japanese text), Update automatically (a DATE field instead of text), and OK runs
+/// `insert.dateTime`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DateTimeForm {
+    /// The picture to insert.
+    pub format: String,
+    /// Japanese formats (和暦, 曜日…) rather than the English list.
+    pub japanese: bool,
+    /// Insert a DATE field that updates, not plain text.
+    pub update: bool,
+}
+
+impl DateTimeForm {
+    pub fn new(app: &WordApp) -> Self {
+        let japanese = caret_is_japanese(app);
+        Self { format: date_formats(japanese).first().copied().unwrap_or("M/d/yyyy").to_string(), japanese, update: false }
+    }
+
+    /// Switch the language's list; the first format of the new list is selected.
+    pub fn set_japanese(&mut self, japanese: bool) {
+        if self.japanese != japanese {
+            self.japanese = japanese;
+            self.format = date_formats(japanese).first().copied().unwrap_or("M/d/yyyy").to_string();
+        }
+    }
+
+    pub fn params(&self) -> Value {
+        json!({"format": self.format, "update": self.update})
+    }
+}
+
+fn date_time_ui(app: &mut WordApp, ui: &mut Ui, f: &mut DateTimeForm) -> bool {
+    let t = Tokens::get(ui.ctx());
+    ui.set_width(380.0);
+    ui.horizontal_top(|ui| {
+        ui.vertical(|ui| {
+            ui.label(tl!("Available formats:"));
+            egui::Frame::new().stroke(Stroke::new(1.0, t.border)).inner_margin(2.0).show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("date_time_formats")
+                    .max_height(230.0)
+                    .min_scrolled_height(230.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.set_min_width(220.0);
+                        for pic in date_formats(f.japanese) {
+                            let sample = wordcraft_engine::cmd::insert::format_date(pic);
+                            if ui.selectable_label(f.format == *pic, sample).on_hover_text(*pic).clicked() {
+                                f.format = (*pic).to_string();
+                            }
+                        }
+                    });
+            });
+        });
+        ui.add_space(12.0);
+        ui.vertical(|ui| {
+            ui.label(tl!("Language:"));
+            let shown = if f.japanese { tl!("Japanese") } else { tl!("English (United States)") };
+            egui::ComboBox::from_id_salt("date_time_language").selected_text(shown).width(150.0).show_ui(ui, |ui| {
+                let mut ja = f.japanese;
+                ui.selectable_value(&mut ja, false, tl!("English (United States)"));
+                ui.selectable_value(&mut ja, true, tl!("Japanese"));
+                f.set_japanese(ja);
+            });
+            ui.add_space(8.0);
+            ui.checkbox(&mut f.update, tl!("Update automatically"));
+        });
+    });
+    let (ok, cancel) = buttons(ui, "OK", "Cancel", !f.format.trim().is_empty());
+    if ok {
+        match app.run("insert.dateTime", f.params()) {
+            Ok(_) => return true,
+            Err(e) => app.status(e),
+        }
+    }
+    cancel
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1374,6 +1510,57 @@ mod tests {
         // (normal text) inserts without a font.
         f.font.clear();
         assert_eq!(f.params().unwrap(), json!({"char": "\u{2665}"}));
+    }
+
+    /// Insert › Date & Time lists Word's Japanese formats on Japanese text (和暦, 曜日, 午後) and
+    /// inserts the chosen one — as text, or as a DATE field with Update automatically; the
+    /// English list on English text.
+    #[test]
+    fn date_time_dialog_follows_the_language_of_the_text() {
+        let mut a = app();
+        assert_eq!(a.run("ui.dialog", json!({"name": "dateTime"})).unwrap()["dialog"], "dateTime");
+        let Some(crate::dialogs::Dialog::Insert(d)) = a.dialog.take() else { panic!("no dialog") };
+        let InsertDialog::DateTime(f) = *d else { panic!("not Date and Time") };
+        assert!(!f.japanese);
+        assert_eq!(f.format, "M/d/yyyy");
+        assert_eq!(f.params(), json!({"format": "M/d/yyyy", "update": false}));
+        let mut ja = f.clone();
+        ja.set_japanese(true);
+        assert_eq!(ja.format, "yyyy年M月d日");
+
+        let mut a = app();
+        a.run("select.all", json!({})).unwrap();
+        a.run("review.language", json!({"lang": "ja-JP"})).unwrap();
+        a.run("caret.docEnd", json!({})).unwrap();
+        a.run("ui.dialog", json!({"name": "dateTime"})).unwrap();
+        let Some(crate::dialogs::Dialog::Insert(d)) = a.dialog.take() else { panic!("no dialog") };
+        let InsertDialog::DateTime(mut f) = *d else { panic!("not Date and Time") };
+        assert!(f.japanese, "Japanese text lists the Japanese formats");
+        assert_eq!(f.format, "yyyy年M月d日");
+        assert!(DATE_FORMATS_JA.contains(&"ggge年M月d日 aaa曜日"));
+        f.format = "ggge年M月d日".into();
+        f.update = true;
+        a.run("insert.dateTime", f.params()).unwrap();
+        let today = wordcraft_engine::cmd::insert::format_date("ggge年M月d日");
+        assert!(today.starts_with("令和"), "{today}");
+        let text = a.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+        assert!(text.ends_with(&today), "{text}");
+        let fields: Vec<String> = a
+            .session
+            .doc
+            .para_paths(wordcraft_doc::StoryRef::Body)
+            .iter()
+            .flat_map(|p| a.session.doc.para(wordcraft_doc::StoryRef::Body, p).map(|p| p.objects.clone()).unwrap_or_default())
+            .filter_map(|o| match o {
+                wordcraft_doc::InlineObject::Field { instr, .. } => Some(instr),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(fields, vec![r#"DATE \@ "ggge年M月d日""#.to_string()]);
+        // The Field dialog's DATE list follows the text too.
+        let f = FieldForm::new(&a);
+        assert!(f.japanese);
+        assert_eq!(f.instruction(), r#"DATE \@ "yyyy年M月d日" \* MERGEFORMAT"#);
     }
 
     /// The Field dialog builds the field code from its options.

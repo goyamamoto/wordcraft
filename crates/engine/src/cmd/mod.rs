@@ -47,6 +47,7 @@ pub mod templates;
 pub mod text;
 pub mod tools;
 pub mod view;
+pub mod wareki;
 pub mod wordart;
 
 use serde_json::{Value, json};

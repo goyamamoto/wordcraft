@@ -800,14 +800,28 @@ pub fn format_date(fmt: &str) -> String {
 }
 
 /// Format a date and time with a Word picture; `days_since` (days since 1970-01-01) gives the weekday.
+///
+/// Word's tokens, as Word for Mac evaluates them (observed 2026-10-18): `y`/`Y` year, `M` month,
+/// `d`/`D` day (`ddd`, `dddd` the English weekday), `H` and `h` hours, `m` minutes, `s`/`S`
+/// seconds, `am/pm` (any case) AM or PM, `'…'` literal text, and the Japanese tokens of
+/// [`super::wareki`] — `ggg`/`gg`/`g`/`GG`/`G` the era, `e`/`ee`/`E` the era year, `EE` the year
+/// in kanji, `aaa` the weekday's kanji, `A` and `O` the day and month in kanji, `ampm` 午前/午後.
+/// A run longer than a token's longest form is cut into tokens from the left (`gggg` = `ggg` +
+/// `g`), as Word does. Other characters are copied.
 pub fn format_date_parts(fmt: &str, y: i64, m: usize, d: u32, (hh, mm, ss): (u32, u32, u32), days_since: i64) -> String {
+    use super::wareki::{era_of, kanji_digits, kanji_number, weekday_kanji};
     const MONTHS: [&str; 12] =
         ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
     const DAYS: [&str; 7] = ["Thursday", "Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday"];
     let month = MONTHS.get(m.saturating_sub(1)).copied().unwrap_or("January");
     let day = DAYS.get(days_since.rem_euclid(7) as usize).copied().unwrap_or("Monday");
+    let era = era_of(y, m.min(12) as u32, d);
+    // The year within the era; the western year before 明治.
+    let era_year = era.map(|(_, n)| n).unwrap_or(y);
+    let era_text = |f: fn(&super::wareki::Era) -> &'static str| era.map(|(e, _)| f(e)).unwrap_or("");
     let mut out = String::new();
     let chars: Vec<char> = fmt.chars().collect();
+    let word = |i: usize, w: &str| chars.get(i..i + w.chars().count()).is_some_and(|c| c.iter().collect::<String>() == w);
     let mut i = 0;
     while i < chars.len() {
         let c = chars.get(i).copied().unwrap_or(' ');
@@ -817,36 +831,67 @@ pub fn format_date_parts(fmt: &str, y: i64, m: usize, d: u32, (hh, mm, ss): (u32
             i += 5;
             continue;
         }
+        // `ampm` (each half lowercase or uppercase, as Word takes it) is 午前 or 午後.
+        if (word(i, "am") || word(i, "AM")) && (word(i + 2, "pm") || word(i + 2, "PM")) {
+            out.push_str(if hh < 12 { "午前" } else { "午後" });
+            i += 4;
+            continue;
+        }
+        // `'text'` is copied without the quotes.
+        if c == '\'' {
+            let end = chars.get(i + 1..).and_then(|rest| rest.iter().position(|&x| x == '\''));
+            match end {
+                Some(len) => {
+                    out.extend(chars.get(i + 1..i + 1 + len).unwrap_or(&[]));
+                    i += len + 2;
+                }
+                None => {
+                    out.extend(chars.get(i + 1..).unwrap_or(&[]));
+                    i = chars.len();
+                }
+            }
+            continue;
+        }
         let mut n = 1;
         while chars.get(i + n) == Some(&c) {
             n += 1;
         }
-        match (c, n) {
-            ('y', 4..) => out.push_str(&format!("{y:04}")),
-            ('y', _) => out.push_str(&format!("{:02}", y % 100)),
-            ('M', 4..) => out.push_str(month),
-            ('M', 3) => out.push_str(month.get(..3).unwrap_or(month)),
-            ('M', 2) => out.push_str(&format!("{m:02}")),
-            ('M', 1) => out.push_str(&m.to_string()),
-            ('d', 4..) => out.push_str(day),
-            ('d', 3) => out.push_str(day.get(..3).unwrap_or(day)),
-            ('d', 2) => out.push_str(&format!("{d:02}")),
-            ('d', 1) => out.push_str(&d.to_string()),
-            ('H', 2..) => out.push_str(&format!("{hh:02}")),
-            ('H', _) => out.push_str(&hh.to_string()),
-            ('h', _) => out.push_str(&(if hh.is_multiple_of(12) { 12 } else { hh % 12 }).to_string()),
-            ('m', 2..) => out.push_str(&format!("{mm:02}")),
-            ('m', _) => out.push_str(&mm.to_string()),
-            ('s', 2..) => out.push_str(&format!("{ss:02}")),
-            ('s', _) => out.push_str(&ss.to_string()),
-            ('a' | 'A', _) => out.push_str(if hh < 12 { "AM" } else { "PM" }),
-            _ => {
-                for _ in 0..n {
-                    out.push(c);
-                }
-            }
-        }
-        i += n;
+        // (characters taken, text) — a run longer than the longest token is cut from the left.
+        let (take, text): (usize, String) = match (c, n) {
+            ('y' | 'Y', 4..) => (n, format!("{y:04}")),
+            ('y' | 'Y', _) => (n, format!("{:02}", y.rem_euclid(100))),
+            ('M', 4..) => (n, month.to_string()),
+            ('M', 3) => (n, month.get(..3).unwrap_or(month).to_string()),
+            ('M', 2) => (n, format!("{m:02}")),
+            ('M', 1) => (n, m.to_string()),
+            ('d' | 'D', 4..) => (n, day.to_string()),
+            ('d' | 'D', 3) => (n, day.get(..3).unwrap_or(day).to_string()),
+            ('d' | 'D', 2) => (n, format!("{d:02}")),
+            ('d' | 'D', 1) => (n, d.to_string()),
+            ('H', 2..) => (n, format!("{hh:02}")),
+            ('H', _) => (n, hh.to_string()),
+            ('h', _) => (n, (if hh.is_multiple_of(12) { 12 } else { hh % 12 }).to_string()),
+            ('m', 2..) => (n, format!("{mm:02}")),
+            ('m', _) => (n, mm.to_string()),
+            ('s' | 'S', 2..) => (n, format!("{ss:02}")),
+            ('s' | 'S', _) => (n, ss.to_string()),
+            ('g', 3..) => (3, era_text(|e| e.name).to_string()),
+            ('g', 2) => (2, era_text(|e| e.short).to_string()),
+            ('g', _) => (1, era_text(|e| e.latin).to_string()),
+            ('G', 2..) => (2, era_text(|e| e.name).to_string()),
+            ('G', _) => (1, era_text(|e| e.short).to_string()),
+            ('e', 2..) => (2, format!("{era_year:02}")),
+            ('e', _) => (1, era_year.to_string()),
+            ('E', 2..) => (2, kanji_digits(y)),
+            ('E', _) => (1, kanji_number(era_year)),
+            ('a', 3..) => (3, weekday_kanji(days_since).to_string()),
+            ('a', _) => (n, "a".to_string()),
+            ('A', _) => (1, kanji_number(i64::from(d))),
+            ('O', _) => (1, kanji_number(m as i64)),
+            _ => (n, std::iter::repeat_n(c, n).collect()),
+        };
+        out.push_str(&text);
+        i += take.max(1);
     }
     out
 }
@@ -1139,5 +1184,61 @@ mod tests {
         assert_eq!(date_picture(r#"DATE \@ "MMMM d, yyyy" \* MERGEFORMAT"#).as_deref(), Some("MMMM d, yyyy"));
         assert_eq!(date_picture(r#"TIME \@ HH:mm"#).as_deref(), Some("HH:mm"));
         assert_eq!(date_picture("DATE"), None);
+    }
+
+    /// Word's Japanese date pictures give what Word for Mac gave on 2026-10-18 (Sunday) at
+    /// 18:48:36, token by token (see `cmd::wareki`).
+    #[test]
+    fn japanese_date_pictures_match_word() {
+        let days = super::super::controls::days_from_civil(2026, 10, 18);
+        let f = |pic: &str| format_date_parts(pic, 2026, 10, 18, (18, 48, 36), days);
+        assert_eq!(f("ggge年M月d日"), "令和8年10月18日");
+        assert_eq!(f("ggge年M月d日(aaa)"), "令和8年10月18日(日)");
+        assert_eq!(f("yyyy年M月d日 aaa曜日"), "2026年10月18日 日曜日");
+        assert_eq!(f("ggg"), "令和");
+        assert_eq!(f("gg"), "令");
+        assert_eq!(f("g"), "R");
+        assert_eq!(f("gggg"), "令和R");
+        assert_eq!(f("ggggg"), "令和令");
+        assert_eq!(f("G"), "令");
+        assert_eq!(f("GG"), "令和");
+        assert_eq!(f("GGG"), "令和令");
+        assert_eq!(f("e"), "8");
+        assert_eq!(f("ee"), "08");
+        assert_eq!(f("eee"), "088");
+        assert_eq!(f("E"), "八");
+        assert_eq!(f("EE"), "二○二六");
+        assert_eq!(f("ggE年O月A日"), "令八年十月十八日");
+        assert_eq!(f("aaa"), "日");
+        assert_eq!(f("aaaa"), "日a");
+        assert_eq!(f("aaaaa"), "日a");
+        assert_eq!(f("a"), "a");
+        assert_eq!(f("aa"), "a");
+        assert_eq!(f("A"), "十八");
+        assert_eq!(f("AA"), "十八十八");
+        assert_eq!(f("O"), "十");
+        assert_eq!(f("ampm"), "午後");
+        assert_eq!(f("AMPM"), "午後");
+        assert_eq!(f("amPM"), "午後");
+        assert_eq!(f("ampmh時m分"), "午後6時48分");
+        assert_eq!(f("Hampm"), "18午後");
+        assert_eq!(f("am/pm"), "PM");
+        assert_eq!(f("AM/pm"), "PM");
+        assert_eq!(f("h:mm am/pm"), "6:48 PM");
+        assert_eq!(f("gge.M.d"), "令8.10.18");
+        assert_eq!(f("ge.M.d"), "R8.10.18");
+        assert_eq!(f("yy.M.d"), "26.10.18");
+        assert_eq!(f("yyyy/M/d H:mm:ss"), "2026/10/18 18:48:36");
+        assert_eq!(f("D DDD YYYY S"), "18 Sun 2026 36");
+        assert_eq!(f("'ggg' ggg元年"), "ggg 令和元年");
+        assert_eq!(f("日 d"), "日 18");
+        // Morning, the era's first year, and a date before 明治.
+        assert_eq!(format_date_parts("ampm h:mm ggge年", 2019, 5, 1, (9, 5, 0), days), "午前 9:05 令和1年");
+        assert_eq!(format_date_parts("ggg gg g e E", 1850, 1, 1, (0, 0, 0), days), "   1850 一八五○");
+        // Hostile pictures never panic.
+        for pic in ["'", "'unterminated", "", "ggg'", "aaaaaaaaaaaaaaaaaaaaaaaa", "\u{10FFFF}y", "EEEEE", "AAAAAAAAA"] {
+            let _ = format_date_parts(pic, i64::MIN, 0, 0, (99, 99, 99), i64::MAX);
+            let _ = format_date_parts(pic, i64::MAX, 99, 99, (0, 0, 0), i64::MIN);
+        }
     }
 }
