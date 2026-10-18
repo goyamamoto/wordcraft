@@ -7531,6 +7531,30 @@ fn custom_kinsoku_lists_replace_the_standard_ones_in_layout() {
     assert_eq!(lines_of(&open, true), vec![38, 11], "「 may still not end a line");
 }
 
+/// Word's high kinsoku level (`w:strictFirstAndLastChars`, measured in Word for Mac on
+/// 39-character lines): い×39 then ぁ, ー or ッ wraps as 38 / いぁ…, where the standard level
+/// lets the small kana start the line; 々 and ゛ move on together at either level.
+#[test]
+fn the_strict_kinsoku_level_moves_small_kana_on_with_the_character_before() {
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+    let lines_of = |c: char, strict: bool| {
+        let mut d = Document::from_text("");
+        d.settings.strict_kinsoku = strict;
+        d.body =
+            vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("{}{c}{}", "い".repeat(39), "い".repeat(10)), chr.clone()))];
+        let l = lay(&d);
+        first_para(&l).lines.iter().map(|ln| ln.c1 - ln.c0).collect::<Vec<_>>()
+    };
+    for c in ['ぁ', 'ー', 'ッ'] {
+        assert_eq!(lines_of(c, false), vec![39, 11], "{c} starts a line at the standard level");
+        assert_eq!(lines_of(c, true), vec![38, 12], "{c} moves on at the high level");
+    }
+    for c in ['々', '゛'] {
+        assert_eq!(lines_of(c, false), vec![38, 12]);
+        assert_eq!(lines_of(c, true), vec![38, 12]);
+    }
+}
+
 #[test]
 fn east_asian_text_takes_the_theme_script_font_for_its_language() {
     // Word draws Japanese in an Aptos paragraph with the theme's Jpan minor font (游明朝) and

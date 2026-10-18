@@ -49,16 +49,29 @@ pub fn is_east_asian(c: char) -> bool {
         | 0x20000..=0x3FFFF) // supplementary ideographs
 }
 
+/// The document's kinsoku level (Word's Options › Typography): the standard lists, the high
+/// level (`w:strictFirstAndLastChars`), or its own lists.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Level<'a> {
+    /// Word's standard level: a line may start with a small kana or ー.
+    #[default]
+    Standard,
+    /// Word's high level: it may not (Word for Mac, measured: いぁ, いー, いッ move on together).
+    Strict,
+    /// The document's own lists (characters a line may not start with, may not end with:
+    /// `w:noLineBreaksBefore`/`After`), which replace the standard ones: a line may then break
+    /// between any two East Asian characters not in them, as Word for Mac does (with
+    /// `noLineBreaksBefore="あ"` a 。 starts a line and あ no longer does).
+    Custom { no_start: &'a str, no_end: &'a str },
+}
+
 /// Adjust the break opportunities `opps` (byte offsets into `text`: a line may start there) for
-/// the paragraph's kinsoku and word-wrap settings. The result is sorted and has no duplicates.
-/// `custom` is the document's own kinsoku lists (characters a line may not start with, may not
-/// end with: `w:noLineBreaksBefore`/`After`), which replace the standard ones when present: a
-/// line may then break between any two East Asian characters not in them, as Word for Mac does
-/// (with `noLineBreaksBefore="あ"` a 。 starts a line and あ no longer does).
-pub fn apply(text: &str, opps: &mut Vec<usize>, kinsoku: bool, word_wrap: bool, custom: Option<(&str, &str)>) {
+/// the paragraph's kinsoku and word-wrap settings at the document's kinsoku `level`. The result
+/// is sorted and has no duplicates.
+pub fn apply(text: &str, opps: &mut Vec<usize>, kinsoku: bool, word_wrap: bool, level: Level) {
     let next_char = |i: usize| text.get(i..).and_then(|t| t.chars().next());
     let prev_char = |i: usize| text.get(..i).and_then(|t| t.chars().next_back());
-    if let (true, Some((no_start, no_end))) = (kinsoku, custom) {
+    if let (true, Level::Custom { no_start, no_end }) = (kinsoku, level) {
         for (i, c) in text.char_indices().skip(1) {
             if is_east_asian(c) && prev_char(i).is_some_and(is_east_asian) {
                 opps.push(i);
@@ -67,11 +80,16 @@ pub fn apply(text: &str, opps: &mut Vec<usize>, kinsoku: bool, word_wrap: bool, 
         opps.retain(|&i| !next_char(i).is_some_and(|c| no_start.contains(c)) && !prev_char(i).is_some_and(|c| no_end.contains(c)));
     } else if kinsoku {
         opps.retain(|&i| !next_char(i).is_some_and(|c| NO_START.contains(c)) && !prev_char(i).is_some_and(|c| NO_END.contains(c)));
-        // Before a small kana or ー after an East Asian letter (not after opening punctuation).
-        for (i, c) in text.char_indices().skip(1) {
-            if is_conditional_starter(c) && prev_char(i).is_some_and(|p| is_east_asian(p) && !NO_END.contains(p)) {
-                opps.push(i);
+        // Before a small kana or ー after an East Asian letter (not after opening punctuation),
+        // at the standard level only.
+        if level == Level::Standard {
+            for (i, c) in text.char_indices().skip(1) {
+                if is_conditional_starter(c) && prev_char(i).is_some_and(|p| is_east_asian(p) && !NO_END.contains(p)) {
+                    opps.push(i);
+                }
             }
+        } else {
+            opps.retain(|&i| !next_char(i).is_some_and(is_conditional_starter));
         }
     } else {
         // Between any two East Asian characters.
@@ -104,7 +122,7 @@ mod tests {
     /// Where a line may start, as the text from there to the next opportunity.
     fn breaks(text: &str, kinsoku: bool, word_wrap: bool) -> Vec<String> {
         let mut opps: Vec<usize> = unicode_linebreak::linebreaks(text).map(|(i, _)| i).filter(|&i| i < text.len()).collect();
-        apply(text, &mut opps, kinsoku, word_wrap, None);
+        apply(text, &mut opps, kinsoku, word_wrap, super::Level::Standard);
         opps.iter().map(|&i| text.get(i..).and_then(|t| t.chars().next()).map(String::from).unwrap_or_default()).collect()
     }
 
@@ -141,12 +159,26 @@ mod tests {
     fn custom_kinsoku_lists_replace_the_standard_ones() {
         let text = "いあい。い「い";
         let mut opps: Vec<usize> = unicode_linebreak::linebreaks(text).map(|(i, _)| i).filter(|&i| i < text.len()).collect();
-        apply(text, &mut opps, true, true, Some(("あ", "「")));
+        apply(text, &mut opps, true, true, super::Level::Custom { no_start: "あ", no_end: "「" });
         let starts: Vec<char> = opps.iter().filter_map(|&i| text.get(i..).and_then(|t| t.chars().next())).collect();
         assert_eq!(starts, vec!['い', '。', 'い', '「'], "{opps:?}");
         // Kinsoku off ignores the lists too.
         let mut all: Vec<usize> = Vec::new();
-        apply(text, &mut all, false, true, Some(("あ", "「")));
+        apply(text, &mut all, false, true, super::Level::Custom { no_start: "あ", no_end: "「" });
         assert_eq!(all.len(), text.chars().count() - 1);
+    }
+
+    /// Word's high level (`w:strictFirstAndLastChars`, measured in Word for Mac): a line may not
+    /// start with a small kana or ー either; 々 and ゛ never may.
+    #[test]
+    fn the_strict_level_keeps_small_kana_off_the_line_start() {
+        let text = "いぁいーいッい々い゛";
+        let starts = |level: super::Level| -> Vec<char> {
+            let mut opps: Vec<usize> = unicode_linebreak::linebreaks(text).map(|(i, _)| i).filter(|&i| i < text.len()).collect();
+            apply(text, &mut opps, true, true, level);
+            opps.iter().filter_map(|&i| text.get(i..).and_then(|t| t.chars().next())).collect()
+        };
+        assert_eq!(starts(super::Level::Standard), vec!['ぁ', 'い', 'ー', 'い', 'ッ', 'い', 'い']);
+        assert_eq!(starts(super::Level::Strict), vec!['い', 'い', 'い', 'い']);
     }
 }

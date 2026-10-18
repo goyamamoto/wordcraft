@@ -4642,6 +4642,12 @@ fn kinsoku_characters_set_report_drop_and_undo() {
     let mut s = s();
     let r = run(&mut s, "tools.kinsokuCharacters", json!({}));
     assert_eq!(r["kinsokuCharacters"], json!([]));
+    assert_eq!(r["level"], "standard");
+    let r = run(&mut s, "tools.kinsokuCharacters", json!({"level": "strict"}));
+    assert_eq!(r["level"], "strict");
+    assert!(s.doc.settings.strict_kinsoku && s.dirty);
+    assert!(s.run("tools.kinsokuCharacters", &json!({"level": "loose"})).is_err());
+    s.dirty = false;
     run(&mut s, "tools.kinsokuCharacters", json!({"lang": "ja-JP", "noStart": "あ", "noEnd": "「"}));
     let r = run(&mut s, "tools.kinsokuCharacters", json!({"noEnd": "「（"}));
     assert_eq!(r["kinsokuCharacters"], json!([{"lang": "ja-JP", "noStart": "あ", "noEnd": "「（"}]), "the only list is the default language");
