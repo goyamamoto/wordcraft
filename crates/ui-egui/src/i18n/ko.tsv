@@ -2491,3 +2491,7 @@ preview	Title	제목
 	A free, open-source word processor written from scratch in Rust.\nA Japanese-enhanced build of WordCraft.	Rust로 처음부터 작성된 무료 오픈 소스 워드 프로세서입니다.\n일본어 지원을 강화한 WordCraft 빌드입니다.
 	Source code: github.com/goyamamoto/wordcraft	소스 코드: github.com/goyamamoto/wordcraft
 	Upstream project: github.com/storytold/wordcraft	원본 프로젝트: github.com/storytold/wordcraft
+	Half-width	반자
+	Full-width	전자
+	Hiragana	히라가나
+	Katakana	가타카나

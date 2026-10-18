@@ -2235,3 +2235,7 @@
 	A free, open-source word processor written from scratch in Rust.\nA Japanese-enhanced build of WordCraft.	Eine freie, quelloffene Textverarbeitung, von Grund auf in Rust geschrieben.\nEine WordCraft-Ausgabe mit erweiterter Japanisch-Unterstützung.
 	Source code: github.com/goyamamoto/wordcraft	Quellcode: github.com/goyamamoto/wordcraft
 	Upstream project: github.com/storytold/wordcraft	Ursprungsprojekt: github.com/storytold/wordcraft
+	Half-width	Halbe Breite
+	Full-width	Volle Breite
+	Hiragana	Hiragana
+	Katakana	Katakana

@@ -2635,3 +2635,7 @@ preview	Title	Naslov
 	A free, open-source word processor written from scratch in Rust.\nA Japanese-enhanced build of WordCraft.	Besplatan program za obradu teksta otvorenog koda, napisan od nule u Rustu.\nInačica WordCrafta s proširenom podrškom za japanski.
 	Source code: github.com/goyamamoto/wordcraft	Izvorni kod: github.com/goyamamoto/wordcraft
 	Upstream project: github.com/storytold/wordcraft	Izvorni projekt: github.com/storytold/wordcraft
+	Half-width	Polovična širina
+	Full-width	Puna širina
+	Hiragana	Hiragana
+	Katakana	Katakana

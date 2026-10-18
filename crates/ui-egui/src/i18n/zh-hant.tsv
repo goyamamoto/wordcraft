@@ -2237,3 +2237,7 @@
 	A free, open-source word processor written from scratch in Rust.\nA Japanese-enhanced build of WordCraft.	一款以 Rust 從零編寫的免費開放原始碼文書處理軟體。\nWordCraft 的日文強化版。
 	Source code: github.com/goyamamoto/wordcraft	原始碼：github.com/goyamamoto/wordcraft
 	Upstream project: github.com/storytold/wordcraft	上游專案：github.com/storytold/wordcraft
+	Half-width	半形
+	Full-width	全形
+	Hiragana	平假名
+	Katakana	片假名
