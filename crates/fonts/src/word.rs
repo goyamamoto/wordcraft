@@ -588,10 +588,18 @@ fn hhea_line(ascender: i16, descender: i16, line_gap: i16) -> (f64, f64) {
     (f64::from(ascender) + f64::from(line_gap.max(0)), f64::from(descender).abs())
 }
 
-/// Line metrics for a face in font units: (ascent, descent), both positive, the way word
-/// processors measure single line spacing: the hhea values with the line gap above the ascent
-/// (Word puts the first baseline that far below the line top), falling back to OS/2
-/// usWinAscent/usWinDescent.
+/// Line metrics for a face in font units: (ascent, descent), both positive, the way Word for
+/// Mac measures single line spacing. A Latin face: the hhea values with the line gap above the
+/// ascent (Word puts the first baseline that far below the line top; Times New Roman and Arial
+/// at 12 and 48 pt on the 18-pt grid, 2026-10-19), falling back to OS/2 usWinAscent/usWinDescent.
+/// An East Asian face: 1.3 times its hhea ascent + descent, the line gap ignored, with that
+/// box centred in the line (0.15 of it above the ascent and below the descent) — Hiragino
+/// Mincho ProN (hhea 0.88/0.12 with a 0.5-em gap), Toppan Bunkyu Mincho, MS Mincho and MS
+/// Gothic give 15.6-pt lines at 12 pt and 62.4 at 48 without a grid, Songti SC and Kaiti SC
+/// (1.06/0.34) 21.84 and 87.36, Apple SD Gothic Neo (0.9/0.3) 18.72, AppleMyungjo (0.869/0.318)
+/// 18.48 and 74.16, Osaka (1.0/0.25 with a gap) 19.44 and 78.0; on the 18-pt grid the baselines
+/// sit 1.03 em (Hiragino) and 1.01 em (MS Mincho) below the line top, to 0.2 pt at 8–48 pt
+/// (`hg1`, `lm1`–`lm5` probes).
 pub fn line_metrics(face: &crate::FontFace) -> (f64, f64) {
     static CACHE: OnceLock<Mutex<HashMap<u32, (f64, f64)>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
@@ -600,15 +608,22 @@ pub fn line_metrics(face: &crate::FontFace) -> (f64, f64) {
     }
     let mut v = (face.ascent.max(1.0), face.descent.abs());
     if let Some(f) = face.skrifa() {
-        // hhea ascender + descender + line gap (Word on macOS), the gap above the ascent; OS/2
-        // win metrics only when the hhea values are missing, and never more than twice the em.
-        let hhea = f.hhea().ok().map(|h| hhea_line(h.ascender().to_i16(), h.descender().to_i16(), h.line_gap().to_i16()));
-        let win = f.os2().ok().map(|o| (o.us_win_ascent() as f64, o.us_win_descent() as f64));
         let ok = |m: &(f64, f64)| m.0 > 0.0 && m.0 + m.1 <= face.upem * 2.0;
-        if let Some(m) = hhea.filter(ok) {
-            v = m;
-        } else if let Some(m) = win.filter(ok) {
-            v = m;
+        let hhea = f.hhea().ok().map(|h| (h.ascender().to_i16(), h.descender().to_i16(), h.line_gap().to_i16()));
+        if face.is_east_asian() {
+            let (a, d) = hhea.map(|(a, d, _)| (f64::from(a), f64::from(d).abs())).filter(ok).unwrap_or(v);
+            let line = EAST_ASIAN_LINE * (a + d);
+            let asc = a + (line - (a + d)) / 2.0;
+            v = (asc, line - asc);
+        } else {
+            // hhea ascender + descender + line gap, the gap above the ascent; OS/2 win metrics
+            // only when the hhea values are missing, and never more than twice the em.
+            let win = f.os2().ok().map(|o| (o.us_win_ascent() as f64, o.us_win_descent() as f64));
+            if let Some(m) = hhea.map(|(a, d, g)| hhea_line(a, d, g)).filter(ok) {
+                v = m;
+            } else if let Some(m) = win.filter(ok) {
+                v = m;
+            }
         }
     }
     cache.lock().unwrap_or_else(|e| e.into_inner()).insert(face.id(), v);
@@ -627,7 +642,53 @@ pub fn line_metrics(face: &crate::FontFace) -> (f64, f64) {
 /// Japanese line 0.07 em further apart than Word. `None` for other families: their faces' own
 /// metrics apply ([`line_metrics`]).
 pub fn office_line_metrics(family: &str, face: &crate::FontFace) -> Option<(f64, f64)> {
-    is_office_yu(family).then_some((1.051 * face.upem, 0.379 * face.upem))
+    if is_office_yu(family) {
+        return Some((1.051 * face.upem, 0.379 * face.upem));
+    }
+    // Word's own MS Mincho and MS Gothic (ascent 0.859 em, descent 0.141: a 1-em box) centred
+    // in Word for Mac's 1.3-em East Asian line: the baseline 1.009 em below the line's top
+    // (`lm1`–`lm3` probes, 12 and 48 pt, with and without the grid), whatever face stands in.
+    is_office_ms(family)
+        .then_some(((MS_ASCENT + (EAST_ASIAN_LINE - 1.0) / 2.0) * face.upem, (1.0 - MS_ASCENT + (EAST_ASIAN_LINE - 1.0) / 2.0) * face.upem))
+}
+
+/// Where a 縦書き column's upright em squares are centred, in font units on the ascent side of
+/// the column's baseline (the line turned on its side: the baseline sits the line's ascent from
+/// the column's top edge, where lying Latin stands): half the difference of the OS/2 win ascent
+/// and descent — measured in Word for Mac at 12, 24 and 36 pt (`vt3`–`vt5` probes, 2026-10-19):
+/// Hiragino Mincho ProN (win 0.985/0.182) 0.40 em, Toppan Bunkyu Mincho (1.295/0.326) 0.48,
+/// Songti SC (0.86/0.14) 0.36, Word's own Yu Mincho 0.34 and MS Mincho/MS Gothic 0.36 (their
+/// line metrics' half difference, whatever face stands in). Without win metrics, half the hhea
+/// difference.
+pub fn vertical_em_centre(family: &str, face: &crate::FontFace) -> f64 {
+    if is_office_yu(family) {
+        return (1.051 - 0.379) / 2.0 * face.upem;
+    }
+    if is_office_ms(family) {
+        return (MS_ASCENT - (1.0 - MS_ASCENT)) / 2.0 * face.upem;
+    }
+    let ok = |a: f64, d: f64| a > 0.0 && a + d <= face.upem * 2.0;
+    let win =
+        face.skrifa().and_then(|f| f.os2().ok()).map(|o| (f64::from(o.us_win_ascent()), f64::from(o.us_win_descent()))).filter(|&(a, d)| ok(a, d));
+    let (a, d) = win.unwrap_or((face.ascent.max(1.0), face.descent.abs()));
+    (a - d) / 2.0
+}
+
+/// Word for Mac's line for an East Asian face as a multiple of its hhea ascent + descent (1.3
+/// em for the usual 1-em box; 1.82 for Songti SC's 1.4; the line gap plays no part).
+pub const EAST_ASIAN_LINE: f64 = 1.3;
+/// MS Mincho's and MS Gothic's ascent in em (their descent is the rest of the em).
+const MS_ASCENT: f64 = 0.859;
+/// The top of MS Mincho's and MS Gothic's strikethrough above the baseline, in em.
+const MS_STRIKE: f32 = 0.258;
+
+/// Is `family` one of the MS Mincho / MS Gothic families Word bundles (by its English or
+/// Japanese name)?
+pub fn is_office_ms(family: &str) -> bool {
+    const MS: &[&str] =
+        &["MS Mincho", "MS PMincho", "MS Gothic", "MS PGothic", "MS UI Gothic", "ＭＳ 明朝", "ＭＳ Ｐ明朝", "ＭＳ ゴシック", "ＭＳ Ｐゴシック"];
+    let base = fold_cjk_name(family);
+    MS.iter().any(|n| fold_cjk_name(n) == base)
 }
 
 /// Is `family` one of the Yu Mincho / Yu Gothic families Office bundles its own builds of (by
@@ -702,12 +763,20 @@ pub fn decoration_metrics(family: &str, face: &crate::FontFace, size: f32) -> De
     let k = size as f64 / face.upem.max(1.0);
     let (uo, ut) = face.underline;
     let (so, st) = face.strikeout;
-    Decorations {
-        underline_top: (-uo * k) as f32,
-        underline_thickness: (ut * k) as f32,
-        strike_top: (so * k) as f32,
-        strike_thickness: (st * k) as f32,
-    }
+    // An East Asian face's underline: its top edge 0.7 of the hhea descent + 0.53 pt below the
+    // baseline, the post thickness — Hiragino Mincho ProN (descent 0.12 em) 1.20 at 8 pt, 1.92
+    // at 18, 4.56 at 48; Toppan Bunkyu Mincho the same; MS Mincho and MS Gothic (0.141) 1.68 at
+    // 12, 5.28 at 48; Word's Yu fonts have their own rule above.
+    let hhea_descent = face.skrifa().and_then(|f| f.hhea().ok()).map(|h| f64::from(h.descender().to_i16()).abs() / face.upem.max(1.0));
+    let descent = if is_office_ms(family) { 1.0 - MS_ASCENT } else { hhea_descent.unwrap_or(face.descent.abs() / face.upem.max(1.0)) };
+    let underline_top = if is_office_ms(family) || face.is_east_asian() { (0.7 * descent * size as f64) as f32 + 0.53 } else { (-uo * k) as f32 };
+    let underline_thickness = if is_office_ms(family) { 0.05 * size } else { (ut * k) as f32 };
+    // MS Mincho and MS Gothic strike through 0.258 em above the baseline (the top of a 0.05-em
+    // line: 3.08 pt at 12, 12.50 at 48, where Times New Roman's and Arial's tables put theirs),
+    // whatever stands in for them; Hiragino (0.322), Toppan (0.276), Times (0.259) and Arial are
+    // their OS/2 tables (`st1`, `st2` probes).
+    let (strike_top, strike_thickness) = if is_office_ms(family) { (MS_STRIKE * size, 0.05 * size) } else { ((so * k) as f32, (st * k) as f32) };
+    Decorations { underline_top, underline_thickness, strike_top, strike_thickness }
 }
 
 #[cfg(test)]
@@ -723,7 +792,7 @@ mod tests {
             let (a, d) = office_line_metrics(name, face.get()).unwrap_or_else(|| panic!("{name}"));
             assert!((a / em - 1.051).abs() < 1e-6 && (d / em - 0.379).abs() < 1e-6, "{name}: {a} {d}");
         }
-        for name in ["ヒラギノ明朝 ProN", "MS Mincho", "Aptos", "Yu Gothic UI", ""] {
+        for name in ["ヒラギノ明朝 ProN", "Aptos", "Yu Gothic UI", ""] {
             assert!(office_line_metrics(name, face.get()).is_none(), "{name}");
         }
         let _ = db;
@@ -755,6 +824,73 @@ mod tests {
         for v in [f32::NAN, f32::INFINITY, -5.0, 1e9] {
             let d = decoration_metrics("游明朝", face, v);
             assert!(d.underline_top.is_finite() && d.strike_top.is_finite(), "{v}: {d:?}");
+        }
+    }
+
+    /// Word for Mac's line for East Asian faces (1.3 times the hhea box, centred) and MS
+    /// Mincho's metrics by name, their underlines 0.7 of the descent + 0.53 pt down and MS
+    /// Mincho's strikethrough 0.258 em up; Latin faces keep the gap above the ascent and their
+    /// `post` underline.
+    #[test]
+    fn east_asian_faces_take_words_for_mac_line_and_underline() {
+        let r = resolve("Hiragino Mincho ProN", false, false);
+        let f = r.face.get();
+        if !r.substituted && f.is_east_asian() {
+            use skrifa::raw::TableProvider;
+            let (a, d) = line_metrics(f);
+            let em = f.upem;
+            let h = f.skrifa().and_then(|s| s.hhea().ok()).expect("hhea");
+            let (ha, hd) = (f64::from(h.ascender().to_i16()), f64::from(h.descender().to_i16()).abs());
+            assert!(((a + d) - 1.3 * (ha + hd)).abs() < 1e-6, "{a} {d} vs {ha} {hd}");
+            assert!((a - (ha + 0.15 * (ha + hd))).abs() < 1e-6, "{a} vs {ha} {hd}");
+            assert!(((a + d) / em - 1.3).abs() < 1e-6, "Hiragino's box is an em: {a} {d}");
+            let dm = decoration_metrics("Hiragino Mincho ProN", f, 48.0);
+            let want = (0.7 * hd / em * 48.0) as f32 + 0.53;
+            assert!((dm.underline_top - want).abs() < 1e-3 && (dm.underline_thickness - 2.4).abs() < 0.05, "{dm:?}");
+        }
+        // MS Mincho by either name, whatever face stands in: 1.009 em above the baseline,
+        // 0.291 below; the underline 1.68 below at 12 pt (0.72 thick), 5.28 at 48 (2.40).
+        for name in ["MS Mincho", "ＭＳ 明朝", "MS PGothic", "ＭＳ Ｐゴシック", "MS UI Gothic"] {
+            assert!(is_office_ms(name), "{name}");
+            let (a, d) = office_line_metrics(name, f).unwrap_or_else(|| panic!("{name}"));
+            assert!((a / f.upem - 1.009).abs() < 1e-6 && (d / f.upem - 0.291).abs() < 1e-6, "{name}: {a} {d}");
+        }
+        assert!(!is_office_ms("Yu Mincho") && !is_office_ms("Hiragino Mincho ProN") && !is_office_ms(""));
+        let dm = decoration_metrics("MS Gothic", f, 48.0);
+        assert!((dm.underline_top - 5.268).abs() < 0.01 && (dm.underline_thickness - 2.4).abs() < 1e-3, "{dm:?}");
+        assert!((dm.strike_top - 12.384).abs() < 0.01 && (dm.strike_thickness - 2.4).abs() < 1e-3, "{dm:?}");
+        let dm = decoration_metrics("ＭＳ 明朝", f, 12.0);
+        assert!((dm.underline_top - 1.714).abs() < 0.01 && (dm.underline_thickness - 0.6).abs() < 1e-3, "{dm:?}");
+        assert!((dm.strike_top - 3.096).abs() < 0.01 && (dm.strike_thickness - 0.6).abs() < 1e-3, "{dm:?}");
+        // A wider hhea box makes a taller line: Songti SC (1.06/0.34) 1.82 em, Apple SD Gothic
+        // Neo (0.9/0.3) 1.56, Osaka (1.0/0.25 with a line gap Word ignores) 1.625. A 縦書き
+        // column's em centre: half the win ascent − descent (Songti 0.36 em, Toppan Bunkyu
+        // Mincho 0.4845, Hiragino 0.4015).
+        for (name, want, centre) in [
+            ("Songti SC", 1.82, 0.36),
+            ("Apple SD Gothic Neo", 1.56, 0.30),
+            ("Osaka", 1.625, 0.375),
+            ("Toppan Bunkyu Mincho", 1.3, 0.4845),
+            ("Hiragino Mincho ProN", 1.3, 0.4015),
+        ] {
+            let r = resolve(name, false, false);
+            let f = r.face.get();
+            if !r.substituted && f.is_east_asian() {
+                let (a, d) = line_metrics(f);
+                assert!(((a + d) / f.upem - want).abs() < 1e-3, "{name}: {a} {d}");
+                let c = vertical_em_centre(name, f) / f.upem;
+                assert!((c - centre).abs() < 1e-3 || name == "Osaka", "{name}: centre {c}");
+            }
+        }
+        assert!((vertical_em_centre("游明朝", f) / f.upem - 0.336).abs() < 1e-6);
+        assert!((vertical_em_centre("MS Gothic", f) / f.upem - 0.359).abs() < 1e-6);
+        let t = resolve("Times New Roman", false, false);
+        if !t.substituted && !t.face.get().is_east_asian() {
+            let tf = t.face.get();
+            let (a, d) = line_metrics(tf);
+            assert!(((a + d) / tf.upem - 1.15).abs() < 0.01, "{a} {d}");
+            let dm = decoration_metrics("Times New Roman", tf, 48.0);
+            assert!((dm.underline_top - 5.23).abs() < 0.3, "{dm:?}");
         }
     }
 

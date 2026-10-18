@@ -487,3 +487,98 @@ fn vertical_underlines_strikethroughs_and_marks_sit_as_word_for_mac_draws_them()
     let circle_u = frames[5].2[0].0;
     assert!(near(circle_u - dot_u, 0.13 * 10.5), "dot at {dot_u}, circle at {circle_u}");
 }
+
+/// A column's upright em squares sit half the font's win ascent − descent on the ascent side of
+/// the lying Latin's baseline, which is the line's ascent from the column's top edge — so they
+/// sit off the column's centre line by half the win-minus-hhea asymmetry, each run by its own
+/// size: measured in Word for Mac on 2026-10-19 (`vt3`–`vt5` probes, 12 + 36 pt mixed in one
+/// column, ungridded): Hiragino Mincho ProN (win 0.985/0.182, hhea 0.88/0.12) 0.0215 em toward
+/// the ascent side, Toppan Bunkyu Mincho (1.295/0.326) 0.1045 em, Songti SC (0.86/0.14 against
+/// hhea 1.06/0.34) and Apple SD Gothic Neo none; the Latin baseline (ascent − descent) / 2 from
+/// the centre line. In the column's unturned frame, from its ascent edge: Hiragino's 36-pt
+/// character centred 22.8 pt in (the 12-pt one 23.28), its 36-pt Latin on a baseline 37.2 in
+/// (the 12-pt 28.08); Toppan's 19.92 / 22.32 and 37.2 / 28.08; Songti's 32.88 / 32.88 and
+/// 45.84 / 37.2 — every column 46.8 wide (1.3 × 36), Songti's 65.52 (1.82 × 36).
+#[test]
+fn vertical_em_squares_follow_their_fonts_win_metrics_as_word_for_mac_places_them() {
+    let mut d = Document::from_text("");
+    d.body.clear();
+    let fonts: Vec<(&str, &str, &str, &str, f32, f32, f32, f32, f32)> = vec![
+        // family, small, big, last, column width, big centre, small centre, big Latin baseline, small Latin baseline
+        ("Hiragino Mincho ProN", "縦", "大", "行", 46.8, 22.8, 23.28, 37.2, 28.08),
+        ("Toppan Bunkyu Mincho", "縦", "大", "行", 46.8, 19.92, 22.32, 37.2, 28.08),
+        ("Songti SC", "中", "大", "行", 65.52, 32.88, 32.88, 45.84, 37.2),
+    ];
+    let mut used = Vec::new();
+    for (family, a, b, c, ..) in &fonts {
+        let r = wordcraft_fonts::word::resolve(family, false, false);
+        if r.substituted || !r.face.covers(b.chars().next().unwrap()) {
+            continue;
+        }
+        used.push(*family);
+        let chr = |size: f32| CharProps {
+            font: Some((*family).into()),
+            font_ea: Some((*family).into()),
+            size: Some(size),
+            lang_ea: Some("ja-JP".into()),
+            ..Default::default()
+        };
+        let text = format!("{a}Ab{b}Cd{c}");
+        let mut para = Paragraph::with_text(&text, chr(12.0));
+        para.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+        para.props.space_before = Some(0.0);
+        para.props.space_after = Some(0.0);
+        para.runs = vec![
+            wordcraft_doc::Run { len: a.len() + "Ab".len(), props: chr(12.0) },
+            wordcraft_doc::Run { len: b.len() + "Cd".len(), props: chr(36.0) },
+            wordcraft_doc::Run { len: c.len(), props: chr(12.0) },
+        ];
+        d.body.push(wordcraft_doc::para_block(para));
+    }
+    if used.is_empty() {
+        return;
+    }
+    d.last_section.text_direction = TextDirection::Down;
+    let l = lay(&d);
+    let draws = display::page_display(&d, &l.pages[0], &Default::default());
+    let turned: Vec<&Vec<display::Draw>> =
+        draws.iter().filter_map(|x| if let display::Draw::Turned { items, .. } = x { Some(items) } else { None }).collect();
+    assert_eq!(turned.len(), used.len(), "one turned column per paragraph");
+    let near = |a: f32, b: f32| (a - b).abs() < 0.3;
+    for (items, (family, a, b, _c, width, big_c, small_c, big_base, small_base)) in turned.iter().zip(fonts.iter().filter(|f| used.contains(&f.0))) {
+        let mut stood: Vec<(String, f32, f32)> = Vec::new();
+        let mut lying: Vec<(String, f32, f32)> = Vec::new();
+        for x in items.iter() {
+            match x {
+                display::Draw::Rotated { cy, items, .. } => {
+                    if let Some(display::Draw::Glyphs { text, size, .. }) = items.first() {
+                        stood.push((text.clone(), *size, *cy));
+                    }
+                }
+                display::Draw::Glyphs { text, size, glyphs, .. } => {
+                    if let Some(g) = glyphs.first() {
+                        lying.push((text.clone(), *size, g.2));
+                    }
+                }
+                _ => {}
+            }
+        }
+        let find = |v: &[(String, f32, f32)], t: &str, s: f32| v.iter().find(|(x, sz, _)| x == t && (*sz - s).abs() < 0.01).map(|x| x.2);
+        let (cb, cs) = (find(&stood, b, 36.0), find(&stood, a, 12.0));
+        let (lb, ls) = (
+            lying.iter().find(|(t, s, _)| t.starts_with('C') && (*s - 36.0).abs() < 0.01).map(|x| x.2),
+            lying.iter().find(|(t, s, _)| t.starts_with('A') && (*s - 12.0).abs() < 0.01).map(|x| x.2),
+        );
+        let (Some(cb), Some(cs), Some(lb), Some(ls)) = (cb, cs, lb, ls) else {
+            panic!("{family}: stood {stood:?} lying {lying:?}");
+        };
+        // The column's width is the 36-pt run's line.
+        let cols = columns(&l);
+        assert!(cols.iter().any(|(h, _)| near(*h, *width)), "{family}: columns {cols:?} expected one {width} wide");
+        assert!(near(cb, *big_c) && near(cs, *small_c), "{family}: 36-pt centre {cb} (Word {big_c}), 12-pt {cs} (Word {small_c})");
+        assert!(
+            near(lb, *big_base) && near(ls, *small_base),
+            "{family}: 36-pt Latin baseline {lb} (Word {big_base}), 12-pt {ls} (Word {small_base})"
+        );
+    }
+}
