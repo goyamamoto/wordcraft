@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
+# A vendored dependency (`vendor/README.md`), not a workspace member: it keeps its own lints.
+exclude = ["vendor/winit"]
 default-members = ["crates/*", "apps/wordcraft", "apps/wordcraft-cli", "xtask"]
 
 [workspace.package]
@@ -103,4 +105,7 @@ debug = 0
 
 # Required by craft-pdf: the backend rejects writers that failed during unwinding.
 [patch.crates-io]
+# winit 0.30.13 with WordCraft's macOS input-method patch (`vendor/README.md`,
+# `vendor/patches/winit/`): the input method can read committed text and reconvert it.
+winit = { path = "vendor/winit" }
 krilla = { git = "https://github.com/storytold/craft-libs", rev = "c3487320b2d1de657b860b3c8abb44e1f2b32bd8" }

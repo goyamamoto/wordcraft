@@ -58,6 +58,7 @@ pub mod frame;
 pub mod guides;
 pub mod i18n;
 pub mod icons;
+pub mod ime;
 pub mod ink;
 pub mod keys;
 pub mod keytips;
@@ -1978,6 +1979,8 @@ impl WordApp {
     /// Lay out the window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         let t0 = now_ms();
+        // Reported again by the canvas when the document has the keyboard (`ime`).
+        self.canvas.ime_surrounding = None;
         let ctx = ui.ctx().clone();
         i18n::set_current(i18n::Lang::from_pref(&self.ui.language));
         // Animation effects off: egui's scroll areas get a wheel notch whole, not eased in.
