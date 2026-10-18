@@ -1733,12 +1733,31 @@ impl Builder<'_> {
             x += c.adv + gap;
         }
         self.glyphs.truncate(bg);
-        // The base text centres (or aligns) under a wider ruby.
-        let shift = lead(w - base_w);
+        // The base text under a wider ruby follows the ruby's alignment too (Word for Mac, `rb5`:
+        // 漢字 under a 42 pt かんじよ sits at 21 centred, at 10.5 and 42 distributed by letter, at
+        // 15.75 and 36.75 distributed by space; 漢字の by space at 12.25, 26.25 and 40.25).
+        let room = (w - base_w).max(0.0);
         let ascent = cl.iter().filter_map(|c| self.styles.get(c.style as usize)).map(|s| s.ascent).fold(0.0f32, f32::max);
         let c = self.clusters.get_mut(ci)?;
-        for g in self.glyphs.get_mut(c.g0 as usize..c.g1 as usize).into_iter().flatten() {
-            g.dx += shift;
+        let nb = c.g1.saturating_sub(c.g0).max(1) as f32;
+        let base_glyphs = self.glyphs.get_mut(c.g0 as usize..c.g1 as usize).into_iter().flatten();
+        match align {
+            RubyAlign::DistributeLetter if nb > 1.0 => {
+                for (i, g) in base_glyphs.enumerate() {
+                    g.dx += room / (nb - 1.0) * i as f32;
+                }
+            }
+            RubyAlign::DistributeSpace => {
+                for (i, g) in base_glyphs.enumerate() {
+                    g.dx += room / nb * (i as f32 + 0.5);
+                }
+            }
+            _ => {
+                let shift = lead(room);
+                for g in base_glyphs {
+                    g.dx += shift;
+                }
+            }
         }
         c.adv = w;
         c.obj_h = raise + ascent;
@@ -2056,7 +2075,10 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                             let size = if size.is_finite() { size.clamp(1.0, 1584.0) } else { rc.size * 0.5 };
                             (rr.size, rr.size_cs, rr.position) = (size, size, 0.0);
                             rr.vert_align = wordcraft_doc::props::VertAlign::Baseline;
-                            let raise = if raise.is_finite() { raise.clamp(0.0, 1584.0) } else { rc.size };
+                            // Word for Mac draws the ruby a whole number of points above the base's
+                            // baseline (`rb4`/`rb5`: hpsRaise 1, 3, 5, 7, 9, 11, 13 → 0, 1, 2, 3, 4, 5,
+                            // 6 pt; a raise of 0 puts it on the baseline).
+                            let raise = if raise.is_finite() { raise.clamp(0.0, 1584.0).floor() } else { rc.size };
                             if let Some(r) = b.ruby(base, ruby, *align, raise, start, end, &rc, &Arc::new(rr)) {
                                 rubies.push(r);
                             }
