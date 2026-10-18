@@ -636,9 +636,14 @@ fn caret_lang_tag(app: &WordApp) -> Option<String> {
     let para = s.doc.para_at(&s.sel.focus);
     let style = para.and_then(|p| p.props.style.clone());
     let r = s.doc.styles.resolve_char(style.as_deref(), &s.typing_props());
-    // After East Asian text the East Asian language (Japanese on 漢字), as Word's status bar.
-    let east_asian =
-        para.and_then(|p| p.text.get(..s.sel.focus.off)).and_then(|t| t.chars().next_back()).is_some_and(wordcraft_doc::east_asian::is_east_asian);
+    // On East Asian text the East Asian language (Japanese on 漢字), as Word's status bar: the
+    // character before the caret, or the one after it at the start of a paragraph.
+    let east_asian = para
+        .and_then(|p| {
+            let off = s.sel.focus.off;
+            p.text.get(..off).and_then(|t| t.chars().next_back()).or_else(|| p.text.get(off..).and_then(|t| t.chars().next()))
+        })
+        .is_some_and(wordcraft_doc::east_asian::is_east_asian);
     if east_asian && let Some(lang_ea) = r.lang_ea {
         return Some(lang_ea);
     }
@@ -770,6 +775,10 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
             crate::widgets::row(ui, |ui| {
                 let font = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
                 let font = app.previews.font_shown(&font);
+                // A CJK font name (游明朝 on Japanese text) needs the CJK interface font.
+                if font.chars().any(wordcraft_fonts::is_cjk) {
+                    app.want_system_cjk = true;
+                }
                 let fams = app.previews.families();
                 let prev = app.previews.font_preview_fn();
                 if let Some(f) = font_combo(ui, "font", 150.0, &font, &fams, Some(&*prev)) {
@@ -3006,5 +3015,8 @@ mod tests {
         assert_eq!(caret_language(&app), "Japanese");
         app.run("text.insert", json!({"text": "abc"})).unwrap();
         assert_eq!(caret_language(&app), "English (United States)");
+        // At the start of the paragraph the character after the caret decides.
+        app.run("caret.docStart", json!({})).unwrap();
+        assert_eq!(caret_language(&app), "Japanese");
     }
 }
