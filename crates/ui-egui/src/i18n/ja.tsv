@@ -2262,3 +2262,7 @@
 	Match half/full-width forms	半角と全角を区別する
 	Sounds like (Japanese)	あいまい検索 (日)
 	Kinsoku Characters	禁則文字
+	Text alignment:	文字の配置:
+	Baseline	ベースライン
+	Snap to grid when document grid is defined	1ページの行数を指定時に文字を行グリッド線に合わせる
+	Automatically adjust right indent when document grid is defined	1行の文字数を指定時に右のインデント幅を自動調整する

@@ -2700,3 +2700,7 @@ template	Letter	Thư
 	Match half/full-width forms	Phân biệt dạng nửa/toàn độ rộng
 	Sounds like (Japanese)	Phát âm giống (tiếng Nhật)
 	Kinsoku Characters	Ký tự kinsoku
+	Text alignment:	Căn chỉnh văn bản:
+	Baseline	Đường cơ sở
+	Snap to grid when document grid is defined	Bám lưới khi lưới tài liệu được xác định
+	Automatically adjust right indent when document grid is defined	Tự động điều chỉnh thụt lề phải khi lưới tài liệu được xác định

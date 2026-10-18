@@ -2516,3 +2516,7 @@ preview	Title	제목
 	Match half/full-width forms	전자/반자 구분
 	Sounds like (Japanese)	유사 발음(일본어)
 	Kinsoku Characters	금칙 문자
+	Text alignment:	텍스트 맞춤:
+	Baseline	기준선
+	Snap to grid when document grid is defined	문서 눈금이 정의된 경우 눈금에 맞춤
+	Automatically adjust right indent when document grid is defined	문서 눈금이 정의된 경우 오른쪽 들여쓰기 자동 조정

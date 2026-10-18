@@ -2261,3 +2261,7 @@
 	Match half/full-width forms	Halbbreite/vollbreite Formen unterscheiden
 	Sounds like (Japanese)	Ähnliche Schreibweise (Japanisch)
 	Kinsoku Characters	Kinsoku-Zeichen
+	Text alignment:	Textausrichtung:
+	Baseline	Grundlinie
+	Snap to grid when document grid is defined	Am Raster ausrichten, wenn ein Dokumentraster definiert ist
+	Automatically adjust right indent when document grid is defined	Rechten Einzug automatisch anpassen, wenn ein Dokumentraster definiert ist

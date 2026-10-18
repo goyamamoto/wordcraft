@@ -2652,3 +2652,7 @@ preview	Title	Ukázka
 	Match half/full-width forms	Rozlišovat formy poloviční/plné šířky
 	Sounds like (Japanese)	Zní jako (japonština)
 	Kinsoku Characters	Znaky kinsoku
+	Text alignment:	Zarovnání textu:
+	Baseline	Účaří
+	Snap to grid when document grid is defined	Přichytit k mřížce, je-li definována mřížka dokumentu
+	Automatically adjust right indent when document grid is defined	Automaticky upravit pravé odsazení, je-li definována mřížka dokumentu

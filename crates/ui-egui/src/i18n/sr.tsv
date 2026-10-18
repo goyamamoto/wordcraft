@@ -2276,3 +2276,7 @@
 	Match half/full-width forms	Разликуј облике половичне/пуне ширине
 	Sounds like (Japanese)	Звучи као (јапански)
 	Kinsoku Characters	Знакови кинсоку
+	Text alignment:	Поравнање текста:
+	Baseline	Основна линија
+	Snap to grid when document grid is defined	Поравнај са мрежом када је мрежа документа дефинисана
+	Automatically adjust right indent when document grid is defined	Аутоматски прилагоди десно увлачење када је мрежа документа дефинисана

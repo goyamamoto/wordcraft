@@ -2649,3 +2649,7 @@
 	Match half/full-width forms	Различаване на форми с половин/пълна ширина
 	Sounds like (Japanese)	Звучи като (японски)
 	Kinsoku Characters	Знаци за kinsoku
+	Text alignment:	Подравняване на текста:
+	Baseline	Базова линия
+	Snap to grid when document grid is defined	Прилепване към мрежата, когато е зададена мрежа на документа
+	Automatically adjust right indent when document grid is defined	Автоматично регулиране на десния отстъп, когато е зададена мрежа на документа
