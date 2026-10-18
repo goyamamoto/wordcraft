@@ -86,11 +86,27 @@ impl eframe::App for App {
         }
     }
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // macOS: the committed text the input method asked to replace with this frame's
+        // composition (再変換), from the vendored winit (`wordcraft_ui_egui::ime`).
+        #[cfg(target_os = "macos")]
+        if raw.events.iter().any(|e| matches!(e, egui::Event::Ime(egui::ImeEvent::Preedit { .. }))) {
+            self.0.canvas.ime_replace = winit::platform::macos::take_ime_replacement_range();
+        }
         self.0.raw_input_hook(raw);
     }
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.0.ui(ui);
         self.3.show(frame);
+        // macOS: what the input method may read of the document this frame (the caret's
+        // paragraph and the selection), so it can reconvert committed text as it does in Word.
+        #[cfg(target_os = "macos")]
+        winit::platform::macos::set_ime_surrounding_text(
+            self.0
+                .canvas
+                .ime_surrounding
+                .as_ref()
+                .map(|s| winit::platform::macos::ImeSurroundingText { text: s.text.clone(), selected: s.selected.clone() }),
+        );
     }
     fn on_exit(&mut self) {
         print::finish_pending_jobs();
