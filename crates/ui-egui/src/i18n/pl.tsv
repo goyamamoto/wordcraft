@@ -2650,3 +2650,7 @@ preview	Title	Tytuł
 	Match half/full-width forms	Rozróżniaj formy o połowie/pełnej szerokości
 	Sounds like (Japanese)	Brzmi jak (japoński)
 	Kinsoku Characters	Znaki kinsoku
+	Text alignment:	Wyrównanie tekstu:
+	Baseline	Linia bazowa
+	Snap to grid when document grid is defined	Przyciągaj do siatki, gdy zdefiniowano siatkę dokumentu
+	Automatically adjust right indent when document grid is defined	Automatycznie dopasuj wcięcie z prawej, gdy zdefiniowano siatkę dokumentu

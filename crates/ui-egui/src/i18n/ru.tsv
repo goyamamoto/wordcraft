@@ -2658,3 +2658,7 @@ preview	Title	Пример
 	Match half/full-width forms	Различать полуширинные и полноширинные формы
 	Sounds like (Japanese)	Произносится как (японский)
 	Kinsoku Characters	Символы кинсоку
+	Text alignment:	Выравнивание текста:
+	Baseline	Базовая линия
+	Snap to grid when document grid is defined	Привязать к сетке, если задана сетка документа
+	Automatically adjust right indent when document grid is defined	Автоматически подбирать правый отступ, если задана сетка документа

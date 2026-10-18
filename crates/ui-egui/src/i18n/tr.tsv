@@ -2657,3 +2657,7 @@ preview	Title	Örnek
 	Match half/full-width forms	Yarım/tam genişlik biçimlerini eşleştir
 	Sounds like (Japanese)	Benzer sesli (Japonca)
 	Kinsoku Characters	Kinsoku karakterleri
+	Text alignment:	Metin hizalama:
+	Baseline	Taban çizgisi
+	Snap to grid when document grid is defined	Belge kılavuzu tanımlandığında kılavuza uydur
+	Automatically adjust right indent when document grid is defined	Belge kılavuzu tanımlandığında sağ girintiyi otomatik ayarla

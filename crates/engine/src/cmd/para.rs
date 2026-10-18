@@ -205,7 +205,7 @@ pub fn specs() -> Vec<CommandSpec> {
             r#"{"level"?: "standard|strict" (Word's standard or high kinsoku level: at the high level a line may not start with a small kana or ー either), "lang"?: "ja-JP" (default: the document's East Asian language, else the first list), "noStart"?: str (characters a line may not start with), "noEnd"?: str (may not end with), "standard"?: true (drop the custom lists for the language)} — custom lists replace Word's standard kinsoku for the whole document; returns the level and the lists"#,
         ),
         CommandSpec::new("para.asianTypography", "Asian Typography", "Home › Paragraph › Asian Typography", asian_typography).params(
-            r#"{"kinsoku"?: bool (East Asian line-breaking rules), "wordWrap"?: bool (false: Latin words may break at any character), "overflowPunct"?: bool (hanging punctuation), "topLinePunct"?: bool (compress punctuation at the start of a line), "autoSpaceDE"?: bool (space between Asian and Latin text), "autoSpaceDN"?: bool (space between Asian text and numbers)} — flags left out stay as they are; returns the flags at the caret"#,
+            r#"{"kinsoku"?: bool (East Asian line-breaking rules), "wordWrap"?: bool (false: Latin words may break at any character), "overflowPunct"?: bool (hanging punctuation), "topLinePunct"?: bool (compress punctuation at the start of a line), "autoSpaceDE"?: bool (space between Asian and Latin text), "autoSpaceDN"?: bool (space between Asian text and numbers), "textAlignment"?: "auto|top|center|baseline|bottom" (how runs of different sizes line up), "snapToGrid"?: bool, "adjustRightInd"?: bool (kept for the file; no effect in Word for Mac)} — settings left out stay as they are; returns the settings at the caret"#,
         ),
         CommandSpec::new("para.tabs", "Tabs", "Home › Paragraph › Paragraph", tabs).params(
             r#"{"tabs"?: [TabStop] (replace the direct stops), "set"?: [TabStop], "clear"?: [pt], "clearAll"?: bool, "default"?: pt} where TabStop = {"pos": pt, "align"?: "left|center|right|decimal|bar", "leader"?: "none|dot|hyphen|underscore|middleDot"}"#,
@@ -338,7 +338,15 @@ fn asian_typography(s: &mut Session, v: &Value) -> CmdResult {
     let flag = |k: &str| p::bool(v, k);
     let (kinsoku, word_wrap, overflow, top_line, de, dn) =
         (flag("kinsoku"), flag("wordWrap"), flag("overflowPunct"), flag("topLinePunct"), flag("autoSpaceDE"), flag("autoSpaceDN"));
-    let mut out = if [kinsoku, word_wrap, overflow, top_line, de, dn].iter().any(Option::is_some) {
+    let (snap, adjust) = (flag("snapToGrid"), flag("adjustRightInd"));
+    let text_alignment = match p::str(v, "textAlignment") {
+        Some(t) => match wordcraft_doc::props::TextAlignment::ALL.into_iter().find(|a| a.ooxml() == t) {
+            Some(a) => Some(a),
+            None => return Err(CmdError::Params(format!("unknown textAlignment {t:?}"))),
+        },
+        None => None,
+    };
+    let mut out = if [kinsoku, word_wrap, overflow, top_line, de, dn, snap, adjust].iter().any(Option::is_some) || text_alignment.is_some() {
         fmt(s, &|p| {
             let set = |field: &mut Option<bool>, val: Option<bool>| {
                 if val.is_some() {
@@ -351,6 +359,11 @@ fn asian_typography(s: &mut Session, v: &Value) -> CmdResult {
             set(&mut p.top_line_punct, top_line);
             set(&mut p.auto_space_de, de);
             set(&mut p.auto_space_dn, dn);
+            set(&mut p.snap_to_grid, snap);
+            set(&mut p.adjust_right_ind, adjust);
+            if text_alignment.is_some() {
+                p.text_alignment = text_alignment;
+            }
         })?
     } else {
         sel_result(s)?
@@ -362,6 +375,7 @@ fn asian_typography(s: &mut Session, v: &Value) -> CmdResult {
             json!({
                 "kinsoku": r.kinsoku, "wordWrap": r.word_wrap, "overflowPunct": r.overflow_punct,
                 "topLinePunct": r.top_line_punct, "autoSpaceDE": r.auto_space_de, "autoSpaceDN": r.auto_space_dn,
+                "textAlignment": r.text_alignment.ooxml(), "snapToGrid": r.snap_to_grid, "adjustRightInd": r.adjust_right_ind,
             }),
         );
     }

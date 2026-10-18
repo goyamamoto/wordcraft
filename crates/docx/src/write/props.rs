@@ -327,6 +327,7 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
     toggle(w, "w:autoSpaceDE", p.auto_space_de);
     toggle(w, "w:autoSpaceDN", p.auto_space_dn);
     toggle(w, "w:bidi", p.bidi);
+    toggle(w, "w:adjustRightInd", p.adjust_right_ind);
     toggle(w, "w:snapToGrid", p.snap_to_grid);
     if p.space_before.is_some()
         || p.space_after.is_some()
@@ -401,6 +402,9 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
     toggle(w, "w:mirrorIndents", p.mirror_indents);
     if let Some(a) = p.align {
         w.val("w:jc", align_val(a));
+    }
+    if let Some(t) = p.text_alignment {
+        w.val("w:textAlignment", t.ooxml());
     }
     if let Some(l) = p.outline_level {
         w.val("w:outlineLvl", &n(l.min(9) as i64));

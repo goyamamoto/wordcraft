@@ -210,6 +210,11 @@ pub enum Dialog {
         /// hanging punctuation, compress punctuation at line start, space between Asian and
         /// Latin text, space between Asian text and numbers.
         asian: [bool; 6],
+        /// Text alignment (an index into `TextAlignment::ALL`: Auto, Top, Center, Baseline,
+        /// Bottom); snap to grid and automatically adjust right indent when a document grid
+        /// is defined (`para.asianTypography`).
+        text_align: u8,
+        grid_opts: [bool; 2],
         /// Mirror indents, don't add space between paragraphs of the same style, suppress line
         /// numbers, don't hyphenate (#512).
         opts: [bool; 4],
@@ -1688,6 +1693,8 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             widow,
             tab,
             asian,
+            text_align,
+            grid_opts,
             opts,
             mixed,
             ..
@@ -1780,6 +1787,27 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                     para_check(ui, top_line, tl!("Compress punctuation at the start of a line"), "topLinePunct", mixed);
                     para_check(ui, de, tl!("Add space between Asian and Latin text"), "autoSpaceDE", mixed);
                     para_check(ui, dn, tl!("Add space between Asian text and numbers"), "autoSpaceDN", mixed);
+                    ui.label(egui::RichText::new(tl!("Options")).font(semibold(12.5)));
+                    ui.horizontal(|ui| {
+                        ui.label(tl!("Text alignment:"));
+                        let names = ["Auto", "Top", "Center", "Baseline", "Bottom"];
+                        let shown = if mixed.contains("textAlignment") {
+                            String::new()
+                        } else {
+                            tl!(names.get(*text_align as usize).copied().unwrap_or("Auto")).to_string()
+                        };
+                        egui::ComboBox::from_id_salt("para_text_align").selected_text(shown).width(120.0).show_ui(ui, |ui| {
+                            for (i, name) in names.into_iter().enumerate() {
+                                if ui.selectable_label(*text_align as usize == i && !mixed.contains("textAlignment"), tl!(name)).clicked() {
+                                    *text_align = i as u8;
+                                    mixed.remove("textAlignment");
+                                }
+                            }
+                        });
+                    });
+                    let [snap, adjust] = grid_opts;
+                    para_check(ui, snap, tl!("Snap to grid when document grid is defined"), "snapToGrid", mixed);
+                    para_check(ui, adjust, tl!("Automatically adjust right indent when document grid is defined"), "adjustRightInd", mixed);
                 }
             }
             ui.add_space(6.0);
@@ -3101,6 +3129,8 @@ fn paragraph_dialog(rp: &wordcraft_doc::resolve::ResolvedPara, tab: u8) -> Dialo
         widow: rp.widow_control,
         tab,
         asian: [rp.kinsoku, rp.word_wrap, rp.overflow_punct, rp.top_line_punct, rp.auto_space_de, rp.auto_space_dn],
+        text_align: wordcraft_doc::props::TextAlignment::ALL.iter().position(|t| *t == rp.text_alignment).unwrap_or(0) as u8,
+        grid_opts: [rp.snap_to_grid, rp.adjust_right_ind],
         opts: [rp.mirror_indents, rp.contextual_spacing, rp.suppress_line_numbers, rp.suppress_hyphens],
         start: serde_json::Map::new(),
         mixed: BTreeSet::new(),
@@ -3110,12 +3140,32 @@ fn paragraph_dialog(rp: &wordcraft_doc::resolve::ResolvedPara, tab: u8) -> Dialo
 /// The Paragraph dialog's fields as `para.set` takes them: `align`, `left` and `right` as seen
 /// on the page (its `onPage`), the rest as paragraph properties, line spacing as a multiple.
 fn para_fields(d: &Dialog) -> serde_json::Map<String, Value> {
-    let Dialog::Paragraph { rtl, align, left, right, first, before, after, line, keep_next, keep_lines, page_break, widow, asian, opts, .. } = d
+    let Dialog::Paragraph {
+        rtl,
+        align,
+        left,
+        right,
+        first,
+        before,
+        after,
+        line,
+        keep_next,
+        keep_lines,
+        page_break,
+        widow,
+        asian,
+        text_align,
+        grid_opts,
+        opts,
+        ..
+    } = d
     else {
         return serde_json::Map::new();
     };
     let unit = crate::options::unit().pt_per_unit();
     let [kinsoku, word_wrap, overflow, top_line, de, dn] = asian;
+    let [snap, adjust] = grid_opts;
+    let text_alignment = wordcraft_doc::props::TextAlignment::ALL.get(*text_align as usize).copied().unwrap_or_default().ooxml();
     let [mirror, contextual, no_numbers, no_hyphens] = opts;
     let fields = json!({
         "bidi": rtl, "align": align, "left": left * unit, "right": right * unit, "indentFirst": first * unit,
@@ -3123,6 +3173,7 @@ fn para_fields(d: &Dialog) -> serde_json::Map<String, Value> {
         "keepNext": keep_next, "keepLines": keep_lines, "pageBreakBefore": page_break, "widowControl": widow,
         "mirrorIndents": mirror, "contextualSpacing": contextual, "suppressLineNumbers": no_numbers, "suppressHyphens": no_hyphens,
         "kinsoku": kinsoku, "wordWrap": word_wrap, "overflowPunct": overflow, "topLinePunct": top_line, "autoSpaceDE": de, "autoSpaceDN": dn,
+        "textAlignment": text_alignment, "snapToGrid": snap, "adjustRightInd": adjust,
     });
     match fields {
         Value::Object(m) => m,

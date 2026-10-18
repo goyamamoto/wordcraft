@@ -7343,6 +7343,57 @@ fn compress_punctuation_halves_consecutive_full_width_marks() {
 }
 
 #[test]
+fn text_alignment_lines_up_ascents_centres_or_descents_instead_of_baselines() {
+    // `w:textAlignment` (Paragraph › Asian Typography › Text alignment), measured in Word for
+    // Mac with 游明朝 and Aptos at 10.5, 24 and 48 pt on one line: auto and baseline share the
+    // baseline; top lines up the fonts' ascenders (the 10.5 pt run rises by 0.88 em × 37.5 pt
+    // next to 48 pt 游明朝); center lines up the middles of the ascender–descender boxes (it
+    // rises by half of (ascender − descender) × 37.5 pt); bottom lines up the descenders.
+    use wordcraft_doc::props::TextAlignment;
+    let text = "小大小";
+    let with = |ta: TextAlignment| {
+        let mut p = wordcraft_doc::Paragraph::with_text(
+            text,
+            wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(10.5), ..Default::default() },
+        );
+        let small = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(10.5), ..Default::default() };
+        let big = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(48.0), ..Default::default() };
+        p.runs = vec![
+            wordcraft_doc::Run { len: 3, props: small.clone() },
+            wordcraft_doc::Run { len: 3, props: big },
+            wordcraft_doc::Run { len: 3, props: small },
+        ];
+        p.props.text_alignment = Some(ta);
+        let mut d = Document::from_text("");
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = lay(&d);
+        let pl = first_para(&l);
+        let text_cl: Vec<&crate::para::Cluster> = pl.clusters.iter().filter(|c| c.kind == crate::para::ClKind::Text).collect();
+        assert_eq!(text_cl.len(), 3);
+        let st = |c: &crate::para::Cluster| pl.styles.get(c.style as usize).cloned().unwrap();
+        let (s, b) = (st(text_cl[0]), st(text_cl[1]));
+        let dy = |i: usize| pl.align_dy.get(pl.clusters.iter().position(|c| std::ptr::eq(c, text_cl[i])).unwrap()).copied().unwrap_or(0.0);
+        ((s, b), [dy(0), dy(1), dy(2)], pl.align_dy.is_empty())
+    };
+    let ((s, b), dy, empty) = with(TextAlignment::Auto);
+    assert!(empty && dy == [0.0; 3], "auto keeps the baselines: {dy:?}");
+    assert!(with(TextAlignment::Baseline).2);
+    assert!(b.glyph_ascent > s.glyph_ascent && b.descent > s.descent && s.glyph_ascent <= s.ascent, "{s:?} {b:?}");
+    let up = b.glyph_ascent - s.glyph_ascent;
+    let down = b.descent - s.descent;
+    let close = |a: f32, b: f32| (a - b).abs() < 0.01;
+    let (_, dy, _) = with(TextAlignment::Top);
+    assert!(close(dy[0], up) && close(dy[1], 0.0) && close(dy[2], up), "top: {dy:?} up {up}");
+    let (_, dy, _) = with(TextAlignment::Center);
+    assert!(close(dy[0], (up - down) / 2.0) && close(dy[1], 0.0), "center: {dy:?}");
+    let (_, dy, _) = with(TextAlignment::Bottom);
+    assert!(close(dy[0], -down) && close(dy[1], 0.0), "bottom: {dy:?} down {down}");
+    // The ascender top lines up: 0.88 em a point of size for a font with a 0.88 em ascender,
+    // measured as the ratio of the face's ascender to its size here.
+    assert!(close(up / (48.0 - 10.5), s.glyph_ascent / 10.5), "{} vs {}", up / 37.5, s.glyph_ascent / 10.5);
+}
+
+#[test]
 fn compress_punctuation_halves_a_mark_before_an_opening_bracket() {
     // Measured in Word for Mac (Japanese Normal template): in あ「「い, あ「（い, あ（「い, あ」「い,
     // あ。「い, あ『「い, あ「『い, あ（（い, あ、（い, あ：「い and あ・「い the い starts 1.5 em after

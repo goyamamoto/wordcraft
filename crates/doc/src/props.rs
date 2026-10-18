@@ -285,6 +285,38 @@ pub enum VertAlign {
     Subscript,
 }
 
+/// How a line's runs of different sizes line up (`w:textAlignment`, the Paragraph dialog's
+/// Asian Typography tab): on their baselines (auto, as Word for Mac lays out Japanese and Latin
+/// text), their ascent lines, the centres of their ascent–descent boxes, or their descents.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum TextAlignment {
+    #[default]
+    Auto,
+    Top,
+    Center,
+    Baseline,
+    Bottom,
+}
+
+impl TextAlignment {
+    pub const ALL: [TextAlignment; 5] =
+        [TextAlignment::Auto, TextAlignment::Top, TextAlignment::Center, TextAlignment::Baseline, TextAlignment::Bottom];
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            TextAlignment::Auto => "auto",
+            TextAlignment::Top => "top",
+            TextAlignment::Center => "center",
+            TextAlignment::Baseline => "baseline",
+            TextAlignment::Bottom => "bottom",
+        }
+    }
+    /// `auto` for anything unknown.
+    pub fn from_ooxml(s: &str) -> TextAlignment {
+        TextAlignment::ALL.into_iter().find(|t| t.ooxml() == s).unwrap_or_default()
+    }
+}
+
 /// Word's 16 highlighter colours (plus none).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -971,6 +1003,14 @@ pub struct ParaProps {
     /// `w:snapToGrid`: lines snap to the section's document grid. Unset = on.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub snap_to_grid: Option<bool>,
+    /// `w:textAlignment`: how runs of different sizes line up on a line. Unset = auto.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_alignment: Option<TextAlignment>,
+    /// `w:adjustRightInd`: Word's "Automatically adjust right indent when document grid is
+    /// defined". Unset = on. Kept for the file; Word for Mac lays out the same with it off
+    /// (measured 2026-10-18 on lines-and-characters and snap-to-characters grids).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adjust_right_ind: Option<bool>,
 }
 
 impl ParaProps {
@@ -978,7 +1018,7 @@ impl ParaProps {
         overlay_fields!(self, patch; style, align, indent_left, indent_right, indent_first, indent_left_chars, indent_right_chars, indent_first_chars, space_before, space_after, space_before_auto, space_after_auto, space_before_lines, space_after_lines, line_spacing,
             contextual_spacing, mirror_indents, keep_next, keep_lines, page_break_before, widow_control, outline_level, numbering, tabs, shading, borders,
             suppress_hyphens, suppress_line_numbers, bidi, drop_cap, frame, kinsoku, word_wrap, overflow_punct, top_line_punct, auto_space_de, auto_space_dn,
-            snap_to_grid);
+            snap_to_grid, text_alignment, adjust_right_ind);
     }
     pub fn overlaid(mut self, patch: &ParaProps) -> ParaProps {
         self.overlay(patch);
