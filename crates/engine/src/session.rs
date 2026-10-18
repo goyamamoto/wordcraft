@@ -389,7 +389,9 @@ pub struct Session {
     typing_open: bool,
     /// The next mutating command joins the previous undo step (later frames of a drag).
     join_next: bool,
-    rev: u64,
+    /// The input method's composition shown inline (see `composition.rs`).
+    pub(crate) composition: Option<crate::composition::Composition>,
+    pub(crate) rev: u64,
     /// Which document this is: changes when [`Session::set_document`] replaces it (open, new,
     /// mail merge, recover), never on an edit.
     document_id: u64,
@@ -622,6 +624,7 @@ impl Session {
             undo_evicted: 0,
             redo: Vec::new(),
             typing_open: false,
+            composition: None,
             join_next: false,
             rev: 1,
             document_id: 1,
@@ -1000,6 +1003,7 @@ impl Session {
 
     /// Replace the document (open/new).
     pub fn set_document(&mut self, doc: Document) {
+        self.composition = None;
         self.document_id = self.document_id.wrapping_add(1);
         self.bib_style = doc_bib_style(&doc);
         self.doc = doc;
@@ -1044,6 +1048,8 @@ impl Session {
             sel,
             view: _,
             pending: _,
+            // Provisional input-method text: cleared by every command, so never in a snapshot.
+            composition: _,
             path: _,
             file_name: _,
             // The custom dictionary file, like the file path: host wiring, not an edit.
@@ -1173,6 +1179,13 @@ impl Session {
         let join = std::mem::take(&mut self.join_next);
         let reg = self.registry.clone();
         let Some(spec) = reg.get(id) else { return Err(CmdError::Unknown(id.to_string())) };
+        // The input method's provisional text leaves before anything edits, moves, selects, saves
+        // or replaces the document; queries (format.state for the ribbon, every frame) leave it.
+        if self.composition.is_some()
+            && (spec.mutates || ["select.", "caret.", "file.", "edit.", "text.", "table."].iter().any(|p| id.starts_with(p)))
+        {
+            self.clear_composition();
+        }
         if let Some(why) = (spec.enabled)(self) {
             return Err(CmdError::Disabled(format!("{id}: {why}")));
         }
