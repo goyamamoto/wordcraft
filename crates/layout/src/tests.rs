@@ -5084,6 +5084,57 @@ fn ruby_text_sits_over_its_base_and_the_line_grows_to_fit() {
     assert!(b.x - a.x > 30.0, "{a:?} {b:?}");
 }
 
+/// Measured in Word for Mac (`rb4`/`rb5`, 10.5 pt 游明朝, 2026-10-19): the ruby sits a whole
+/// number of points above the base's baseline (hpsRaise 3 → 1 pt, 13 → 6; 0 puts it on the
+/// baseline), and a base narrower than its ruby follows the ruby's alignment: 漢字 under a
+/// four-character ruby of its own size sits centred, spread edge to edge (distribute letter) or
+/// with half a gap at each edge (distribute space).
+#[test]
+fn ruby_raise_is_whole_points_and_a_narrow_base_follows_the_alignment() {
+    use wordcraft_doc::para::RubyAlign;
+    let size = 10.5f32;
+    let with = |align: RubyAlign, raise: f32| {
+        let mut d = Document::from_text("前後");
+        let ruby = InlineObject::Ruby {
+            base: "漢字".into(),
+            ruby: "かんじよ".into(),
+            align,
+            size,
+            raise,
+            base_size: size,
+            lang: String::new(),
+            props: Box::new(wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(size), ..Default::default() }),
+        };
+        d.insert_object(
+            &Pos::body(0, "前".len()),
+            ruby,
+            &wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(size), ..Default::default() },
+        )
+        .unwrap();
+        let l = lay(&d);
+        let para = first_para(&l);
+        let r = para.rubies.first().expect("a ruby").clone();
+        let c = &para.clusters[r.cluster];
+        let dxs: Vec<f32> = para.glyphs[c.g0 as usize..c.g1 as usize].iter().map(|g| g.dx).collect();
+        (r.raise, c.adv, dxs)
+    };
+    let near = |a: f32, b: f32| (a - b).abs() < 0.05;
+    let (raise, w, dxs) = with(RubyAlign::Center, 1.5);
+    assert!(near(raise, 1.0), "1.5 pt draws as 1: {raise}");
+    assert!(near(w, 4.0 * size) && dxs.len() == 2, "w {w} {dxs:?}");
+    assert!(near(dxs[0], size) && near(dxs[1], 2.0 * size), "centred: {dxs:?}");
+    let (raise, _, dxs) = with(RubyAlign::DistributeLetter, 6.5);
+    assert!(near(raise, 6.0), "{raise}");
+    assert!(near(dxs[0], 0.0) && near(dxs[1], 3.0 * size), "edge to edge: {dxs:?}");
+    let (raise, _, dxs) = with(RubyAlign::DistributeSpace, 0.0);
+    assert!(near(raise, 0.0), "{raise}");
+    assert!(near(dxs[0], 0.5 * size) && near(dxs[1], 2.5 * size), "half a gap at each edge: {dxs:?}");
+    let (_, _, dxs) = with(RubyAlign::Left, 5.0);
+    assert!(near(dxs[0], 0.0) && near(dxs[1], size), "{dxs:?}");
+    let (_, _, dxs) = with(RubyAlign::Right, 5.0);
+    assert!(near(dxs[0], 2.0 * size) && near(dxs[1], 3.0 * size), "{dxs:?}");
+}
+
 /// #354: `wrapText`. Left: text only to the left of a centred object (Square or Tight); Right:
 /// only to its right; Largest: only on its wider side.
 #[test]
