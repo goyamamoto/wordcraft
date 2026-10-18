@@ -17,6 +17,7 @@ pub mod cluster;
 pub mod collate;
 pub mod connector;
 pub mod control;
+pub mod east_asian;
 pub mod edit;
 pub mod effects;
 pub mod encoding;
@@ -467,6 +468,23 @@ pub struct Settings {
     /// Theme fonts (major = headings, minor = body).
     pub major_font: String,
     pub minor_font: String,
+    /// The theme's East Asian fonts (`a:ea`), usually empty: then `script_fonts` decide.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub major_ea: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub minor_ea: String,
+    /// The theme's fonts per East Asian script (`a:font script="Jpan"`…); see `east_asian`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub script_fonts: Vec<east_asian::ScriptFonts>,
+    /// The languages the theme fonts were chosen for (`w:themeFontLang`): Latin and East Asian.
+    /// The East Asian one picks the script font for text with no `w:lang/@w:eastAsia` of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme_font_lang: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme_font_lang_ea: Option<String>,
+    /// Full-width punctuation compression (`w:characterSpacingControl`).
+    #[serde(default)]
+    pub punct_compression: east_asian::PunctCompression,
     /// Theme colours: dk1 lt1 dk2 lt2 accent1..6 hlink folHlink.
     pub theme_colors: Vec<Rgb>,
     pub theme_name: String,
@@ -626,6 +644,12 @@ impl Default for Settings {
             watermark: None,
             major_font: styles::HEADING_FONT.into(),
             minor_font: styles::BODY_FONT.into(),
+            major_ea: String::new(),
+            minor_ea: String::new(),
+            script_fonts: east_asian::office_script_fonts(),
+            theme_font_lang: None,
+            theme_font_lang_ea: None,
+            punct_compression: east_asian::PunctCompression::DoNotCompress,
             theme_colors: THEME_COLORS.to_vec(),
             theme_name: "Craft".into(),
             footnote_format: section::NumFormat::Decimal,
@@ -649,6 +673,15 @@ impl Default for Settings {
             remove_personal_info: false,
             remove_date_time: false,
         }
+    }
+}
+
+impl Settings {
+    /// The theme font for East Asian `text` in a run of language `lang_ea` (see
+    /// [`east_asian::theme_font`]): the body (minor) font, or the heading (major) one.
+    pub fn east_asian_font(&self, major: bool, lang_ea: Option<&str>, text: &str) -> Option<&str> {
+        let ea = if major { &self.major_ea } else { &self.minor_ea };
+        east_asian::theme_font(ea, &self.script_fonts, major, lang_ea, self.theme_font_lang_ea.as_deref(), text)
     }
 }
 

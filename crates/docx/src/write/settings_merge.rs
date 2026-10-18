@@ -22,6 +22,7 @@ const OWNED: &[&str] = &[
     "w:linkStyles",
     "w:trackRevisions",
     "w:documentProtection",
+    "w:themeFontLang",
     "w:defaultTabStop",
     "w:autoHyphenation",
     "w:consecutiveHyphenLimit",

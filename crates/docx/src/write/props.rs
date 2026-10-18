@@ -105,11 +105,12 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     }
     toggle(w, "w:rtl", c.rtl);
     toggle(w, "w:cs", c.cs);
-    match (&c.lang, &c.lang_bidi) {
-        (Some(l), Some(b)) => w.empty("w:lang", &[("w:val", l), ("w:bidi", b)]),
-        (Some(l), None) => w.val("w:lang", l),
-        (None, Some(b)) => w.empty("w:lang", &[("w:bidi", b)]),
-        (None, None) => {}
+    let lang: Vec<(&str, &str)> = [("w:val", &c.lang), ("w:eastAsia", &c.lang_ea), ("w:bidi", &c.lang_bidi)]
+        .into_iter()
+        .filter_map(|(a, v)| v.as_deref().map(|v| (a, v)))
+        .collect();
+    if !lang.is_empty() {
+        w.empty("w:lang", &lang);
     }
     if let Some(fx) = &c.text_effects {
         super::wordart::rpr_effects(w, fx);

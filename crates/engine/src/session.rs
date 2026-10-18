@@ -1346,11 +1346,44 @@ impl Session {
     }
 }
 
-/// A new blank document on `region`'s paper (see [`Session::blank_document`]).
+/// A new blank document on `region`'s paper (see [`Session::blank_document`]). A Japanese
+/// region gets Word's Japanese Normal template ([`japanese_normal`]); Chinese and Korean ones
+/// the theme font language that picks their script's theme font for Han text.
 pub fn blank_document(region: &wordcraft_geom::Region) -> Document {
     let mut d = Document::new();
     let (_, w, h) = region.paper();
     d.last_section.page_w = w;
     d.last_section.page_h = h;
+    let territory = region.territory.to_ascii_uppercase();
+    match region.language.to_ascii_lowercase().as_str() {
+        "ja" => japanese_normal(&mut d),
+        "zh" => d.settings.theme_font_lang_ea = Some(if matches!(territory.as_str(), "TW" | "HK" | "MO") { "zh-TW" } else { "zh-CN" }.into()),
+        "ko" => d.settings.theme_font_lang_ea = Some("ko-KR".into()),
+        _ => {}
+    }
     d
+}
+
+/// Word's Normal template with Japanese as the East Asian editing language, measured in Word
+/// for Mac 16.113 (a Normal.dotm it created afresh): 10.5 pt body text (Latin and East Asian
+/// sizes `w:sz="21"`), single line spacing with no space after and no widow control, a line grid
+/// of 18 pt (`w:docGrid w:type="lines" w:linePitch="360"`), 42 pt default tabs, header and
+/// footer 851 and 992 twips from the edge, punctuation compression on, the East Asian language
+/// `ja-JP` in the document defaults and `w:themeFontLang`. The paper follows the region as before.
+pub fn japanese_normal(d: &mut Document) {
+    let chr = &mut d.styles.default_chr;
+    chr.size = Some(10.5);
+    chr.size_cs = Some(12.0);
+    chr.lang_ea = Some("ja-JP".into());
+    let para = &mut d.styles.default_para;
+    para.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+    para.space_after = Some(0.0);
+    para.widow_control = Some(false);
+    d.settings.theme_font_lang_ea = Some("ja-JP".into());
+    d.settings.punct_compression = wordcraft_doc::east_asian::PunctCompression::CompressPunctuation;
+    d.settings.default_tab = 42.0;
+    let sect = &mut d.last_section;
+    sect.doc_grid = Some(wordcraft_doc::section::DocGrid { kind: wordcraft_doc::section::DocGridType::Lines, line_pitch: 18.0, char_space: 0 });
+    sect.header = 851.0 / 20.0;
+    sect.footer = 992.0 / 20.0;
 }

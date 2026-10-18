@@ -481,6 +481,74 @@ fn snap_chars(b: &mut Builder, text: &str, grid: &Grid) {
     }
 }
 
+/// The first character of a text cluster.
+fn cluster_char(text: &str, c: &Cluster) -> Option<char> {
+    (c.kind == ClKind::Text).then(|| text.get(c.start..c.end)).flatten().and_then(|t| t.chars().next())
+}
+
+/// An East Asian letter for the automatic spacing: an ideograph, kana, Hangul or a full-width
+/// letter or digit — not punctuation (Word adds no space after 。 before Latin text).
+fn ea_letter(c: char) -> bool {
+    (crate::kinsoku::is_east_asian(c) || is_east_asian(c)) && c.is_alphanumeric()
+}
+
+/// Word's "Adjust space between Asian and Latin text" and "… between Asian text and numbers"
+/// (`w:autoSpaceDE`, `w:autoSpaceDN`; both on unless a paragraph turns them off): a quarter of the
+/// East Asian character's font size between an East Asian letter and a Latin letter (`letters`)
+/// or a digit (`digits`) next to it, when no space separates them. Measured in Word for Mac:
+/// 漢字Latin漢字123漢字 at 10.5 pt has 2.6 pt gaps, 1/4 em, at each of the four boundaries.
+fn auto_space(b: &mut Builder, text: &str, letters: bool, digits: bool) {
+    let latin =
+        |c: char| !crate::kinsoku::is_east_asian(c) && !is_east_asian(c) && ((letters && c.is_alphabetic()) || (digits && c.is_ascii_digit()));
+    let mut gaps: Vec<(usize, f32)> = Vec::new();
+    for i in 1..b.clusters.len() {
+        let (Some(prev), Some(next)) = (b.clusters.get(i - 1), b.clusters.get(i)) else { continue };
+        let (Some(pc), Some(nc)) = (cluster_char(text, prev), cluster_char(text, next)) else { continue };
+        let ea = if ea_letter(pc) && latin(nc) {
+            prev
+        } else if latin(pc) && ea_letter(nc) {
+            next
+        } else {
+            continue;
+        };
+        let size = b.styles.get(ea.style as usize).map_or(0.0, |st| st.size);
+        if size.is_finite() && size > 0.0 {
+            gaps.push((i - 1, size / 4.0));
+        }
+    }
+    for (i, gap) in gaps {
+        if let Some(c) = b.clusters.get_mut(i) {
+            c.adv += gap;
+        }
+    }
+}
+
+/// Full-width closing punctuation that Word's "compress punctuation" (`w:characterSpacingControl`)
+/// narrows to half width when another full-width punctuation mark follows it. Measured in Word
+/// for Mac (Japanese Normal template): in 「括弧」と（丸括弧）、句読点。。。、、、 the ） before 、
+/// and every 。 and 、 but the last take half an em; a 、 before 句 keeps its full width.
+const COMPRESSIBLE: &str = "、。，．）」』】〕〉》〙〗〟］｝";
+const FULL_WIDTH_PUNCT: &str = "、。，．・：；！？）」』】〕〉》〙〗〟］｝（「『【〔〈《〘〖〝［｛";
+
+fn compress_punctuation(b: &mut Builder, text: &str) {
+    let mut halve: Vec<usize> = Vec::new();
+    for i in 1..b.clusters.len() {
+        let (Some(prev), Some(next)) = (b.clusters.get(i - 1), b.clusters.get(i)) else { continue };
+        let (Some(pc), Some(nc)) = (cluster_char(text, prev), cluster_char(text, next)) else { continue };
+        if COMPRESSIBLE.contains(pc) && FULL_WIDTH_PUNCT.contains(nc) {
+            halve.push(i - 1);
+        }
+    }
+    for i in halve {
+        if let Some(c) = b.clusters.get_mut(i)
+            && c.adv.is_finite()
+        {
+            // Closing marks sit in the left half of their cell: the glyph stays, the cell shrinks.
+            c.adv /= 2.0;
+        }
+    }
+}
+
 /// An area text wraps around.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Exclusion {
@@ -761,15 +829,26 @@ impl<'a> Builder<'a> {
         let sym = SymbolRun::of(&rc.font, &resolved);
         let show = |c: char| sym.map_or(c, |m| m.show(c));
         let primary_cs = rc_cs.as_ref().map(|r| wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &r.font), r.bold, r.italic).face);
-        // Chinese, Japanese and Korean characters use the run's East Asian font (`w:eastAsia`) when
-        // it is installed and has them.
+        // Chinese, Japanese and Korean characters use the run's East Asian font (`w:eastAsia`),
+        // else the theme's font for the text's script (游明朝 for Japanese body text under Word's
+        // Office theme), when it is installed — or, for a known CJK font, its substitute — and has
+        // them.
+        let has_ea = text.chars().any(east_asian);
+        let theme_ea: Option<String> = if rc.font_ea.is_none() && has_ea {
+            let s = &self.env.doc.settings;
+            let major = !s.major_font.is_empty() && s.major_font.eq_ignore_ascii_case(&rc.font) && !s.major_font.eq_ignore_ascii_case(&s.minor_font);
+            s.east_asian_font(major, rc.lang_ea.as_deref(), text).map(str::to_string)
+        } else {
+            None
+        };
         let primary_ea = rc
             .font_ea
-            .as_ref()
-            .filter(|f| !f.eq_ignore_ascii_case(&rc.font) && text.chars().any(east_asian))
-            .map(|f| wordcraft_fonts::word::resolve(f, rc.bold, rc.italic))
-            .filter(|r| !r.substituted)
-            .map(|r| r.face);
+            .as_deref()
+            .or(theme_ea.as_deref())
+            .filter(|f| has_ea && !f.eq_ignore_ascii_case(&rc.font))
+            .map(|f| (f, wordcraft_fonts::word::resolve(lookup_family(self.env.doc, f), rc.bold, rc.italic)))
+            .filter(|(f, r)| !r.substituted || wordcraft_fonts::word::is_cjk_family(f))
+            .map(|(_, r)| r.face);
         let use_levels = para_text && !self.levels.is_empty();
         let context = if self.env.numeral == NumeralMode::Context && use_levels { context_digit_dirs(text, &self.levels, base) } else { Vec::new() };
         // One fallback face for the run's East Asian characters: the first face in fallback order
@@ -1456,6 +1535,14 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     }
     if rp.snap_to_grid {
         snap_chars(&mut b, &p.text, &env.grid);
+    }
+    // On a character grid the East Asian characters already sit on their pitch (the grid
+    // absorbs the space); otherwise the automatic spacing applies.
+    if (rp.auto_space_de || rp.auto_space_dn) && !(rp.snap_to_grid && env.grid.chars.is_some()) {
+        auto_space(&mut b, &p.text, rp.auto_space_de, rp.auto_space_dn);
+    }
+    if env.doc.settings.punct_compression.compresses() {
+        compress_punctuation(&mut b, &p.text);
     }
     // Break opportunities and hyphenation points come from the text as laid out: hidden text that is
     // not shown and, without markup, tracked deletions are left out, so a space or soft hyphen there
