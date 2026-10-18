@@ -120,6 +120,8 @@
 	Character Spacing	Karakter Aralığı
 	Characters (no spaces)	Karakterler (boşluksuz)
 	Characters (with spaces)	Karakterler (boşluklu)
+	Non-Asian words	Asya dışı sözcükler
+	Asian characters and Korean words	Asya karakterleri ve Korece sözcükler
 	Chart	Grafik
 	Check Accessibility	Erişilebilirliği Denetle
 	Check Compatibility	Uyumluluğu Denetle
@@ -215,6 +217,7 @@
 	Document Title	Belge Başlığı
 	Documents you open will show up here.	Açtığınız belgeler burada görünür.
 	Dot-dash	Nokta-çizgi
+	Dot-dot-dash	Nokta-nokta-çizgi
 	Dotted	Noktalı
 	Double	Çift
 	Double Spacing	Çift Satır Aralığı
@@ -1669,6 +1672,7 @@ preview	Title	Örnek
 	Mail Merge	Posta Birleştirme
 	More Columns…	Diğer Sütunlar…
 	More Symbols…	Diğer Semboller…
+	More Underlines…	Diğer Alt Çizgiler…
 	No-Width Non Break	Sıfır Genişlikli Bölünmez
 	No-Width Optional Break	Sıfır Genişlikli İsteğe Bağlı Bölme
 	Paragraph Mark	Paragraf İşareti
@@ -2640,6 +2644,7 @@ preview	Title	Örnek
 	Adjust Width	Genişliği Ayarla
 	Emphasis Mark	Vurgu İşareti
 	Emphasis mark:	Vurgu işareti:
+	Underline style:	Alt çizgi stili:
 	Enclose in characters:	Karakterlerle çevrele:
 	Fit in line	Satıra sığdır
 	Current text width:	Geçerli metin genişliği:

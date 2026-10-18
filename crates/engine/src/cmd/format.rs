@@ -835,6 +835,8 @@ pub fn state(s: &Session) -> Value {
         "bold": all.iter().all(|r| r.bold),
         "italic": all.iter().all(|r| r.italic),
         "underline": all.iter().all(|r| r.underline != Underline::None),
+        // The underline style (an ST_Underline name; null when mixed), for the Font dialog's list.
+        "underlineStyle": same(&|r| json!(r.underline.ooxml())),
         "strike": all.iter().all(|r| r.strike),
         "border": all.iter().all(|r| r.border.is_some()),
         "subscript": all.iter().all(|r| r.vert_align == VertAlign::Subscript),

@@ -314,6 +314,8 @@
 	Character Border	Ивица знака
 	Characters (no spaces)	Знакови (без размака)
 	Characters (with spaces)	Знакови (са размацима)
+	Non-Asian words	Неазијске речи
+	Asian characters and Korean words	Азијски знакови и корејске речи
 	Chart	Графикон
 	Check Accessibility	Провера приступачности
 	Check Compatibility	Провера компатибилности
@@ -412,6 +414,7 @@
 	Document Title	Наслов документа
 	Documents you open will show up here.	Документи које отворите појавиће се овде.
 	Dot-dash	Тачка-црта
+	Dot-dot-dash	Тачка-тачка-црта
 	Dotted	Тачкасто
 	Double	Дупло
 	Double Spacing	Дупло проређење
@@ -1381,6 +1384,7 @@
 	Mail Merge	Спајање поште
 	More Columns…	Још колона…
 	More Symbols…	Још симбола…
+	More Underlines…	Још подвлачења…
 	No-Width Non Break	Недељиви знак нулте ширине
 	No-Width Optional Break	Опциони прелом нулте ширине
 	Paragraph Mark	Знак пасуса
@@ -2258,6 +2262,7 @@
 	Adjust Width	Подеси ширину
 	Emphasis Mark	Ознака нагласка
 	Emphasis mark:	Ознака нагласка:
+	Underline style:	Стил подвлачења:
 	Enclose in characters:	Затвори у знакове:
 	Fit in line	Уклопи у ред
 	Current text width:	Тренутна ширина текста:

@@ -169,7 +169,9 @@ pub enum Dialog {
         size: String,
         bold: bool,
         italic: bool,
-        underline: bool,
+        /// The underline style (an ST_Underline name: `none`, `single`, `words`, `double`,
+        /// `wavyDouble` …), Word's Underline style list.
+        underline: String,
         strike: bool,
         sup: bool,
         sub: bool,
@@ -914,7 +916,16 @@ impl Dialog {
                     size: st.get("size").and_then(Value::as_f64).map(|v| v.to_string()).unwrap_or_default(),
                     bold: b("bold"),
                     italic: b("italic"),
-                    underline: b("underline"),
+                    underline: {
+                        let style = s("underlineStyle");
+                        if !style.is_empty() {
+                            style
+                        } else if b("underline") {
+                            "single".into()
+                        } else {
+                            "none".into()
+                        }
+                    },
                     strike: b("strike"),
                     sup: b("superscript"),
                     sub: b("subscript"),
@@ -1478,6 +1489,89 @@ pub(crate) fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
 /// The Font dialog's emphasis marks: `w:em` value and label.
 pub const EMPHASIS_MARKS: [(&str, &str); 5] = [("none", "None"), ("dot", "Dot"), ("comma", "Comma"), ("circle", "Circle"), ("underDot", "Under dot")];
 
+/// Word's Underline style list in the Font dialog: `(none)`, `Words only` and the sixteen line
+/// styles, each drawn as a sample of itself as Word lists them.
+fn underline_style_combo(ui: &mut egui::Ui, underline: &mut String, color: egui::Color32) {
+    use wordcraft_doc::props::Underline;
+    let current = Underline::from_ooxml(underline);
+    let text = |u: Underline| match u {
+        Underline::None => tl!("(none)"),
+        Underline::Words => tl!("Words only"),
+        // A space keeps the row height; the sample is painted over it.
+        _ => " ",
+    };
+    let r = egui::ComboBox::from_id_salt("font_ul").width(180.0).selected_text(text(current)).show_ui(ui, |ui| {
+        ui.set_min_width(170.0);
+        for u in Underline::ALL {
+            let selected = u == current;
+            let label = text(u);
+            let resp = if label.trim().is_empty() {
+                let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width().max(160.0), 18.0), egui::Sense::click());
+                if selected || resp.hovered() {
+                    let fill = if selected { ui.visuals().selection.bg_fill } else { ui.visuals().widgets.hovered.weak_bg_fill };
+                    ui.painter().rect_filled(rect, 2.0, fill);
+                }
+                paint_underline_sample(ui.painter(), rect.shrink2(vec2(6.0, 0.0)), u, ui.visuals().text_color());
+                resp
+            } else {
+                ui.selectable_label(selected, label)
+            };
+            if resp.clicked() {
+                *underline = u.ooxml().to_string();
+            }
+        }
+    });
+    if text(current).trim().is_empty() {
+        let rect = r.response.rect;
+        let sample = egui::Rect::from_min_max(egui::pos2(rect.min.x + 8.0, rect.min.y), egui::pos2(rect.max.x - 24.0, rect.max.y));
+        paint_underline_sample(ui.painter(), sample, current, color);
+    }
+}
+
+/// A sample of underline `kind` across `rect` (on its centre line), as the Font dialog's list
+/// and preview show it: heavy styles two pixels, the others one, Word's patterns in proportion.
+fn paint_underline_sample(p: &egui::Painter, rect: egui::Rect, kind: wordcraft_doc::props::Underline, color: egui::Color32) {
+    use wordcraft_doc::props::Underline;
+    if rect.width() < 2.0 {
+        return;
+    }
+    let (x0, x1, y) = (rect.left(), rect.right(), rect.center().y);
+    let thin = egui::Stroke::new(1.0, color);
+    let heavy = egui::Stroke::new(2.0, color);
+    let stroke = if kind.is_heavy() { heavy } else { thin };
+    let line = |yy: f32, s: egui::Stroke| {
+        p.line_segment([egui::pos2(x0, yy), egui::pos2(x1, yy)], s);
+    };
+    let dashes = |yy: f32, s: egui::Stroke, d: &[f32], g: &[f32]| {
+        p.extend(egui::Shape::dashed_line_with_offset(&[egui::pos2(x0, yy), egui::pos2(x1, yy)], s, d, g, 0.0));
+    };
+    let wave = |yy: f32, amp: f32, s: egui::Stroke| {
+        let n = ((x1 - x0) / 3.0).ceil().clamp(1.0, 400.0) as usize;
+        let pts: Vec<egui::Pos2> =
+            (0..=n).map(|i| egui::pos2(x0 + (x1 - x0) * i as f32 / n as f32, yy + if i % 2 == 0 { -amp } else { amp })).collect();
+        p.add(egui::Shape::line(pts, s));
+    };
+    match kind {
+        Underline::None | Underline::Words => {}
+        Underline::Single | Underline::Thick => line(y, stroke),
+        Underline::Double => {
+            line(y - 1.5, thin);
+            line(y + 1.5, thin);
+        }
+        Underline::Dotted | Underline::DottedHeavy => dashes(y, stroke, &[2.0], &[2.0]),
+        Underline::Dash | Underline::DashedHeavy => dashes(y, stroke, &[6.0], &[3.0]),
+        Underline::DashLong | Underline::DashLongHeavy => dashes(y, stroke, &[12.0], &[6.0]),
+        Underline::DotDash | Underline::DashDotHeavy => dashes(y, stroke, &[5.0, 1.5], &[1.5, 1.5]),
+        Underline::DotDotDash | Underline::DashDotDotHeavy => dashes(y, stroke, &[4.0, 1.5, 1.5], &[1.5, 1.5, 1.5]),
+        Underline::Wave => wave(y, 1.5, thin),
+        Underline::WavyHeavy => wave(y, 1.5, heavy),
+        Underline::DoubleWave => {
+            wave(y - 2.0, 1.0, thin);
+            wave(y + 2.0, 1.0, thin);
+        }
+    }
+}
+
 fn font_props(d: &Dialog) -> serde_json::Map<String, Value> {
     let Dialog::Font { font, font_ea, size, bold, italic, underline, strike, sup, sub, small_caps, caps, hidden, color, spacing, em, .. } = d else {
         return serde_json::Map::new();
@@ -1486,7 +1580,7 @@ fn font_props(d: &Dialog) -> serde_json::Map<String, Value> {
     props.insert("bold".into(), json!(*bold));
     props.insert("italic".into(), json!(*italic));
     props.insert("strike".into(), json!(*strike));
-    props.insert("underline".into(), json!(if *underline { "single" } else { "none" }));
+    props.insert("underline".into(), json!(underline));
     let vert = if *sup {
         "superscript"
     } else if *sub {
@@ -1591,9 +1685,6 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             if *italic {
                 fmt.italics = true;
             }
-            if *underline {
-                fmt.underline = egui::Stroke::new(1.0, preview_color);
-            }
             if *strike {
                 fmt.strikethrough = egui::Stroke::new(1.0, preview_color);
             }
@@ -1637,6 +1728,11 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 ui.label(tl!("Spacing (pt):"));
                 ui.add(egui::DragValue::new(spacing).speed(0.1).range(-20.0..=20.0));
                 ui.end_row();
+                // Word's Underline style list: (none), Words only and the sixteen line styles drawn
+                // as samples.
+                ui.label(tl!("Underline style:"));
+                underline_style_combo(ui, underline, preview_color);
+                ui.end_row();
                 // Word's emphasis mark (傍点), in the Font dialog with an East Asian editing language.
                 ui.label(tl!("Emphasis mark:"));
                 let shown = EMPHASIS_MARKS.iter().find(|(v, _)| v == em).map(|(_, l)| tl!(l).to_string()).unwrap_or_default();
@@ -1653,7 +1749,6 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 ui.checkbox(bold, tl!("Bold"));
                 ui.checkbox(italic, tl!("Italic"));
                 ui.end_row();
-                ui.checkbox(underline, tl!("Underline"));
                 ui.checkbox(strike, tl!("Strikethrough"));
                 ui.end_row();
                 ui.checkbox(sup, tl!("Superscript"));
@@ -1671,7 +1766,11 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             let sample = if *caps { tl!("AaBbYyZz").to_uppercase() } else { tl!("AaBbYyZz").to_string() };
             let mut job = egui::text::LayoutJob::single_section(sample, fmt);
             job.wrap.max_width = ui.available_width().min(400.0);
-            ui.label(job);
+            let shown = ui.label(job).rect;
+            // The chosen underline style under the sample, as Word's preview draws it.
+            let y = shown.max.y - 0.2 * preview_size;
+            let under = egui::Rect::from_min_max(egui::pos2(shown.min.x, y - 4.0), egui::pos2(shown.max.x, y + 4.0));
+            paint_underline_sample(ui.painter(), under, wordcraft_doc::props::Underline::from_ooxml(underline), preview_color);
             let (ok, cancel) = buttons(ui, tl!("OK"));
             if ok {
                 apply_font(app, d);
@@ -2176,6 +2275,8 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         Dialog::Bookmark { name, by_location, hidden, deleted } => bookmark(app, ui, name, by_location, hidden, deleted),
         Dialog::WordCount { stats } => {
             egui::Grid::new("wc").num_columns(2).spacing(vec2(30.0, 6.0)).show(ui, |ui| {
+                // Word's East Asian rows, shown with East Asian text or a CJK interface.
+                let east_asian = stats.get("eastAsianCharacters").and_then(Value::as_u64).unwrap_or(0) > 0 || crate::i18n::current().uses_cjk();
                 for (l, k) in [
                     ("Pages", "pages"),
                     ("Words", "words"),
@@ -2183,7 +2284,12 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                     ("Characters (with spaces)", "charactersWithSpaces"),
                     ("Paragraphs", "paragraphs"),
                     ("Lines", "lines"),
+                    ("Non-Asian words", "nonAsianWords"),
+                    ("Asian characters and Korean words", "eastAsianCharacters"),
                 ] {
+                    if !east_asian && (k == "nonAsianWords" || k == "eastAsianCharacters") {
+                        continue;
+                    }
                     ui.label(tl!(l));
                     ui.label(stats.get(k).map(|v| v.to_string()).unwrap_or_default());
                     ui.end_row();
@@ -4258,6 +4364,28 @@ mod tests {
         apply_font(&mut app, &d);
         let c = app.session.doc.para_at(&wordcraft_doc::Pos::body(0, 0)).map(|p| p.props_of_char(0).clone()).unwrap_or_default();
         assert_eq!((c.small_caps, c.caps, c.size), (Some(false), Some(true), Some(14.0)));
+    }
+
+    /// The Font dialog's Underline style list reads the selection's style and applies the one
+    /// chosen, any of Word's eighteen.
+    #[test]
+    fn font_dialog_lists_and_applies_every_underline_style() {
+        use wordcraft_doc::props::Underline;
+        let mut app = app_with("Example");
+        let _ = app.run("select.all", json!({}));
+        let _ = app.run("format.underline", json!({"style": "dashLongHeavy"}));
+        let Some(d) = Dialog::open("font", &mut app) else { panic!("no font dialog") };
+        let Dialog::Font { underline, .. } = &d else { panic!("not the Font dialog") };
+        assert_eq!(underline, "dashLongHeavy");
+        for u in Underline::ALL {
+            let Some(mut d) = Dialog::open("font", &mut app) else { panic!("no font dialog") };
+            if let Dialog::Font { underline, .. } = &mut d {
+                *underline = u.ooxml().to_string();
+            }
+            apply_font(&mut app, &d);
+            let c = app.session.doc.para_at(&wordcraft_doc::Pos::body(0, 0)).map(|p| p.props_of_char(0).clone()).unwrap_or_default();
+            assert_eq!(c.underline.unwrap_or(Underline::None), u, "{}", u.ooxml());
+        }
     }
 
     /// The Font dialog's emphasis mark (傍点) reads the selection's mark and applies

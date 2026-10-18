@@ -119,6 +119,8 @@
 	Characters	Znaki
 	Characters (no spaces)	Znaki (bez spacji)
 	Characters (with spaces)	Znaki (ze spacjami)
+	Non-Asian words	Słowa nieazjatyckie
+	Asian characters and Korean words	Znaki azjatyckie i słowa koreańskie
 	Chart	Wykres
 	Check Accessibility	Sprawdź ułatwienia dostępu
 	Check Compatibility	Sprawdź zgodność
@@ -217,6 +219,7 @@
 	Document Title	Tytuł dokumentu
 	Documents you open will show up here.	Tu pojawią się otwierane dokumenty.
 	Dot-dash	Kreska-kropka
+	Dot-dot-dash	Kropka-kropka-kreska
 	Dotted	Kropkowane
 	Double	Podwójne
 	Double Spacing	Interlinia podwójna
@@ -1266,6 +1269,7 @@
 	Mon	Pon
 	More Columns…	Więcej kolumn…
 	More Symbols…	Więcej symboli…
+	More Underlines…	Więcej podkreśleń…
 	Name	Nazwa
 	Name of the file this document is saved as	Nazwa pliku, pod którą zapisano ten dokument
 	No-Width Non Break	Niełamiący znak zerowej szerokości
@@ -2633,6 +2637,7 @@ preview	Title	Tytuł
 	Adjust Width	Dopasuj szerokość
 	Emphasis Mark	Znak wyróżnienia
 	Emphasis mark:	Znak wyróżnienia:
+	Underline style:	Styl podkreślenia:
 	Enclose in characters:	Ujmij w znaki:
 	Fit in line	Dopasuj do wiersza
 	Current text width:	Bieżąca szerokość tekstu:

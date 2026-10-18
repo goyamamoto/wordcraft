@@ -232,15 +232,34 @@ impl ResolvedPara {
         if self.bidi { (self.indent_right, self.indent_left) } else { (self.indent_left, self.indent_right) }
     }
 
-    /// Turn the indents given in characters into points, one character being `size` points: the
-    /// size of the paragraph mark's font (as Word measures `w:firstLineChars` and friends).
+    /// Turn the indents given in characters into points with one character `size` points wide
+    /// for every indent (a style's own size; layout knows the paragraph, see
+    /// [`ResolvedPara::set_char_units`]).
     pub fn set_char_unit(&mut self, size: f32) {
-        let size = if size.is_finite() { size.clamp(1.0, 1638.0) } else { 12.0 };
+        self.set_char_units(size, size);
+    }
+
+    /// Turn the indents given in characters into points, as Word for Mac measures them
+    /// (2026-10-19): the left and right indents in `unit_lr`, the Normal style's font size, the
+    /// first-line and hanging indents in `unit_first`, the paragraph's first character's size
+    /// (the paragraph's own 16 pt made no difference to a left indent in characters, and the
+    /// Normal style's 14 pt none to a first-line indent), each plus the character grid's gap
+    /// when the section has a character pitch. `w:leftChars` is where the first line starts: a
+    /// hanging indent in characters adds to it, so the other lines hang that much further in
+    /// (left 1 ch + hanging 1 ch at 10.5 pt: the first line at 10.5, the rest at 21).
+    pub fn set_char_units(&mut self, unit_lr: f32, unit_first: f32) {
+        let unit = |u: f32| if u.is_finite() { u.clamp(0.0, 1638.0) } else { 12.0 };
+        let (u_lr, u_f) = (unit(unit_lr), unit(unit_first));
         let [l, r, f] = self.indent_chars;
-        for (chars, pts) in [(l, &mut self.indent_left), (r, &mut self.indent_right), (f, &mut self.indent_first)] {
-            if chars != 0.0 {
-                *pts = (chars * size).clamp(-MAX_INDENT, MAX_INDENT);
-            }
+        let clamp = |v: f32| v.clamp(-MAX_INDENT, MAX_INDENT);
+        if l != 0.0 || f < 0.0 {
+            self.indent_left = clamp(l * u_lr + (-f).max(0.0) * u_f);
+        }
+        if r != 0.0 {
+            self.indent_right = clamp(r * u_lr);
+        }
+        if f != 0.0 {
+            self.indent_first = clamp(f * u_f);
         }
     }
 }

@@ -808,6 +808,9 @@ fn word_count(s: &mut Session, v: &Value) -> CmdResult {
     };
     let chars = text.chars().filter(|c| *c != '\n').count();
     let chars_no_spaces = text.chars().filter(|c| !c.is_whitespace()).count();
+    // Word's East Asian rows: Asian characters and Korean words, and the words that are not.
+    let east_asian = wordcraft_doc::count_east_asian(&text);
+    let non_asian_words = words.saturating_sub(east_asian);
     let paragraphs = text.split('\n').filter(|l| !l.trim().is_empty()).count();
     let lines: usize = {
         let l = s.layout();
@@ -828,6 +831,7 @@ fn word_count(s: &mut Session, v: &Value) -> CmdResult {
     let pages = s.layout().pages.len();
     Ok(json!({
         "pages": pages, "words": words, "characters": chars_no_spaces, "charactersWithSpaces": chars, "paragraphs": paragraphs, "lines": lines,
+        "eastAsianCharacters": east_asian, "nonAsianWords": non_asian_words,
         "includeTextBoxes": s.prefs.count_notes,
     }))
 }

@@ -19,11 +19,14 @@ pub enum Stroke {
     Dashed,
     Double,
     Wave,
-    /// Dashes `on` long with `off` gaps, points, from the line's start: Word's dotted and dashed
-    /// underlines (1.44 / 1.44 and 3.84 / 1.92 at every size, in lines and vertical columns).
+    /// Dashes `on` long with `off` gaps, points, from the line's start, each dash followed by
+    /// `dots` dots `off` wide after `off` gaps: Word's dotted (1.44 / 1.44), dashed (3.84 / 1.92),
+    /// long-dash (7.92 / 3.84), dot-dash (2.88 / 0.96, one dot) and dot-dot-dash (2.16 / 0.72,
+    /// two dots) underlines, the same at every size, in lines and vertical columns.
     Dashes {
         on: f32,
         off: f32,
+        dots: u8,
     },
     /// A zigzag `amp` either side of the line, straight runs `step` long between the peaks, from
     /// the lower peak: Word's wavy underline (1.2-pt runs).
@@ -31,6 +34,24 @@ pub enum Stroke {
         amp: f32,
         step: f32,
     },
+}
+
+impl Stroke {
+    /// The dash pattern (on, off, on, off, …) of a [`Stroke::Dashes`] whose lengths are usable.
+    pub fn dash_pattern(self) -> Option<Vec<f32>> {
+        let Stroke::Dashes { on, off, dots } = self else { return None };
+        if !(on.is_finite() && off.is_finite() && on > 0.0 && off >= 0.0) {
+            return None;
+        }
+        let mut v = vec![on, off];
+        if off > 0.0 {
+            for _ in 0..dots.min(8) {
+                v.push(off);
+                v.push(off);
+            }
+        }
+        Some(v)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1871,8 +1892,6 @@ fn emphasis_mark(em: wordcraft_doc::props::EmphasisMark, x: f32, y: f32, size: f
 #[derive(Clone, Copy, Debug)]
 struct DecoGeo {
     vertical: bool,
-    /// The largest text size among the run's faces, points.
-    size: f32,
     /// Horizontal text: the underline's top edge (y) and thickness. A vertical column: the
     /// line's near edge (v, facing the text; the line lies beyond it, towards the page's right).
     ul: f32,
@@ -1880,6 +1899,9 @@ struct DecoGeo {
     /// The strikethrough's centre (y; a vertical column's centre line) and thickness.
     st: f32,
     st_t: f32,
+    /// An East Asian face draws some of the clusters: its wave hangs from the line's top
+    /// edge and swings wider than a Latin face's.
+    ea: bool,
 }
 
 /// The line geometry for the clusters `k0..k1` of `line` (a format run, or one cluster for
@@ -1919,20 +1941,21 @@ fn decoration_geometry(
         }
     }
     let n = faces.len().max(1) as f32;
-    let size = faces.iter().map(|(_, st, _)| st.size).fold(0.0f32, f32::max);
     let st_t = faces.iter().map(|(_, st, _)| st.deco.strike_thickness).fold(0.0f32, f32::max).max(0.1);
+    let ea = faces.iter().any(|(_, st, _)| st.face.get().is_east_asian());
     if pl.vertical {
         let near = faces
             .iter()
             .map(|(_, st, stands)| if *stands { baseline - 0.525 * st.size } else { baseline + (st.ascent - st.descent) / 2.0 - st.glyph_ascent })
             .fold(f32::INFINITY, f32::min);
+        let size = faces.iter().map(|(_, st, _)| st.size).fold(0.0f32, f32::max);
         let ul = if near.is_finite() { near } else { baseline - 0.525 * size };
-        return DecoGeo { vertical: true, size, ul, ul_t: 0.72, st: baseline, st_t };
+        return DecoGeo { vertical: true, ul, ul_t: 0.72, st: baseline, st_t, ea };
     }
     let ul = baseline + faces.iter().map(|(_, st, _)| st.deco.underline_top).sum::<f32>() / n;
     let ul_t = faces.iter().map(|(_, st, _)| st.deco.underline_thickness).fold(0.0f32, f32::max).max(0.1);
     let st = baseline - faces.iter().map(|(_, st, _)| st.deco.strike_top - st.deco.strike_thickness / 2.0).sum::<f32>() / n;
-    DecoGeo { vertical: false, size, ul, ul_t, st, st_t }
+    DecoGeo { vertical: false, ul, ul_t, st, st_t, ea }
 }
 
 /// The underline of `kind` from `x0` to `x1` with geometry `geo`, as Word for Mac draws it
@@ -1944,59 +1967,78 @@ fn decoration_geometry(
 ///   1.2 pt (1.2 at 10.5, 1.68 at 16, 2.4 at 24 for 游明朝; 1.2 for Aptos); 0.72 pt apart in a
 ///   column;
 /// - dotted and dashed: Word's fixed patterns (`Stroke::Dashes`);
-/// - wavy: a zigzag of 1.2-pt runs from the line's top edge, 1.3 thicknesses peak to peak and
-///   at least 0.48 pt (0.48 at 10.5, 0.96 at 16, 1.44 at 24, 2.64 at 36 for 游明朝; 0.48 for
-///   Aptos), a fiftieth of an em thick (0.24 pt at 10.5); in a column 0.72 pt peak to peak and
-///   0.24 thick at every size; double wavy: two of half the swing.
+/// - wavy: a 0.24-pt zigzag of 1.2-pt runs; on an East Asian face 1.35 thicknesses peak to
+///   peak, its ink hanging from the line's top edge (游明朝: 0.48 at 8–11 pt, 0.72 at 12–14, 0.96
+///   at 16, 1.2 at 18–20, 1.44 at 24, 1.92 at 28, 2.16 at 32, 2.64 at 36, 3.36 at 48; Hiragino
+///   1.2 at 18, 2.64 at 36), on a Latin face 0.75 thicknesses standing on it (Aptos 0.48 up to
+///   24 pt, 0.72 at 36, 0.96 at 48; Times New Roman 0.72 at 18, 1.44 at 36; Arial 0.96 and
+///   1.92), at least 0.48; the heavy wave the same zigzag 0.96 thick; the double wave two waves
+///   sharing that room, each half the swing less a stroke (at least 0.24), half the room apart
+///   (游明朝 at 48 pt: 1.44-pt waves 1.92 apart; at 24: 0.48-pt waves 0.96 apart; at 10.5: 0.24
+///   and 0.24); in a column 0.72 pt peak to peak and 0.24 thick at every size.
 #[allow(clippy::too_many_arguments)]
 fn underline_draws(kind: Underline, x0: f32, x1: f32, geo: &DecoGeo, color: Rgb, alpha: f32, text_bg: Option<Rgb>, out: &mut Vec<Draw>) {
-    const DOTS: Stroke = Stroke::Dashes { on: 1.44, off: 1.44 };
-    const DASHES: Stroke = Stroke::Dashes { on: 3.84, off: 1.92 };
+    // Word's patterns, points, the same at every size (measured at 10.5 and 24 pt).
+    let pattern = match kind {
+        Underline::Dotted | Underline::DottedHeavy => Stroke::Dashes { on: 1.44, off: 1.44, dots: 0 },
+        Underline::Dash | Underline::DashedHeavy => Stroke::Dashes { on: 3.84, off: 1.92, dots: 0 },
+        Underline::DashLong | Underline::DashLongHeavy => Stroke::Dashes { on: 7.92, off: 3.84, dots: 0 },
+        Underline::DotDash | Underline::DashDotHeavy => Stroke::Dashes { on: 2.88, off: 0.96, dots: 1 },
+        Underline::DotDotDash | Underline::DashDotDotHeavy => Stroke::Dashes { on: 2.16, off: 0.72, dots: 2 },
+        _ => Stroke::Solid,
+    };
     let mut line = |y: f32, width: f32, stroke: Stroke| out.push(Draw::Line { x0, y0: y, x1, y1: y, width, color, stroke, alpha, text_bg });
-    let DecoGeo { vertical, size, ul, ul_t, .. } = *geo;
+    let DecoGeo { vertical, ul, ul_t, ea, .. } = *geo;
+    // A wave's stroke is 0.24 pt at every size, a heavy wave's 0.96 (measured at 10.5 and 24 pt).
+    const WAVE: f32 = 0.24;
+    const HEAVY_WAVE: f32 = 0.96;
     if vertical {
         let centre = ul - 0.36;
+        let wave = Stroke::Zigzag { amp: 0.36, step: 1.2 };
         match kind {
-            Underline::Thick => line(ul, 1.44, Stroke::Solid),
             Underline::Double => {
                 line(centre, 0.72, Stroke::Solid);
                 line(centre - 1.44, 0.72, Stroke::Solid);
             }
-            Underline::Dotted => line(centre, 0.72, DOTS),
-            Underline::Dash => line(centre, 0.72, DASHES),
-            Underline::DotDash | Underline::DotDotDash => line(centre, 0.72, Stroke::Dashed),
-            Underline::Wave => line(ul - 0.12 - 0.36, 0.24, Stroke::Zigzag { amp: 0.36, step: 1.2 }),
+            Underline::Wave => line(ul - 0.12 - 0.36, WAVE, wave),
+            Underline::WavyHeavy => line(ul - 0.12 - 0.36, HEAVY_WAVE, wave),
             Underline::DoubleWave => {
-                line(ul - 0.12 - 0.18, 0.24, Stroke::Zigzag { amp: 0.18, step: 1.2 });
-                line(ul - 0.12 - 0.54, 0.24, Stroke::Zigzag { amp: 0.18, step: 1.2 });
+                line(ul - 0.12 - 0.18, WAVE, Stroke::Zigzag { amp: 0.18, step: 1.2 });
+                line(ul - 0.12 - 0.54, WAVE, Stroke::Zigzag { amp: 0.18, step: 1.2 });
             }
-            _ => line(centre, 0.72, Stroke::Solid),
+            _ if kind.is_heavy() => line(ul, 1.44, pattern),
+            _ => line(centre, 0.72, pattern),
         }
         return;
     }
     let t = ul_t;
     let centre = ul + t / 2.0;
     let heavy = (2.0 * t).max(1.2);
+    // A wave's swing (peak to peak of the zigzag's centre line) and the room its ink takes: an
+    // East Asian face's wave hangs from the line's top edge, a Latin face's stands on it.
+    let swing = (if ea { 1.35 } else { 0.75 } * t).max(0.48);
+    let room = swing + WAVE;
+    let wave_centre = if ea { ul + room / 2.0 } else { ul - room / 2.0 };
+    let zigzag = Stroke::Zigzag { amp: swing / 2.0, step: 1.2 };
     match kind {
-        Underline::Thick => line(ul + heavy / 2.0, heavy, Stroke::Solid),
         Underline::Double => {
             line(centre, t, Stroke::Solid);
             line(centre + heavy, t, Stroke::Solid);
         }
-        Underline::Dotted => line(centre, t, DOTS),
-        Underline::Dash => line(centre, t, DASHES),
-        Underline::DotDash | Underline::DotDotDash => line(centre, t, Stroke::Dashed),
-        Underline::Wave => {
-            let amp = (1.3 * t).max(0.48) / 2.0;
-            line(ul + amp, (0.018 * size).max(0.24), Stroke::Zigzag { amp, step: 1.2 });
-        }
+        Underline::Wave => line(wave_centre, WAVE, zigzag),
+        Underline::WavyHeavy => line(wave_centre, HEAVY_WAVE, zigzag),
         Underline::DoubleWave => {
-            let amp = (1.3 * t).max(0.48) / 4.0;
-            let w = (0.018 * size).max(0.24);
-            line(ul + amp, w, Stroke::Zigzag { amp, step: 1.2 });
-            line(ul + 3.0 * amp, w, Stroke::Zigzag { amp, step: 1.2 });
+            // Two waves sharing the single wave's room: each half the swing less a stroke (at
+            // least 0.24), their tops half the room apart.
+            let small = ((swing - WAVE) / 2.0).max(WAVE);
+            let amp = small / 2.0;
+            let first = if ea { ul + WAVE / 2.0 + amp } else { ul - room + WAVE / 2.0 + amp };
+            let zigzag = Stroke::Zigzag { amp, step: 1.2 };
+            line(first, WAVE, zigzag);
+            line(first + room / 2.0, WAVE, zigzag);
         }
-        _ => line(centre, t, Stroke::Solid),
+        _ if kind.is_heavy() => line(ul + heavy / 2.0, heavy, pattern),
+        _ => line(centre, t, pattern),
     }
 }
 
