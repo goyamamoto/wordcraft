@@ -626,7 +626,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"format": "decimal|upperRoman|lowerLetter…", "text"?: "%1.", "start"?: n}"#),
         CommandSpec::new("review.language", "Language", "Review › Language", language).params(
-            r#"{"lang"?: "en-US|en-GB|pl-PL|fr-FR|…" (BCP 47; default en-US), "noProof"?: bool, "detect"?: bool (detect language automatically, a preference), "default"?: bool (also the document's default language)}"#,
+            r#"{"lang"?: "en-US|en-GB|pl-PL|fr-FR|ja-JP|…" (BCP 47; default en-US; Japanese, Chinese or Korean sets the East Asian language, the others the Latin one), "noProof"?: bool, "detect"?: bool (detect language automatically, a preference), "default"?: bool (also the document's default language)}"#,
         ),
         CommandSpec::new("review.showMarkup", "Show Markup", "Review › Tracking", |s, v| {
             s.view.show_markup = p::bool(v, "value").unwrap_or(!s.view.show_markup);
@@ -694,14 +694,20 @@ fn language(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(d) = detect {
         s.prefs.detect_language = d;
     }
+    // Japanese, Chinese or Korean is the text's East Asian language (`w:lang/@w:eastAsia`); the
+    // Latin language stays, as in Word, where 漢字 is Japanese whatever abc beside it is set to.
+    let east_asian = lang.as_deref().is_some_and(|l| wordcraft_doc::east_asian::script_of_lang(l).is_some());
     if p::bool(v, "default") == Some(true) {
         let l = lang.clone().ok_or_else(|| CmdError::Params("`default` needs `lang`".into()))?;
-        s.doc.styles.default_chr.lang = Some(l.clone());
+        fn slot(c: &mut CharProps, east_asian: bool) -> &mut Option<String> {
+            if east_asian { &mut c.lang_ea } else { &mut c.lang }
+        }
+        *slot(&mut s.doc.styles.default_chr, east_asian) = Some(l.clone());
         // A Normal style that names its own language follows the new default.
         if let Some(n) = s.doc.styles.styles.iter_mut().find(|x| x.id == "Normal")
-            && n.chr.lang.is_some()
+            && slot(&mut n.chr, east_asian).is_some()
         {
-            n.chr.lang = Some(l);
+            *slot(&mut n.chr, east_asian) = Some(l);
         }
     }
     let lang = match (lang, no_proof, detect) {
@@ -713,7 +719,11 @@ fn language(s: &mut Session, v: &Value) -> CmdResult {
     }
     super::format::apply(s, &|c| {
         if let Some(l) = &lang {
-            c.lang = Some(l.clone());
+            if east_asian {
+                c.lang_ea = Some(l.clone());
+            } else {
+                c.lang = Some(l.clone());
+            }
         }
         if let Some(np) = no_proof {
             c.no_proof = Some(np);
@@ -1865,5 +1875,12 @@ mod tests {
         s.run("review.language", &json!({"lang": "de-DE", "default": true})).unwrap();
         assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("de-DE"));
         assert!(s.run("review.language", &json!({"lang": "<script>"})).is_err());
+        // Japanese is the East Asian language (Word: 漢字 stays Japanese when abc is set to French,
+        // and abc stays French when the text is set to Japanese).
+        s.run("review.language", &json!({"lang": "ja-JP"})).unwrap();
+        let rc = s.doc.para_at(&Pos::body(0, 1)).map(|p| p.props_at(1).clone()).unwrap();
+        assert_eq!((rc.lang.as_deref(), rc.lang_ea.as_deref()), (Some("de-DE"), Some("ja-JP")));
+        s.run("review.language", &json!({"lang": "zh-CN", "default": true})).unwrap();
+        assert_eq!((s.doc.styles.default_chr.lang.as_deref(), s.doc.styles.default_chr.lang_ea.as_deref()), (Some("de-DE"), Some("zh-CN")));
     }
 }

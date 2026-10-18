@@ -717,6 +717,10 @@ pub fn state(s: &Session) -> Value {
         "styleName": style_name,
         // The proofing language (a BCP 47 tag; null when mixed or unset) and "Do not check".
         "lang": same(&|r| json!(r.lang)),
+        // The East Asian language (`w:lang/@w:eastAsia`), and whether the described character is
+        // East Asian text, which that language applies to (Japanese on 漢字).
+        "langEastAsia": same(&|r| json!(r.lang_ea)),
+        "eastAsian": ea_char.is_some(),
         "noProof": all.iter().all(|r| r.no_proof),
     })
 }
