@@ -254,6 +254,8 @@
 	Character Border	字元邊框
 	Characters (no spaces)	字元數（不含空格）
 	Characters (with spaces)	字元數（含空格）
+	Non-Asian words	非亞洲語言字數
+	Asian characters and Korean words	亞洲字元和韓文字詞
 	Chart	圖表
 	Check Accessibility	檢查協助工具
 	Check Compatibility	檢查相容性
@@ -361,6 +363,7 @@
 	Document Title	文件標題
 	Documents you open will show up here.	開啟過的文件會顯示在這裡。
 	Dot-dash	點虛線
+	Dot-dot-dash	點點劃線
 	Dotted	點線
 	Double	雙線
 	Double Spacing	兩倍行高
@@ -1260,6 +1263,7 @@
 	Mail Merge	合併列印
 	More Columns…	其他欄…
 	More Symbols…	其他符號…
+	More Underlines…	其他底線…
 	No-Width Non Break	無寬度不分行
 	No-Width Optional Break	無寬度選擇性分行
 	Paragraph Mark	段落標記
@@ -2248,6 +2252,7 @@
 	Adjust Width	調整寬度
 	Emphasis Mark	強調標記
 	Emphasis mark:	強調標記：
+	Underline style:	底線樣式:
 	Enclose in characters:	以字元括住：
 	Fit in line	符合行寬
 	Current text width:	目前文字寬度：

@@ -382,6 +382,8 @@
 	Characters	Znakovi
 	Characters (no spaces)	Znakovi (bez razmaka)
 	Characters (with spaces)	Znakovi (s razmacima)
+	Non-Asian words	Neazijske riječi
+	Asian characters and Korean words	Azijski znakovi i korejske riječi
 	Characters per line:	Znakova po retku:
 	Chart	Grafikon
 	Chart Design	Dizajn grafikona
@@ -690,6 +692,7 @@
 	Dot	Točka
 	Dot dash	Točka crtica
 	Dot-dash	Točka-crtica
+	Dot-dot-dash	Točka-točka-crta
 	Dots	Točke
 	Dotted	Točkasto
 	Double	Dvostruko
@@ -1349,6 +1352,7 @@ template	Letter	Pismo
 	More Columns…	Više stupaca…
 	More Commands…	Više naredbi…
 	More Symbols…	Više simbola…
+	More Underlines…	Više podcrtavanja…
 	More templates →	Više predložaka →
 	Move Down	Pomakni dolje
 	Move Paragraph Down	Pomakni odlomak dolje
@@ -2646,6 +2650,7 @@ preview	Title	Naslov
 	Adjust Width	Prilagodi širinu
 	Emphasis Mark	Oznaka naglaska
 	Emphasis mark:	Oznaka naglaska:
+	Underline style:	Stil podcrtavanja:
 	Enclose in characters:	Zatvori u znakove:
 	Fit in line	Prilagodi retku
 	Current text width:	Trenutna širina teksta:

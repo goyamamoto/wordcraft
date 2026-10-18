@@ -182,6 +182,8 @@
 	Characters	Ký tự
 	Characters (no spaces)	Ký tự (không tính khoảng trắng)
 	Characters (with spaces)	Ký tự (tính cả khoảng trắng)
+	Non-Asian words	Từ không phải châu Á
+	Asian characters and Korean words	Ký tự châu Á và từ tiếng Hàn
 	Chart	Biểu đồ
 	Check Accessibility	Kiểm tra khả năng tiếp cận
 	Check Compatibility	Kiểm tra tính tương thích
@@ -292,6 +294,7 @@
 	Document Title	Tiêu đề tài liệu
 	Documents you open will show up here.	Các tài liệu bạn mở sẽ hiển thị ở đây.
 	Dot-dash	Nét chấm gạch
+	Dot-dot-dash	Chấm-chấm-gạch
 	Dotted	Nét chấm
 	Double	Nét đôi
 	Double Spacing	Giãn dòng đôi
@@ -1193,6 +1196,7 @@
 	Mail Merge	Trộn thư
 	More Columns…	Thêm cột…
 	More Symbols…	Thêm ký hiệu…
+	More Underlines…	Gạch dưới khác…
 	No-Width Non Break	Không ngắt không độ rộng
 	No-Width Optional Break	Ngắt tùy ý không độ rộng
 	Paragraph Mark	Ký hiệu đoạn
@@ -2686,6 +2690,7 @@ template	Letter	Thư
 	Adjust Width	Điều chỉnh độ rộng
 	Emphasis Mark	Dấu nhấn mạnh
 	Emphasis mark:	Dấu nhấn mạnh:
+	Underline style:	Kiểu gạch dưới:
 	Enclose in characters:	Bao trong ký tự:
 	Fit in line	Vừa trong dòng
 	Current text width:	Độ rộng văn bản hiện tại:

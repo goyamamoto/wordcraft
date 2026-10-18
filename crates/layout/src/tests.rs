@@ -3940,21 +3940,66 @@ fn a_page_break_at_the_bottom_of_a_full_page_leaves_no_blank_page() {
     assert!(last_on_2, "the text after the break is on page 2");
 }
 
-/// #534: indents in characters (`w:firstLineChars`) are measured in the paragraph mark's font
-/// size and win over the indent in points.
+/// #534: indents in characters (`w:firstLineChars` and friends) win over the indent in points
+/// and are measured as Word for Mac measures them (2026-10-19): the first-line and hanging
+/// indents in the paragraph's first character's size, the left and right indents in the Normal
+/// style's size (12 pt here), each plus the character grid's gap when the section has a
+/// character pitch; a hanging indent in characters adds to the left indent.
 #[test]
-fn character_indents_use_the_paragraph_mark_size() {
-    let mut p = wordcraft_doc::Paragraph::with_text(&"字".repeat(80), Default::default());
-    p.props.indent_first = Some(5.0);
-    p.props.indent_first_chars = Some(2.0);
-    p.props.indent_left_chars = Some(1.0);
-    p.mark.size = Some(20.0);
-    let mut d = Document::from_text("");
-    d.body = vec![wordcraft_doc::para_block(p)];
-    let l = lay(&d);
-    let para = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para.clone()) } else { None }).unwrap();
-    assert!((para.lines[0].left - 60.0).abs() < 0.01, "first line at {}", para.lines[0].left);
-    assert!((para.lines[1].left - 20.0).abs() < 0.01, "second line at {}", para.lines[1].left);
+fn character_indents_measure_as_word_for_mac_does() {
+    use wordcraft_doc::section::{DocGrid, DocGridType};
+    let lefts = |props: &dyn Fn(&mut wordcraft_doc::ParaProps), text_size: f32, grid: Option<i32>| -> (f32, f32, f32) {
+        let chr = wordcraft_doc::CharProps { size: Some(text_size), ..Default::default() };
+        let mut p = wordcraft_doc::Paragraph::with_text(&"字".repeat(80), chr);
+        p.mark.size = Some(10.0);
+        props(&mut p.props);
+        let mut d = Document::from_text("");
+        d.body = vec![wordcraft_doc::para_block(p)];
+        d.last_section.doc_grid = grid.map(|cs| DocGrid { kind: DocGridType::LinesAndChars, line_pitch: 18.0, char_space: cs });
+        let l = lay(&d);
+        let para = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para.clone()) } else { None }).unwrap();
+        (para.lines[0].left, para.lines[1].left, para.lines[0].right)
+    };
+    let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+    // First line 2 ch of 20-pt text (40, not the 10-pt mark's 20), left 1 ch of Normal (12).
+    let (l0, l1, _) = lefts(
+        &|p| {
+            p.indent_first = Some(5.0);
+            p.indent_first_chars = Some(2.0);
+            p.indent_left_chars = Some(1.0);
+        },
+        20.0,
+        None,
+    );
+    assert!(near(l0, 52.0) && near(l1, 12.0), "first line at {l0}, second at {l1}");
+    // Left 1 ch + hanging 1 ch of 16-pt text: the first line at 12, the rest 16 further in.
+    let (l0, l1, _) = lefts(
+        &|p| {
+            p.indent_left_chars = Some(1.0);
+            p.indent_first_chars = Some(-1.0);
+        },
+        16.0,
+        None,
+    );
+    assert!(near(l0, 12.0) && near(l1, 28.0), "first line at {l0}, second at {l1}");
+    // Hanging alone: the other lines 1 ch of the text in.
+    let (l0, l1, _) = lefts(&|p| p.indent_first_chars = Some(-1.0), 16.0, None);
+    assert!(near(l0, 0.0) && near(l1, 16.0), "first line at {l0}, second at {l1}");
+    // A right indent in characters takes the Normal size whatever the text's.
+    let (_, _, r0) = lefts(&|_| {}, 16.0, None);
+    let (_, _, r1) = lefts(&|p| p.indent_right_chars = Some(1.0), 16.0, None);
+    assert!(near(r0 - r1, 12.0), "right edge {r1} vs {r0}");
+    // On a lines-and-characters grid with a 1.2-pt gap (charSpace 4915): 13.2 per Normal
+    // character, 21.2 per 20-pt one.
+    let (l0, l1, _) = lefts(
+        &|p| {
+            p.indent_first_chars = Some(2.0);
+            p.indent_left_chars = Some(1.0);
+        },
+        20.0,
+        Some(4915),
+    );
+    assert!(near(l0, 13.2 + 42.4) && near(l1, 13.2), "first line at {l0}, second at {l1}");
 }
 
 #[test]
@@ -8383,18 +8428,54 @@ fn underlines_and_strikethroughs_sit_where_word_for_mac_draws_them() {
     // Dotted and dashed patterns, the same at every size.
     for size in [10.5, 36.0] {
         let (_, v) = lines_of(&[("点線", yu(size, &ul(Underline::Dotted)))]);
-        assert!(v.len() == 1 && v[0].2 == Stroke::Dashes { on: 1.44, off: 1.44 }, "{size}: {v:?}");
+        assert!(v.len() == 1 && v[0].2 == Stroke::Dashes { on: 1.44, off: 1.44, dots: 0 }, "{size}: {v:?}");
         let (_, v) = lines_of(&[("破線", yu(size, &ul(Underline::Dash)))]);
-        assert!(v.len() == 1 && v[0].2 == Stroke::Dashes { on: 3.84, off: 1.92 }, "{size}: {v:?}");
+        assert!(v.len() == 1 && v[0].2 == Stroke::Dashes { on: 3.84, off: 1.92, dots: 0 }, "{size}: {v:?}");
+        // Word's other patterns (du1 probe): long dashes 7.92 / 3.84, dot-dash 2.88 / 0.96 with a
+        // dot, dot-dot-dash 2.16 / 0.72 with two; the heavy ones max(2 t, 1.2) wide from the
+        // underline's top (1.2 at 10.5 pt, 2.4 at 36).
+        let (_, v) = lines_of(&[("長破線", yu(size, &ul(Underline::DashLong)))]);
+        assert!(v.len() == 1 && v[0].2 == Stroke::Dashes { on: 7.92, off: 3.84, dots: 0 }, "{size}: {v:?}");
+        let (_, v) = lines_of(&[("一点鎖線", yu(size, &ul(Underline::DotDash)))]);
+        assert!(v.len() == 1 && v[0].2 == Stroke::Dashes { on: 2.88, off: 0.96, dots: 1 }, "{size}: {v:?}");
+        assert_eq!(v[0].2.dash_pattern(), Some(vec![2.88, 0.96, 0.96, 0.96]));
+        let (_, v) = lines_of(&[("二点鎖線", yu(size, &ul(Underline::DotDotDash)))]);
+        assert!(v.len() == 1 && v[0].2 == Stroke::Dashes { on: 2.16, off: 0.72, dots: 2 }, "{size}: {v:?}");
+        assert_eq!(v[0].2.dash_pattern(), Some(vec![2.16, 0.72, 0.72, 0.72, 0.72, 0.72]));
+        let top = 0.153 * size + 0.53;
+        let heavy = (0.1 * size).max(1.2);
+        for (kind, on) in [
+            (Underline::DottedHeavy, 1.44),
+            (Underline::DashedHeavy, 3.84),
+            (Underline::DashLongHeavy, 7.92),
+            (Underline::DashDotHeavy, 2.88),
+            (Underline::DashDotDotHeavy, 2.16),
+        ] {
+            let (_, v) = lines_of(&[("太線", yu(size, &ul(kind)))]);
+            assert!(v.len() == 1 && near(v[0].0, top + heavy / 2.0) && near(v[0].1, heavy), "{kind:?} {size}: {v:?}");
+            assert!(matches!(v[0].2, Stroke::Dashes { on: o, .. } if o == on), "{kind:?} {size}: {v:?}");
+        }
     }
-    // Wave: a 0.24-pt zigzag of 1.2-pt runs, 0.6825 peak to peak, from the underline's top.
+    // Wave on an East Asian face: a 0.24-pt zigzag of 1.2-pt runs, 1.35 thicknesses peak to
+    // peak (0.709 at 10.5, 1.62 at 24), its ink hanging from the underline's top edge; the heavy
+    // wave the same zigzag 0.96 thick.
     let (_, v) = lines_of(&[("波線", yu(10.5, &ul(Underline::Wave)))]);
-    assert!(v.len() == 1 && near(v[0].0, 2.1365 + 0.34125) && near(v[0].1, 0.24), "{v:?}");
-    assert!(matches!(v[0].2, Stroke::Zigzag { amp, step } if near(amp, 0.34125) && near(step, 1.2)), "{v:?}");
-    // Double wave: two half-size zigzags stacked.
+    assert!(v.len() == 1 && near(v[0].0, 2.1365 + 0.12 + 0.354375) && near(v[0].1, 0.24), "{v:?}");
+    assert!(matches!(v[0].2, Stroke::Zigzag { amp, step } if near(amp, 0.354375) && near(step, 1.2)), "{v:?}");
+    let (_, v) = lines_of(&[("波線", yu(24.0, &ul(Underline::Wave)))]);
+    assert!(v.len() == 1 && near(v[0].0, 4.202 + 0.12 + 0.81) && near(v[0].1, 0.24), "{v:?}");
+    let (_, v) = lines_of(&[("波線", yu(24.0, &ul(Underline::WavyHeavy)))]);
+    assert!(v.len() == 1 && near(v[0].0, 4.202 + 0.12 + 0.81) && near(v[0].1, 0.96), "{v:?}");
+    assert!(matches!(v[0].2, Stroke::Zigzag { amp, step } if near(amp, 0.81) && near(step, 1.2)), "{v:?}");
+    // Double wave: two waves sharing that room, each half the swing less a stroke (at least
+    // 0.24), their tops half the room apart (0.24-pt waves 0.474 apart at 10.5; 0.69-pt waves
+    // 0.93 apart at 24).
     let (_, v) = lines_of(&[("波線", yu(10.5, &ul(Underline::DoubleWave)))]);
-    assert!(v.len() == 2 && near(v[0].0, 2.1365 + 0.170625) && near(v[1].0, 2.1365 + 0.511875), "{v:?}");
-    assert!(v.iter().all(|l| matches!(l.2, Stroke::Zigzag { amp, .. } if near(amp, 0.170625))), "{v:?}");
+    assert!(v.len() == 2 && near(v[0].0, 2.1365 + 0.24) && near(v[1].0, 2.1365 + 0.24 + 0.474375), "{v:?}");
+    assert!(v.iter().all(|l| matches!(l.2, Stroke::Zigzag { amp, .. } if near(amp, 0.12))), "{v:?}");
+    let (_, v) = lines_of(&[("波線", yu(24.0, &ul(Underline::DoubleWave)))]);
+    assert!(v.len() == 2 && near(v[0].0, 4.202 + 0.12 + 0.345) && near(v[1].0, 4.202 + 0.12 + 0.345 + 0.93), "{v:?}");
+    assert!(v.iter().all(|l| matches!(l.2, Stroke::Zigzag { amp, .. } if near(amp, 0.345)) && near(l.1, 0.24)), "{v:?}");
     // Aptos (by name; whatever face stands in): 0.525 below, 0.2625 thick; strike 3.78 above, 0.525 thick.
     let aptos = |f: &dyn Fn(&mut wordcraft_doc::CharProps)| {
         let mut p = wordcraft_doc::CharProps { font: Some("Aptos".into()), size: Some(10.5), ..Default::default() };
@@ -8405,6 +8486,15 @@ fn underlines_and_strikethroughs_sit_where_word_for_mac_draws_them() {
     assert!(v.len() == 1 && near(v[0].0, 0.525 + 0.13125) && near(v[0].1, 0.2625), "{v:?}");
     let (_, v) = lines_of(&[("abc", aptos(&|p| p.strike = Some(true)))]);
     assert!(v.len() == 1 && near(v[0].0, -(3.78 - 0.2625)) && near(v[0].1, 0.525), "{v:?}");
+    // A Latin face's wave stands on the underline's top edge, 0.75 thicknesses peak to peak
+    // and at least 0.48 (0.48 at 10.5 and 24 pt, 0.9 at 48).
+    let (_, v) = lines_of(&[("abc", aptos(&ul(Underline::Wave)))]);
+    assert!(v.len() == 1 && near(v[0].0, 0.525 - 0.12 - 0.24) && near(v[0].1, 0.24), "{v:?}");
+    assert!(matches!(v[0].2, Stroke::Zigzag { amp, step } if near(amp, 0.24) && near(step, 1.2)), "{v:?}");
+    let big = wordcraft_doc::CharProps { font: Some("Aptos".into()), size: Some(48.0), underline: Some(Underline::Wave), ..Default::default() };
+    let (_, v) = lines_of(&[("abc", big)]);
+    assert!(v.len() == 1 && near(v[0].0, 2.4 - 0.12 - 0.45), "{v:?}");
+    assert!(matches!(v[0].2, Stroke::Zigzag { amp, .. } if near(amp, 0.45)), "{v:?}");
     // A run mixing Aptos and 游明朝: one line at the mean top (1.33), the thicker line (drawn
     // in a piece per face, meeting end to end).
     let (_, v) = lines_of(&[("abc漢字", aptos(&ul(Underline::Single)))]);

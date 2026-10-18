@@ -236,6 +236,8 @@
 	Characters	Символи
 	Characters (no spaces)	Символи (без пробілів)
 	Characters (with spaces)	Символи (з пробілами)
+	Non-Asian words	Неазійські слова
+	Asian characters and Korean words	Азійські символи та корейські слова
 	Chart	Діаграма
 	Check Accessibility	Перевірити доступність
 	Check Compatibility	Перевірити сумісність
@@ -369,6 +371,7 @@
 	Document Title	Назва документа
 	Documents you open will show up here.	Тут з'являтимуться документи, які ви відкриваєте.
 	Dot-dash	Штрихпунктирна
+	Dot-dot-dash	Штрих-крапка-крапка
 	Dotted	Пунктирна
 	Double	Подвійна
 	Double Spacing	Подвійний інтервал
@@ -1271,6 +1274,7 @@
 	Mail Merge	Злиття
 	More Columns…	Інші стовпці…
 	More Symbols…	Інші символи…
+	More Underlines…	Інші підкреслення…
 	No-Width Non Break	Нерозривний символ нульової ширини
 	No-Width Optional Break	Необов'язковий розрив нульової ширини
 	Paragraph Mark	Знак абзацу
@@ -2259,6 +2263,7 @@
 	Adjust Width	Налаштувати ширину
 	Emphasis Mark	Знак виділення
 	Emphasis mark:	Знак виділення:
+	Underline style:	Підкреслення:
 	Enclose in characters:	Узяти в знаки:
 	Fit in line	Вписати в рядок
 	Current text width:	Поточна ширина тексту:

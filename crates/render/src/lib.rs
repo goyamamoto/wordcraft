@@ -732,10 +732,9 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             match stroke {
                 Stroke::Dotted => st = st.with_dashes(0.0, [w, w * 2.0]),
                 Stroke::Dashed => st = st.with_dashes(0.0, [w * 4.0, w * 2.0]),
-                Stroke::Dashes { on, off } => {
-                    let (on, off) = (f64::from(*on), f64::from(*off));
-                    if on.is_finite() && off.is_finite() && on > 0.0 && off >= 0.0 {
-                        st = st.with_dashes(0.0, [on, off]);
+                Stroke::Dashes { .. } => {
+                    if let Some(pattern) = stroke.dash_pattern() {
+                        st = st.with_dashes(0.0, pattern.iter().map(|v| f64::from(*v)));
                     }
                 }
                 _ => {}
