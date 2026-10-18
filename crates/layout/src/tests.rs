@@ -733,21 +733,99 @@ fn page_break_char_starts_new_page() {
 fn a_missing_roman_font_is_drawn_as_word_draws_it() {
     // Measured in Word: a font that isn't installed is drawn in Cambria when the font table calls
     // it roman, in Calibri otherwise.
-    let face = |roman: bool| {
+    let face_of = |font: &str, roman: bool| {
         let mut d = Document::from_text("Serif");
         if roman {
-            d.settings.roman_fonts = vec!["No Such Brand Font".into()];
+            d.settings.roman_fonts = vec![font.into()];
         }
         let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
-        p.runs[0].props.font = Some("No Such Brand Font".into());
+        p.runs[0].props.font = Some(font.into());
         let l = lay(&d);
         let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
         let first = para.clusters.first().expect("a cluster");
         para.styles[first.style as usize].face
     };
     let cambria = wordcraft_fonts::word::resolve("Cambria", false, false).face;
-    assert_eq!(face(true), cambria);
-    assert_ne!(face(false), cambria);
+    assert_eq!(face_of("No Such Brand Font", true), cambria);
+    assert_ne!(face_of("No Such Brand Font", false), cambria);
+    // Word's own 游明朝 comes with Office: a Word-made font table calls it roman (charset 80), and
+    // it is drawn by its substitute (游明朝体 on a Mac), never Cambria (vt6, 2026-10-19).
+    let yu = wordcraft_fonts::word::resolve("Yu Mincho", false, false).face;
+    assert_eq!(face_of("Yu Mincho", true), yu);
+    assert_eq!(face_of("Yu Mincho", false), yu);
+}
+
+#[test]
+fn automatic_space_beside_apple_sd_gothic_neo_hangul_is_a_quarter_of_its_advance() {
+    // Word for Mac (ha1, 2026-10-19): 글ABC행 at 24 pt in Apple SD Gothic Neo, whose Hangul
+    // advance 0.865 em — A starts 25.95 pt after the line's start (20.76 + a 5.19 space), 행 at
+    // 73.40 (A, B, C 14.52 + 14.06 + 13.68, then 5.19): the space is a quarter of the Hangul's
+    // advance, not of its size.
+    let r = wordcraft_fonts::word::resolve("Apple SD Gothic Neo", false, false);
+    if r.substituted || !r.face.covers('글') {
+        return;
+    }
+    let chr = CharProps {
+        font: Some("Apple SD Gothic Neo".into()),
+        font_ea: Some("Apple SD Gothic Neo".into()),
+        size: Some(24.0),
+        lang_ea: Some("ko-KR".into()),
+        ..Default::default()
+    };
+    let mut d = Document::from_text("");
+    d.body.clear();
+    let mut para = Paragraph::with_text("글ABC행", chr);
+    para.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+    d.body.push(wordcraft_doc::para_block(para));
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+    let line = &para.lines[0];
+    let x = |k: usize| line.cl_left(k).unwrap() - line.cl_left(0).unwrap();
+    let a = para.clusters.iter().position(|c| c.start == "글".len()).unwrap();
+    let last = para.clusters.iter().position(|c| c.start == "글ABC".len()).unwrap();
+    assert!((x(a) - 25.95).abs() < 0.1, "A at {}", x(a));
+    assert!((x(last) - 73.40).abs() < 0.1, "행 at {}", x(last));
+}
+
+#[test]
+fn hangul_a_fonts_lack_falls_back_as_word_for_mac_does() {
+    // Word for Mac (ha1/ha2/ha4, 2026-10-19): Hangul in Hiragino Mincho ProN, 游明朝 (named as
+    // the East Asian font beside Aptos too) and Times New Roman text is drawn in Batang; in
+    // Hiragino Sans, 游ゴシック, Arial and Aptos text in Malgun Gothic — here the installed
+    // Korean faces standing in for them (AppleMyungjo and AppleGothic on a Mac).
+    let (Some(serif), Some(sans)) =
+        (wordcraft_fonts::word::hangul_fallback(true, false, false), wordcraft_fonts::word::hangul_fallback(false, false, false))
+    else {
+        return;
+    };
+    let cases: [(&str, Option<&str>, &str, wordcraft_fonts::FaceRef); 6] = [
+        ("Hiragino Mincho ProN", None, "縦한국어行", serif),
+        ("Hiragino Sans", None, "縦한국어行", sans),
+        ("Aptos", Some("Yu Mincho"), "A한국어B", serif),
+        ("Times New Roman", Some("Yu Gothic"), "A한국어B", sans),
+        ("Times New Roman", None, "A한국어B", serif),
+        ("Arial", None, "A한국어B", sans),
+    ];
+    for (font, ea, text, expect) in cases {
+        if ea.is_none() && wordcraft_fonts::word::resolve(font, false, false).substituted {
+            continue;
+        }
+        let chr = CharProps {
+            font: Some(font.into()),
+            font_ea: ea.or(Some(font)).map(Into::into),
+            size: Some(24.0),
+            lang_ea: Some("ja-JP".into()),
+            ..Default::default()
+        };
+        let mut d = Document::from_text("");
+        d.body.clear();
+        d.body.push(wordcraft_doc::para_block(Paragraph::with_text(text, chr)));
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+        let han = para.clusters.iter().find(|c| text.get(c.start..c.end) == Some("한")).expect("한");
+        let face = para.styles[han.style as usize].face;
+        assert_eq!(face.family, expect.family, "{font} + {ea:?}");
+    }
 }
 
 #[test]

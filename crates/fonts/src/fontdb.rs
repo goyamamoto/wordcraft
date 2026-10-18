@@ -238,6 +238,44 @@ impl FontFace {
             .map(|a| a as f64)
             .unwrap_or(self.upem * 0.5)
     }
+    /// How far a vertical column moves on for glyph `gid` standing upright: its `vmtx` advance,
+    /// font units — an em for a Japanese font's full-width glyphs, 1.2 em in Apple SD Gothic Neo
+    /// (whose Hangul advance 0.865 em across a line; Word for Mac stacks them 28.8 pt apart at
+    /// 24 pt), 1.003–1.004 em in AppleGothic (24.1 pt), measured 2026-10-19. `None` for a font
+    /// without vertical metrics.
+    pub fn vertical_advance(&self, gid: u32) -> Option<f64> {
+        use skrifa::raw::TableProvider;
+        let f = self.skrifa()?;
+        f.vmtx().ok()?.advance(GlyphId::new(gid)).map(f64::from)
+    }
+    /// Where glyph `gid` hangs from in a vertical column: its vertical origin's height above the
+    /// baseline, font units — OpenType's `VORG` value, else the glyph's top (yMax) plus its `vmtx`
+    /// top side bearing, else the hhea ascent. Word for Mac puts an upright glyph's baseline that
+    /// far below the column's pen: 0.88 em for Hiragino, Toppan and 游明朝, 0.9 for Apple SD Gothic
+    /// Neo (all from `VORG`), 0.80 for Songti SC, 887/1025 for AppleMyungjo's 글 and 906/1025 for
+    /// its 한, 0.847 for AppleGothic's 글 (yMax + top side bearing; measured 2026-10-19).
+    pub fn vertical_origin(&self, gid: u32) -> f64 {
+        use skrifa::raw::TableProvider;
+        let Some(f) = self.skrifa() else { return self.ascent.max(0.0) };
+        let g = GlyphId::new(gid);
+        if let Ok(vorg) = f.vorg() {
+            return f64::from(vorg.vertical_origin_y(g));
+        }
+        if let Some(tsb) = f.vmtx().ok().and_then(|v| v.side_bearing(g))
+            && let Some(b) = f.glyph_metrics(Size::unscaled(), self.location()).bounds(g)
+        {
+            return f64::from(b.y_max) + f64::from(tsb);
+        }
+        self.ascent.max(0.0)
+    }
+    /// Does the font's OS/2 family class call it an oldstyle serif (class 1 — Times New Roman,
+    /// Hiragino Mincho ProN; Georgia is a Clarendon, Courier New a slab serif, Baskerville a
+    /// transitional)? Word for Mac draws the Hangul such a font lacks in Batang, any other
+    /// font's in Malgun Gothic (2026-10-19, `word::hangul_fallback`).
+    pub fn is_oldstyle_serif(&self) -> bool {
+        use skrifa::raw::TableProvider;
+        self.skrifa().and_then(|f| f.os2().ok()).is_some_and(|o| o.s_family_class() >> 8 == 1)
+    }
     /// Glyph id for `c` (0 = .notdef).
     pub fn glyph_for(&self, c: char) -> u32 {
         self.skrifa().and_then(|f| f.charmap().map(c)).map(|g| g.to_u32()).unwrap_or(0)

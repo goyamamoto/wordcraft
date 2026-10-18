@@ -500,6 +500,84 @@ fn vertical_underlines_strikethroughs_and_marks_sit_as_word_for_mac_draws_them()
 /// (the 12-pt 28.08); Toppan's 19.92 / 22.32 and 37.2 / 28.08; Songti's 32.88 / 32.88 and
 /// 45.84 / 37.2 — every column 46.8 wide (1.3 × 36), Songti's 65.52 (1.82 × 36).
 #[test]
+fn vertical_columns_hang_glyphs_from_their_vertical_origins_as_word_for_mac_does() {
+    // Measured in Word for Mac (vt6/vt7, 2026-10-19; 24 pt, no grid): an upright glyph's baseline
+    // sits its vertical origin below the column's pen (VORG, else yMax + top side bearing), the
+    // pen moves on by its vmtx advance (Apple SD Gothic Neo 1.2 em), the automatic space beside a
+    // lying Latin run is a quarter of that advance (7.2 there, 6.0 elsewhere), and every glyph of
+    // a run stands centred on one line across the column — its own advance box, so the last one
+    // too. (family, text, first baseline, the lying 1's pen, last baseline) below the column top.
+    let cases: Vec<(&str, &str, f32, f32, f32)> = vec![
+        ("Apple SD Gothic Neo", "글123행", 21.6, 36.0, 99.02),
+        ("AppleMyungjo", "글123행", 20.77, 30.0, 102.94),
+        ("AppleGothic", "글123행", 20.33, 30.11, 105.76),
+        ("Songti SC", "漢123字", 19.2, 30.0, 88.97),
+        ("Hiragino Mincho ProN", "縦123行", 21.12, 30.0, 99.46),
+    ];
+    let mut d = Document::from_text("");
+    d.body.clear();
+    let mut used = Vec::new();
+    for (family, text, ..) in &cases {
+        let r = wordcraft_fonts::word::resolve(family, false, false);
+        if r.substituted || !text.chars().all(|c| r.face.covers(c)) {
+            continue;
+        }
+        used.push(*family);
+        let chr = CharProps {
+            font: Some((*family).into()),
+            font_ea: Some((*family).into()),
+            size: Some(24.0),
+            lang_ea: Some("ja-JP".into()),
+            ..Default::default()
+        };
+        let mut para = Paragraph::with_text(text, chr);
+        para.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+        para.props.space_before = Some(0.0);
+        para.props.space_after = Some(0.0);
+        d.body.push(wordcraft_doc::para_block(para));
+    }
+    if used.is_empty() {
+        return;
+    }
+    d.last_section.text_direction = TextDirection::Down;
+    let l = lay(&d);
+    let draws = display::page_display(&d, &l.pages[0], &Default::default());
+    let turned: Vec<&Vec<display::Draw>> =
+        draws.iter().filter_map(|x| if let display::Draw::Turned { items, .. } = x { Some(items) } else { None }).collect();
+    assert_eq!(turned.len(), used.len(), "one turned column per paragraph");
+    let near = |a: f32, b: f32| (a - b).abs() < 0.3;
+    for (items, (family, text, first, one, last)) in turned.iter().zip(cases.iter().filter(|c| used.contains(&c.0))) {
+        // Stood glyphs: (text, baseline along the column, centre across it, centre less pen along it).
+        let mut stood: Vec<(String, f32, f32, f32)> = Vec::new();
+        let mut lying: Vec<(String, f32)> = Vec::new();
+        for x in items.iter() {
+            match x {
+                display::Draw::Rotated { cx, cy, items, .. } => {
+                    if let Some(display::Draw::Glyphs { text, glyphs, face, size, .. }) = items.first()
+                        && let Some(g) = glyphs.first()
+                    {
+                        let hadv = face.advance(g.0) as f32 * size / face.upem as f32;
+                        stood.push((text.clone(), cx + (g.2 - cy), cy - (g.1 - cx), (cx - g.1) - hadv / 2.0));
+                    }
+                }
+                display::Draw::Glyphs { text, glyphs, .. } => {
+                    if let Some(g) = glyphs.first() {
+                        lying.push((text.clone(), g.1));
+                    }
+                }
+                _ => {}
+            }
+        }
+        let (Some(a), Some(z)) = (stood.first(), stood.last()) else { panic!("{family}: {stood:?}") };
+        let Some(one_x) = lying.iter().find(|(t, _)| t.starts_with('1')).map(|x| x.1) else { panic!("{family}: lying {lying:?}") };
+        assert!(near(a.1, *first), "{family} {text}: first baseline {} (Word {first})", a.1);
+        assert!(near(one_x, *one), "{family} {text}: 1 at {one_x} (Word {one})");
+        assert!(near(z.1, *last), "{family} {text}: last baseline {} (Word {last})", z.1);
+        assert!(near(a.2, z.2) && a.3.abs() < 0.05 && z.3.abs() < 0.05, "{family} {text}: across {} {} (box offsets {} {})", a.2, z.2, a.3, z.3);
+    }
+}
+
+#[test]
 fn vertical_em_squares_follow_their_fonts_win_metrics_as_word_for_mac_places_them() {
     let mut d = Document::from_text("");
     d.body.clear();
