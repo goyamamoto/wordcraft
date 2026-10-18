@@ -381,3 +381,109 @@ fn vertical_columns_take_whole_grid_lines_centred() {
     // A 7-pt ruby raised only 3 fits its line: 3 + 7.357 − 2.66 = 7.697.
     assert!(near(cols[5].0, 18.0) && near(cols[5].1, 9.0 + (7.697 - 7.5075) / 2.0), "7-pt ruby raised 3 {:?}", cols[5]);
 }
+
+/// Underlines, strikethroughs and 傍点 in a 縦書き column, measured in Word for Mac (10.5-pt
+/// 游明朝, 2026-10-19): an underline is a 0.72-pt line at every size whose near edge lies
+/// 0.025 em beyond the standing em square on the page's right (5.88 pt from the column's centre
+/// line); a double underline's second line lies 0.72 further out; a wave is a 0.24-pt zigzag of
+/// 1.2-pt runs 0.72 peak to peak, its near peak 0.12 beyond that edge; a strikethrough runs
+/// along the column's centre line at the font's thickness; a dot mark's centre sits 0.705 em
+/// right of the centre line, a circle 0.97 em (0.13 em along, towards the text's end), an under
+/// dot 0.585 em to the left.
+#[test]
+fn vertical_underlines_strikethroughs_and_marks_sit_as_word_for_mac_draws_them() {
+    use wordcraft_doc::props::{EmphasisMark, Underline};
+    if !wordcraft_fonts::word::resolve("游明朝", false, false).face.covers('語') {
+        return;
+    }
+    let chr = |f: &dyn Fn(&mut CharProps)| {
+        let mut p = CharProps {
+            font: Some("游明朝".into()),
+            font_ea: Some("游明朝".into()),
+            size: Some(10.5),
+            lang_ea: Some("ja-JP".into()),
+            ..Default::default()
+        };
+        f(&mut p);
+        p
+    };
+    let mut d = Document::from_text("");
+    d.body.clear();
+    let marked: Vec<CharProps> = vec![
+        chr(&|p| p.underline = Some(Underline::Single)),
+        chr(&|p| p.underline = Some(Underline::Double)),
+        chr(&|p| p.underline = Some(Underline::Wave)),
+        chr(&|p| p.strike = Some(true)),
+        chr(&|p| p.em = Some(EmphasisMark::Dot)),
+        chr(&|p| p.em = Some(EmphasisMark::Circle)),
+        chr(&|p| p.em = Some(EmphasisMark::UnderDot)),
+    ];
+    for props in &marked {
+        let mut para = Paragraph::with_text("前印後", chr(&|_| {}));
+        para.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+        para.runs = vec![
+            wordcraft_doc::Run { len: "前".len(), props: chr(&|_| {}) },
+            wordcraft_doc::Run { len: "印".len(), props: props.clone() },
+            wordcraft_doc::Run { len: "後".len(), props: chr(&|_| {}) },
+        ];
+        d.body.push(wordcraft_doc::para_block(para));
+    }
+    d.last_section.text_direction = TextDirection::Down;
+    let l = lay(&d);
+    let draws = display::page_display(&d, &l.pages[0], &Default::default());
+    // One turned frame per paragraph, in order: (centre line, lines (v, width, stroke), marks (u, v)).
+    let frames: Vec<(f32, Vec<(f32, f32, display::Stroke)>, Vec<(f32, f32)>)> = draws
+        .iter()
+        .filter_map(|x| {
+            let display::Draw::Turned { items, .. } = x else { return None };
+            let base = items.iter().find_map(|i| match i {
+                display::Draw::Rotated { cy, items, .. } if matches!(items.first(), Some(display::Draw::Glyphs { text, .. }) if text == "印") => {
+                    Some(*cy)
+                }
+                _ => None,
+            })?;
+            let mut lines: Vec<(f32, f32, display::Stroke)> = items
+                .iter()
+                .filter_map(|i| match i {
+                    display::Draw::Line { y0, y1, width, stroke, .. } if (y0 - y1).abs() < 1e-3 => Some((*y0 - base, *width, *stroke)),
+                    _ => None,
+                })
+                .collect();
+            lines.sort_by(|a, b| b.0.total_cmp(&a.0));
+            let marks: Vec<(f32, f32)> = items
+                .iter()
+                .filter_map(|i| match i {
+                    display::Draw::Shape { rect, fill, stroke, .. } if fill.is_some() || stroke.is_some() => {
+                        Some((rect.x + rect.w / 2.0, rect.y + rect.h / 2.0 - base))
+                    }
+                    _ => None,
+                })
+                .collect();
+            Some((base, lines, marks))
+        })
+        .collect();
+    assert_eq!(frames.len(), marked.len(), "{frames:?}");
+    let near = |a: f32, b: f32| (a - b).abs() < 0.02;
+    // Underline: the near edge 0.525 em from the centre (towards the page's right, smaller v), 0.72 wide.
+    let (_, v, _) = &frames[0];
+    assert!(v.len() == 1 && near(v[0].0, -5.5125 - 0.36) && near(v[0].1, 0.72) && v[0].2 == display::Stroke::Solid, "underline {v:?}");
+    let (_, v, _) = &frames[1];
+    assert!(v.len() == 2 && near(v[0].0, -5.8725) && near(v[1].0, -5.8725 - 1.44) && near(v[1].1, 0.72), "double {v:?}");
+    let (_, v, _) = &frames[2];
+    assert!(v.len() == 1 && near(v[0].0, -5.5125 - 0.48) && near(v[0].1, 0.24), "wave {v:?}");
+    assert!(matches!(v[0].2, display::Stroke::Zigzag { amp, step } if near(amp, 0.36) && near(step, 1.2)), "wave {v:?}");
+    // Strikethrough: on the centre line, the font's thickness.
+    let (_, v, _) = &frames[3];
+    assert!(v.len() == 1 && near(v[0].0, 0.0) && near(v[0].1, 0.4725), "strike {v:?}");
+    // Marks: one per marked character, beside the column.
+    let (_, _, m) = &frames[4];
+    assert!(m.len() == 1 && near(m[0].1, -0.705 * 10.5), "dot {m:?}");
+    let (_, _, m) = &frames[5];
+    assert!(m.len() == 1 && near(m[0].1, -0.97 * 10.5), "circle {m:?}");
+    let (_, _, m) = &frames[6];
+    assert!(m.len() == 1 && near(m[0].1, 0.585 * 10.5), "under dot {m:?}");
+    // The circle sits 0.13 em further along the column than the character's centre, the dot on it.
+    let dot_u = frames[4].2[0].0;
+    let circle_u = frames[5].2[0].0;
+    assert!(near(circle_u - dot_u, 0.13 * 10.5), "dot at {dot_u}, circle at {circle_u}");
+}

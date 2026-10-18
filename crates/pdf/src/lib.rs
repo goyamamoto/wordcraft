@@ -1141,6 +1141,45 @@ impl Exporter<'_> {
                 s.set_stroke(Some(stroke(w, Some(StrokeDash { array: vec![w * 4.0, w * 2.0], offset: 0.0 }), LineCap::Butt)));
                 seg(s, 0.0, 0.0);
             }
+            LineStyle::Dashes { on, off } => {
+                let dash = (on.is_finite() && off.is_finite() && on > 0.0 && off >= 0.0).then(|| StrokeDash { array: vec![on, off], offset: 0.0 });
+                s.set_stroke(Some(stroke(w, dash, LineCap::Butt)));
+                seg(s, 0.0, 0.0);
+            }
+            LineStyle::Zigzag { amp, step } => {
+                // Straight runs `step` long between peaks `amp` either side of the line, from
+                // the lower peak, as the rasteriser draws them.
+                s.set_stroke(Some(stroke(w, None, LineCap::Butt)));
+                let (dx, dy) = (x1 - x0, y1 - y0);
+                let len = (dx * dx + dy * dy).sqrt();
+                if !(amp.is_finite() && step.is_finite() && len.is_finite()) || step <= 1e-3 || amp < 0.0 || len <= 0.0 {
+                    seg(s, 0.0, 0.0);
+                    return;
+                }
+                let (ux, uy) = (dx / len, dy / len);
+                let (nx, ny) = (-uy, ux);
+                let mut pb = PathBuilder::new();
+                pb.move_to(x0 + nx * amp, y0 + ny * amp);
+                let mut t = 0.0f32;
+                let mut up = true;
+                let mut n = 0;
+                while t < len && n < 20_000 {
+                    let nt = (t + step).min(len);
+                    if nt <= t {
+                        break;
+                    }
+                    let f = (nt - t) / step;
+                    let (from, to) = if up { (amp, -amp) } else { (-amp, amp) };
+                    let a = from + (to - from) * f;
+                    pb.line_to(x0 + ux * nt + nx * a, y0 + uy * nt + ny * a);
+                    t = nt;
+                    up = !up;
+                    n += 1;
+                }
+                if let Some(p) = pb.finish() {
+                    s.draw_path(&p);
+                }
+            }
             LineStyle::Double => {
                 // Two thinner lines either side of the centre line.
                 let (dx, dy) = (x1 - x0, y1 - y0);

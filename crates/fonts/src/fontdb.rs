@@ -74,6 +74,13 @@ pub struct FontFace {
     /// values).
     pub cap_height: f64,
     pub x_height: f64,
+    /// Underline: (offset of the line's top from the baseline, positive up — so below the
+    /// baseline it is negative — and thickness), font units, from the `post` table (a tenth and
+    /// a twentieth of the em when the font has no usable values).
+    pub underline: (f64, f64),
+    /// Strikethrough: (offset of the stroke's top above the baseline, thickness), font units,
+    /// from OS/2 (0.3 em and a twentieth when the font has no usable values).
+    pub strikeout: (f64, f64),
     pub shaper: harfrust::ShaperData,
     /// Variable fonts: the named instance's axis settings (user units; empty = default instance),
     /// the normalised location and the shaper's view of it.
@@ -818,6 +825,7 @@ fn make_face(bytes: FontBytes, index: u32, family: String, style: String, legacy
     let settings: Vec<(skrifa::Tag, f32)> = coords.iter().map(|(t, v)| (skrifa::Tag::new(t), *v)).collect();
     let location = if coords.is_empty() { Location::default() } else { f.axes().location(settings.iter().copied()) };
     let m = f.metrics(Size::unscaled(), &location);
+    let upem = m.units_per_em.max(1) as f64;
     let a = f.attributes();
     let hb = harfrust::FontRef::from_index(data, index).ok()?;
     let shaper = harfrust::ShaperData::new(&hb);
@@ -837,11 +845,13 @@ fn make_face(bytes: FontBytes, index: u32, family: String, style: String, legacy
         local_names: Vec::new(),
         weight,
         italic,
-        upem: m.units_per_em.max(1) as f64,
+        upem,
         ascent: m.ascent as f64,
         descent: -(m.descent as f64),
         cap_height: m.cap_height.map(|v| v as f64).filter(|v| *v > 0.0).unwrap_or(m.ascent as f64 * 0.72),
         x_height: m.x_height.map(|v| v as f64).filter(|v| *v > 0.0).unwrap_or(m.ascent as f64 * 0.5),
+        underline: decoration(m.underline, upem, -0.1),
+        strikeout: decoration(m.strikeout, upem, 0.3),
         shaper,
         coords,
         location,
@@ -850,6 +860,24 @@ fn make_face(bytes: FontBytes, index: u32, family: String, style: String, legacy
         index,
         bmp: std::sync::OnceLock::new(),
     })
+}
+
+/// A font's underline or strikethrough suggestion as (offset of the decoration's top from the
+/// baseline, thickness), font units: the table's values when they are finite and plausible
+/// (the offset within two ems, the thickness positive and at most half an em), else
+/// `default_offset` ems and a twentieth of an em.
+fn decoration(d: Option<skrifa::metrics::Decoration>, upem: f64, default_offset: f64) -> (f64, f64) {
+    let ok = d.filter(|d| {
+        d.offset.is_finite()
+            && d.thickness.is_finite()
+            && d.offset.abs() <= 2.0 * upem as f32
+            && d.thickness > 0.0
+            && d.thickness <= 0.5 * upem as f32
+    });
+    match ok {
+        Some(d) => (d.offset as f64, d.thickness as f64),
+        None => (default_offset * upem, 0.05 * upem),
+    }
 }
 
 /// The named style part of a style with axis settings (`Bold {wght:650}` → `Bold`).

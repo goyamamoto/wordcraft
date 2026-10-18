@@ -12,13 +12,25 @@ use crate::math::MItem;
 use crate::para::{ClKind, LineEnd, ParaLayout};
 use crate::{Page, Placed};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Stroke {
     Solid,
     Dotted,
     Dashed,
     Double,
     Wave,
+    /// Dashes `on` long with `off` gaps, points, from the line's start: Word's dotted and dashed
+    /// underlines (1.44 / 1.44 and 3.84 / 1.92 at every size, in lines and vertical columns).
+    Dashes {
+        on: f32,
+        off: f32,
+    },
+    /// A zigzag `amp` either side of the line, straight runs `step` long between the peaks, from
+    /// the lower peak: Word's wavy underline (1.2-pt runs).
+    Zigzag {
+        amp: f32,
+        step: f32,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -329,16 +341,6 @@ pub fn revision_color(i: u32) -> Rgb {
     const C: [Rgb; 6] =
         [Rgb(0xB0, 0x1E, 0x8F), Rgb(0x1E, 0x6E, 0xB0), Rgb(0x2E, 0x8B, 0x3E), Rgb(0xC0, 0x5A, 0x10), Rgb(0x70, 0x3C, 0xB0), Rgb(0x0E, 0x7C, 0x86)];
     C.get(i as usize % C.len()).copied().unwrap_or(C[0])
-}
-
-fn stroke_of(u: Underline) -> Stroke {
-    match u {
-        Underline::Dotted => Stroke::Dotted,
-        Underline::Dash | Underline::DotDash | Underline::DotDotDash => Stroke::Dashed,
-        Underline::Double => Stroke::Double,
-        Underline::Wave | Underline::DoubleWave => Stroke::Wave,
-        _ => Stroke::Solid,
-    }
 }
 
 /// Draw items for a page.
@@ -981,7 +983,6 @@ fn lines(
             {
                 end_k -= 1;
             }
-            let thick = (st.size / 18.0).max(0.5);
             let underline = match (ins_mark, del_mark) {
                 (Some(InsertMark::Underline), _) | (_, Some(DeleteMark::Underline)) => Underline::Single,
                 (Some(InsertMark::DoubleUnderline), _) => Underline::Double,
@@ -990,48 +991,93 @@ fn lines(
             let double = rc.double_strike || del_mark == Some(DeleteMark::DoubleStrikethrough);
             let struck = rc.strike || double || ins_mark == Some(InsertMark::Strikethrough) || del_mark == Some(DeleteMark::Strikethrough);
             let spans = if underline != Underline::None || struck { line.spans(run_start, end_k) } else { Vec::new() };
-            for (x0, x1) in spans.into_iter().map(|(a, b)| (x + a, x + b)).filter(|(a, b)| b > a) {
-                if underline != Underline::None {
-                    let uy = base - st.shift - dy + st.size * 0.12;
-                    let ucolor = rc.underline_color.unwrap_or(color);
+            if !spans.is_empty() {
+                // One line for the whole format run (the clusters around this one with the same
+                // format, whatever faces draw them), at the position Word gives it.
+                let same_rc = |k: usize| {
+                    pl.clusters
+                        .get(k)
+                        .and_then(|c| pl.styles.get(c.style as usize))
+                        .is_some_and(|s| std::sync::Arc::ptr_eq(&s.rc, &st.rc) || *s.rc == *st.rc)
+                };
+                let mut fr0 = run_start;
+                while fr0 > line.c0 && same_rc(fr0 - 1) {
+                    fr0 -= 1;
+                }
+                let mut fr1 = run_end;
+                while fr1 < line.c1 && same_rc(fr1) {
+                    fr1 += 1;
+                }
+                let geo = decoration_geometry(pl, para, line, fr0, fr1, base - st.shift - dy);
+                let ucolor = rc.underline_color.unwrap_or(color);
+                for (x0, x1) in spans.iter().map(|(a, b)| (x + a, x + b)).filter(|(a, b)| b > a) {
                     if underline == Underline::Words {
-                        for kk in run_start..end_k {
-                            let Some(c) = pl.clusters.get(kk) else { continue };
+                        // Each word under its own line, where the face drawing it puts it (in one
+                        // run Word draws a Latin word's line where its font says and a Japanese
+                        // word's where the Japanese font's rule does).
+                        let in_span = |kk: usize| -> Option<(f32, f32)> {
+                            let c = pl.clusters.get(kk)?;
                             if c.kind != ClKind::Text {
+                                return None;
+                            }
+                            let a = x + line.cl_left(kk)?;
+                            let b = x + line.cl_right(kk)?;
+                            // Outside this span: drawn with its own.
+                            (a >= x0 - 0.01 && b <= x1 + 0.01 && b > a).then_some((a, b))
+                        };
+                        let mut kk = run_start;
+                        while kk < end_k {
+                            let Some((a, mut b)) = in_span(kk) else {
+                                kk += 1;
                                 continue;
+                            };
+                            // The word: the letters up to the next space or the span's end.
+                            let k0 = kk;
+                            kk += 1;
+                            while let Some((_, b2)) = in_span(kk).filter(|_| kk < end_k) {
+                                b = b.max(b2);
+                                kk += 1;
                             }
-                            let a = x + line.cl_left(kk).unwrap_or(0.0);
-                            let b = x + line.cl_right(kk).unwrap_or(a - x);
-                            if a < x0 - 0.01 || b > x1 + 0.01 {
-                                continue; // drawn with its own span
-                            }
-                            out.push(Draw::Line { x0: a, y0: uy, x1: b, y1: uy, width: thick, color: ucolor, stroke: Stroke::Solid, alpha, text_bg });
+                            let g = decoration_geometry(pl, para, line, k0, kk, base - st.shift - dy);
+                            underline_draws(Underline::Single, a, b, &g, ucolor, alpha, text_bg, out);
                         }
-                    } else {
-                        let w = if underline == Underline::Thick { thick * 2.0 } else { thick };
-                        out.push(Draw::Line { x0, y0: uy, x1, y1: uy, width: w, color: ucolor, stroke: stroke_of(underline), alpha, text_bg });
+                    } else if underline != Underline::None {
+                        underline_draws(underline, x0, x1, &geo, ucolor, alpha, text_bg, out);
+                    }
+                    if struck {
+                        strike_draws(double, x0, x1, &geo, color, alpha, text_bg, out);
                     }
                 }
-                if struck {
-                    let sy = base - st.shift - dy - st.size * 0.28;
-                    let stroke = if double { Stroke::Double } else { Stroke::Solid };
-                    out.push(Draw::Line { x0, y0: sy, x1, y1: sy, width: thick, color, stroke, alpha, text_bg });
-                }
             }
-            // Emphasis marks (傍点): one mark over (or under) each character, in the text's colour.
+            // Emphasis marks (傍点): one mark over (or under) each character, in the text's colour,
+            // where Word for Mac draws them (ink measured at 8–36 pt with 游明朝, in ems of the
+            // text): above the baseline a dot's centre 1.075 em, a comma's 1.03 em (0.05 em
+            // right of the character's centre), a circle's 0.974 em; an under dot's 0.31 em
+            // below. In a vertical column, from the column's centre line towards the page's
+            // right: a dot 0.705 em, a comma 0.695 em, a circle 0.97 em (0.13 em towards the
+            // text's end); an under dot 0.585 em towards the left.
             let em = rc.em;
             if em != wordcraft_doc::props::EmphasisMark::None {
-                // Word for Mac draws the mark glyph's box right above the text box (below it for
-                // under dot): with 游明朝 at 10.5 pt the dot's centre is 1.17 em above the
-                // baseline, the under dot's 0.32 em below. Measured from the baseline so a
-                // substitute font's larger ascent doesn't lift the mark.
-                let my = if em.below() { base - st.shift - dy + st.size * 0.32 } else { base - st.shift - dy - st.size * 1.17 };
+                use wordcraft_doc::props::EmphasisMark;
+                let s = st.size.clamp(1.0, 1638.0);
+                let y = base - st.shift - dy;
                 for kk in run_start..run_end {
                     let (Some(c), Some(a), Some(b)) = (pl.clusters.get(kk), line.cl_left(kk), line.cl_right(kk)) else { continue };
                     if c.kind != ClKind::Text || b <= a {
                         continue;
                     }
-                    out.extend(emphasis_mark(em, x + (a + b) / 2.0, my, st.size, color));
+                    let u = x + (a + b) / 2.0;
+                    let (mx, my) = match (pl.vertical, em) {
+                        (true, EmphasisMark::Dot) => (u, y - 0.705 * s),
+                        (true, EmphasisMark::Comma) => (u, y - 0.695 * s),
+                        (true, EmphasisMark::Circle) => (u + 0.13 * s, y - 0.97 * s),
+                        (true, _) => (u, y + 0.585 * s),
+                        (false, EmphasisMark::Dot) => (u, y - 1.075 * s),
+                        (false, EmphasisMark::Comma) => (u + 0.05 * s, y - 1.025 * s),
+                        (false, EmphasisMark::Circle) => (u, y - 0.955 * s),
+                        (false, _) => (u, y + 0.31 * s),
+                    };
+                    out.extend(emphasis_mark(em, mx, my, s, color, pl.vertical));
                 }
             }
         }
@@ -1747,13 +1793,21 @@ pub fn upright_in_vertical(c: char) -> bool {
 
 /// An emphasis mark centred at (`x`, `y`) for text of `size`: a filled dot, a sesame dot (the
 /// comma-like ﹅ Word draws for "comma"), an open circle, or a filled dot below the text.
-fn emphasis_mark(em: wordcraft_doc::props::EmphasisMark, x: f32, y: f32, size: f32, color: Rgb) -> Option<Draw> {
+///
+/// Sized as Word for Mac draws them with 游明朝 (ink measured at 8–36 pt): a dot 0.12 em
+/// across, a ring 0.19 em across with a stroke a fortieth of an em, a sesame dot in a 0.22-em box.
+/// One emphasis mark centred on `(x, y)` (the mark's ink centre), in the line's frame. Word for
+/// Mac draws the marks as glyphs — a full-width full stop and ideographic comma, a ring above
+/// and a full-width full stop under the text, upright in a vertical column too — so the comma is
+/// drawn upright on the page: thin at the upper left, round at the lower right, turned back
+/// against a vertical frame's turn.
+fn emphasis_mark(em: wordcraft_doc::props::EmphasisMark, x: f32, y: f32, size: f32, color: Rgb, vertical: bool) -> Option<Draw> {
     use wordcraft_doc::props::EmphasisMark;
     let size = size.clamp(1.0, 1638.0);
     match em {
         EmphasisMark::None => None,
         EmphasisMark::Dot | EmphasisMark::UnderDot => {
-            let d = size * 0.18;
+            let d = size * 0.12;
             Some(Draw::Shape {
                 rect: Rect::new(x - d / 2.0, y - d / 2.0, d, d),
                 kind: ShapeKind::Ellipse,
@@ -1765,30 +1819,199 @@ fn emphasis_mark(em: wordcraft_doc::props::EmphasisMark, x: f32, y: f32, size: f
             })
         }
         EmphasisMark::Circle => {
-            let d = size * 0.22;
+            let d = size * 0.17;
             Some(Draw::Shape {
                 rect: Rect::new(x - d / 2.0, y - d / 2.0, d, d),
                 kind: ShapeKind::Ellipse,
                 fill: None,
                 stroke: Some(color),
-                stroke_width: (size / 20.0).max(0.4),
+                stroke_width: (size * 0.025).max(0.3),
                 effects: Default::default(),
                 corner: None,
             })
         }
         EmphasisMark::Comma => {
-            // A sesame dot: a teardrop leaning to the upper right.
-            let r = size * 0.11;
-            let (x0, y0) = (x - r * 0.9, y + r * 0.9);
-            let (x1, y1) = (x + r * 1.1, y - r * 1.1);
+            // A sesame dot (ごま点): the ideographic comma's teardrop, a thin tip at the upper left
+            // running into a round head at the lower right; its ink box is 0.22 × 0.23 em around
+            // the centre, as measured in Word for Mac. The shape is built upright (y down) and
+            // turned a quarter back when the frame is a vertical column, so it stands upright on
+            // the page as Word's glyph does.
+            let at = |dx: f32, dy: f32| -> (f32, f32) {
+                let (dx, dy) = if vertical { (dy, -dx) } else { (dx, dy) };
+                (x + dx * size, y + dy * size)
+            };
+            let (hx, hy, r) = (0.045, 0.05, 0.062);
+            let k = r * 0.5523;
+            let tip = at(-0.11, -0.115);
+            let right = at(hx + r, hy);
+            let bottom = at(hx, hy + r);
+            let left = at(hx - r, hy);
+            let c = |dx: f32, dy: f32| at(dx, dy);
             let segs = vec![
-                PathSeg::Move(x1, y1),
-                PathSeg::Cubic(x1 - r * 0.2, y1 + r * 0.9, x0 + r * 0.9, y0 - r * 0.3, x0, y0),
-                PathSeg::Cubic(x0 - r * 0.7, y0 - r * 0.9, x0 + r * 0.5, y1 - r * 0.2, x1, y1),
+                PathSeg::Move(tip.0, tip.1),
+                PathSeg::Cubic(c(-0.04, -0.105).0, c(-0.04, -0.105).1, c(hx + r, hy - 0.08).0, c(hx + r, hy - 0.08).1, right.0, right.1),
+                PathSeg::Cubic(c(hx + r, hy + k).0, c(hx + r, hy + k).1, c(hx + k, hy + r).0, c(hx + k, hy + r).1, bottom.0, bottom.1),
+                PathSeg::Cubic(c(hx - k, hy + r).0, c(hx - k, hy + r).1, c(hx - r, hy + k).0, c(hx - r, hy + k).1, left.0, left.1),
+                PathSeg::Cubic(
+                    c(hx - r - 0.015, hy - 0.035).0,
+                    c(hx - r - 0.015, hy - 0.035).1,
+                    c(-0.105, -0.05).0,
+                    c(-0.105, -0.05).1,
+                    tip.0,
+                    tip.1,
+                ),
                 PathSeg::Close,
             ];
             Some(Draw::Path { segs, fill: Some(color), stroke: None, stroke_width: 0.0 })
         }
+    }
+}
+
+/// Where a format run's lines go, in the line's frame.
+#[derive(Clone, Copy, Debug)]
+struct DecoGeo {
+    vertical: bool,
+    /// The largest text size among the run's faces, points.
+    size: f32,
+    /// Horizontal text: the underline's top edge (y) and thickness. A vertical column: the
+    /// line's near edge (v, facing the text; the line lies beyond it, towards the page's right).
+    ul: f32,
+    ul_t: f32,
+    /// The strikethrough's centre (y; a vertical column's centre line) and thickness.
+    st: f32,
+    st_t: f32,
+}
+
+/// The line geometry for the clusters `k0..k1` of `line` (a format run, or one cluster for
+/// word-by-word underlining) about `baseline` (the run's baseline y; a vertical column's centre
+/// line v), as Word for Mac draws it, measured on 2026-10-19 with 游明朝 and Aptos:
+/// - Horizontal text: each face's own position and thickness
+///   (`wordcraft_fonts::word::decoration_metrics`); a run mixing faces (abc漢字) gets one line
+///   at the mean of their positions, the thickest of their thicknesses (1.44 pt below the
+///   baseline for 10.5-pt Aptos at 0.48 and 游明朝 at 2.16).
+/// - A vertical column: a 0.72-pt line at every size, its near edge 0.025 em beyond the
+///   standing characters' em square (0.30 pt at 10.5, 0.44 at 16, 0.48 at 24); lying Latin
+///   text's line is its ascent beyond its baseline (9.6 pt right of 10.5-pt Aptos's, 14.9 of
+///   16-pt's); a mixed run's line is the outer one. The strikethrough runs along the column's
+///   centre line, the faces' own thickness.
+fn decoration_geometry(
+    pl: &ParaLayout,
+    para: Option<&wordcraft_doc::Paragraph>,
+    line: &crate::para::Line,
+    k0: usize,
+    k1: usize,
+    baseline: f32,
+) -> DecoGeo {
+    // The faces drawing the clusters, each with whether any of its characters stands upright
+    // in a vertical column.
+    let mut faces: Vec<(u32, &crate::para::StyleRun, bool)> = Vec::new();
+    for k in k0.max(line.c0)..k1.min(line.c1) {
+        let Some(c) = pl.clusters.get(k) else { continue };
+        if !matches!(c.kind, ClKind::Text | ClKind::Space) {
+            continue;
+        }
+        let Some(st) = pl.styles.get(c.style as usize) else { continue };
+        let stands = c.kind == ClKind::Text
+            && para.and_then(|p| p.text.get(c.start..c.end)).is_some_and(|t| t.chars().any(|ch| upright_in_vertical(ch) || !ch.is_ascii()));
+        match faces.iter_mut().find(|(id, ..)| *id == st.face.id()) {
+            Some(f) => f.2 |= stands,
+            None => faces.push((st.face.id(), st, stands)),
+        }
+    }
+    let n = faces.len().max(1) as f32;
+    let size = faces.iter().map(|(_, st, _)| st.size).fold(0.0f32, f32::max);
+    let st_t = faces.iter().map(|(_, st, _)| st.deco.strike_thickness).fold(0.0f32, f32::max).max(0.1);
+    if pl.vertical {
+        let near = faces
+            .iter()
+            .map(|(_, st, stands)| if *stands { baseline - 0.525 * st.size } else { baseline + (st.ascent - st.descent) / 2.0 - st.glyph_ascent })
+            .fold(f32::INFINITY, f32::min);
+        let ul = if near.is_finite() { near } else { baseline - 0.525 * size };
+        return DecoGeo { vertical: true, size, ul, ul_t: 0.72, st: baseline, st_t };
+    }
+    let ul = baseline + faces.iter().map(|(_, st, _)| st.deco.underline_top).sum::<f32>() / n;
+    let ul_t = faces.iter().map(|(_, st, _)| st.deco.underline_thickness).fold(0.0f32, f32::max).max(0.1);
+    let st = baseline - faces.iter().map(|(_, st, _)| st.deco.strike_top - st.deco.strike_thickness / 2.0).sum::<f32>() / n;
+    DecoGeo { vertical: false, size, ul, ul_t, st, st_t }
+}
+
+/// The underline of `kind` from `x0` to `x1` with geometry `geo`, as Word for Mac draws it
+/// (measured with 游明朝 at 8–48 pt and Aptos at 10.5–24):
+/// - thick: twice the thickness, at least 1.2 pt, from the same top edge (1.2 pt for 10.5-pt
+///   游明朝 and for Aptos at every size, 2.4 at 24-pt 游明朝); in a column 1.44 pt, growing
+///   towards the text;
+/// - double: a second line below the first, their centres twice the thickness apart, at least
+///   1.2 pt (1.2 at 10.5, 1.68 at 16, 2.4 at 24 for 游明朝; 1.2 for Aptos); 0.72 pt apart in a
+///   column;
+/// - dotted and dashed: Word's fixed patterns (`Stroke::Dashes`);
+/// - wavy: a zigzag of 1.2-pt runs from the line's top edge, 1.3 thicknesses peak to peak and
+///   at least 0.48 pt (0.48 at 10.5, 0.96 at 16, 1.44 at 24, 2.64 at 36 for 游明朝; 0.48 for
+///   Aptos), a fiftieth of an em thick (0.24 pt at 10.5); in a column 0.72 pt peak to peak and
+///   0.24 thick at every size; double wavy: two of half the swing.
+#[allow(clippy::too_many_arguments)]
+fn underline_draws(kind: Underline, x0: f32, x1: f32, geo: &DecoGeo, color: Rgb, alpha: f32, text_bg: Option<Rgb>, out: &mut Vec<Draw>) {
+    const DOTS: Stroke = Stroke::Dashes { on: 1.44, off: 1.44 };
+    const DASHES: Stroke = Stroke::Dashes { on: 3.84, off: 1.92 };
+    let mut line = |y: f32, width: f32, stroke: Stroke| out.push(Draw::Line { x0, y0: y, x1, y1: y, width, color, stroke, alpha, text_bg });
+    let DecoGeo { vertical, size, ul, ul_t, .. } = *geo;
+    if vertical {
+        let centre = ul - 0.36;
+        match kind {
+            Underline::Thick => line(ul, 1.44, Stroke::Solid),
+            Underline::Double => {
+                line(centre, 0.72, Stroke::Solid);
+                line(centre - 1.44, 0.72, Stroke::Solid);
+            }
+            Underline::Dotted => line(centre, 0.72, DOTS),
+            Underline::Dash => line(centre, 0.72, DASHES),
+            Underline::DotDash | Underline::DotDotDash => line(centre, 0.72, Stroke::Dashed),
+            Underline::Wave => line(ul - 0.12 - 0.36, 0.24, Stroke::Zigzag { amp: 0.36, step: 1.2 }),
+            Underline::DoubleWave => {
+                line(ul - 0.12 - 0.18, 0.24, Stroke::Zigzag { amp: 0.18, step: 1.2 });
+                line(ul - 0.12 - 0.54, 0.24, Stroke::Zigzag { amp: 0.18, step: 1.2 });
+            }
+            _ => line(centre, 0.72, Stroke::Solid),
+        }
+        return;
+    }
+    let t = ul_t;
+    let centre = ul + t / 2.0;
+    let heavy = (2.0 * t).max(1.2);
+    match kind {
+        Underline::Thick => line(ul + heavy / 2.0, heavy, Stroke::Solid),
+        Underline::Double => {
+            line(centre, t, Stroke::Solid);
+            line(centre + heavy, t, Stroke::Solid);
+        }
+        Underline::Dotted => line(centre, t, DOTS),
+        Underline::Dash => line(centre, t, DASHES),
+        Underline::DotDash | Underline::DotDotDash => line(centre, t, Stroke::Dashed),
+        Underline::Wave => {
+            let amp = (1.3 * t).max(0.48) / 2.0;
+            line(ul + amp, (0.018 * size).max(0.24), Stroke::Zigzag { amp, step: 1.2 });
+        }
+        Underline::DoubleWave => {
+            let amp = (1.3 * t).max(0.48) / 4.0;
+            let w = (0.018 * size).max(0.24);
+            line(ul + amp, w, Stroke::Zigzag { amp, step: 1.2 });
+            line(ul + 3.0 * amp, w, Stroke::Zigzag { amp, step: 1.2 });
+        }
+        _ => line(centre, t, Stroke::Solid),
+    }
+}
+
+/// The strikethrough from `x0` to `x1`: one line on `geo.st`, or two a thickness apart either
+/// side of it (Word's double strikethrough: 10.5-pt 游明朝's lines centred 3.6 and 4.56 pt above
+/// the baseline, the single one at 4.08).
+#[allow(clippy::too_many_arguments)]
+fn strike_draws(double: bool, x0: f32, x1: f32, geo: &DecoGeo, color: Rgb, alpha: f32, text_bg: Option<Rgb>, out: &mut Vec<Draw>) {
+    let t = geo.st_t;
+    let mut line = |y: f32| out.push(Draw::Line { x0, y0: y, x1, y1: y, width: t, color, stroke: Stroke::Solid, alpha, text_bg });
+    if double {
+        line(geo.st - t);
+        line(geo.st + t);
+    } else {
+        line(geo.st);
     }
 }
 
