@@ -36,6 +36,12 @@ pub struct Opts {
     pub regex: bool,
     /// Take the text literally: no `^` codes.
     pub literal: bool,
+    /// Word's "Match half/full-width forms" (`match byte`): ａ is not a, ｶ is not カ. Off, each
+    /// character also matches its other width (see [`super::find_fold`]).
+    pub match_byte: bool,
+    /// Word's あいまい検索 (`match fuzzy`): kana of either kind or size, old kana, the dashes and
+    /// repeat marks alike. No effect with `match_byte`.
+    pub fuzzy: bool,
 }
 
 /// A pattern ready for the regex engine.
@@ -160,7 +166,9 @@ pub fn compile(query: &str, o: &Opts) -> Result<Compiled, String> {
 
 /// Normal search: literal text with `^` codes, optionally skipping punctuation and white space.
 fn special(query: &str, o: &Opts) -> (String, bool) {
-    let chars: Vec<char> = query.chars().collect();
+    let fold = !o.match_byte;
+    let fuzzy = fold && o.fuzzy;
+    let chars: Vec<char> = if fold { super::find_fold::normalize(query, fuzzy) } else { query.chars().collect() };
     let mut atoms: Vec<String> = Vec::new();
     let mut spans = false;
     let mut i = 0;
@@ -186,7 +194,13 @@ fn special(query: &str, o: &Opts) -> (String, bool) {
         if (o.ignore_punct && is_punct(c)) || (o.ignore_space && is_space(c)) {
             continue;
         }
-        atoms.push(lit(c));
+        // The character and, unless Match half/full-width forms, its other forms (ａ, ｶﾞ…).
+        let forms = super::find_fold::class(c, o.match_byte, fuzzy);
+        if forms.len() > 1 {
+            atoms.push(format!("(?:{})", forms.iter().map(|f| escape(f)).collect::<Vec<_>>().join("|")));
+        } else {
+            atoms.push(lit(c));
+        }
     }
     let filler = match (o.ignore_punct, o.ignore_space) {
         (true, true) => r"[\p{P} \t\x{A0}]*",
