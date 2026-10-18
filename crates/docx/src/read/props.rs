@@ -353,6 +353,16 @@ impl PropCtx {
                     if let Some(v) = tw(k, "w:after") {
                         p.space_after = Some(v.max(0.0));
                     }
+                    // Spacing in lines (hundredths of a line in the file).
+                    let lines = |name| {
+                        k.attr(name).and_then(|v| v.trim().parse::<f32>().ok()).filter(|v| v.is_finite()).map(|v| (v / 100.0).clamp(0.0, 1000.0))
+                    };
+                    if let Some(l) = lines("w:beforeLines") {
+                        p.space_before_lines = Some(l);
+                    }
+                    if let Some(l) = lines("w:afterLines") {
+                        p.space_after_lines = Some(l);
+                    }
                     // HTML-style automatic spacing; "0" switches an inherited one off.
                     let auto = |name| k.attr(name).map(|v| matches!(v.trim(), "1" | "true" | "on"));
                     if let Some(a) = auto("w:beforeAutospacing") {
