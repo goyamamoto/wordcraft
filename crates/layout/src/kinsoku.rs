@@ -3,7 +3,9 @@
 //!
 //! - Kinsoku on (the default): no line starts with closing East Asian punctuation (、。，）」…)
 //!   and none ends with opening punctuation (（「【…). UAX #14 already forbids most of these
-//!   breaks; the lists make sure of it for the standard Japanese/Chinese sets.
+//!   breaks; the lists make sure of it for the standard Japanese/Chinese sets. Word's standard
+//!   level lets a line start with a small kana or the prolonged sound mark (ッ, ー: `パカ|ッと`,
+//!   `ラメシ|ール`, observed), which UAX #14 forbids, so those breaks are put back.
 //! - Kinsoku off: a line may break between any two East Asian characters, punctuation included.
 //! - Word wrap off: Latin words may break at any character.
 //!
@@ -19,6 +21,15 @@ const NO_START: &str = "、。，．・：；？！゛゜ヽヾゝゞ々〻〉�
 
 /// East Asian characters a line may not end with: opening brackets and quotes, currency signs.
 const NO_END: &str = "〈《「『【〔〖〘〚〝（［｛｟｢＄￡￥";
+
+/// Small kana and the prolonged sound mark (UAX #14 class CJ): a line may start with one after
+/// East Asian text, as in Word's standard kinsoku level.
+fn is_conditional_starter(c: char) -> bool {
+    matches!(c as u32,
+        0x3041 | 0x3043 | 0x3045 | 0x3047 | 0x3049 | 0x3063 | 0x3083 | 0x3085 | 0x3087 | 0x308E | 0x3095 | 0x3096
+        | 0x30A1 | 0x30A3 | 0x30A5 | 0x30A7 | 0x30A9 | 0x30C3 | 0x30E3 | 0x30E5 | 0x30E7 | 0x30EE | 0x30F5 | 0x30F6
+        | 0x30FC | 0x31F0..=0x31FF | 0xFF67..=0xFF6F | 0xFF70)
+}
 
 /// Whether `c` is East Asian text: CJK ideographs, kana, bopomofo, CJK punctuation, and
 /// fullwidth/halfwidth forms (not spaces, not combining sound marks).
@@ -45,6 +56,12 @@ pub fn apply(text: &str, opps: &mut Vec<usize>, kinsoku: bool, word_wrap: bool) 
     let prev_char = |i: usize| text.get(..i).and_then(|t| t.chars().next_back());
     if kinsoku {
         opps.retain(|&i| !next_char(i).is_some_and(|c| NO_START.contains(c)) && !prev_char(i).is_some_and(|c| NO_END.contains(c)));
+        // Before a small kana or ー after an East Asian letter (not after opening punctuation).
+        for (i, c) in text.char_indices().skip(1) {
+            if is_conditional_starter(c) && prev_char(i).is_some_and(|p| is_east_asian(p) && !NO_END.contains(p)) {
+                opps.push(i);
+            }
+        }
     } else {
         // Between any two East Asian characters.
         for (i, c) in text.char_indices().skip(1) {
@@ -93,6 +110,11 @@ mod tests {
         for c in ["、", "」", "。", "漢"] {
             assert!(off.iter().any(|s| s == c), "kinsoku off: a line may start with {c}: {off:?}");
         }
+        // Word's standard level: a line may start with a small kana or ー after a letter, never
+        // after an opening bracket.
+        let small = breaks("天井がパカッと開いた。ラメシールが「ッ」", true, true);
+        assert!(small.iter().any(|s| s == "ッ") && small.iter().any(|s| s == "ー"), "{small:?}");
+        assert_eq!(small.iter().filter(|s| *s == "ッ").count(), 1, "not after 「: {small:?}");
         // Latin text: unchanged by kinsoku, broken anywhere without word wrap.
         let en = "Hello wonderful (world), 50%.";
         assert_eq!(breaks(en, true, true), breaks(en, false, true));
