@@ -1908,15 +1908,16 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     // Asian typography: kinsoku and breaking Latin words anywhere.
     // Custom kinsoku lists (the settings' `w:noLineBreaksBefore`/`After`): the text's East Asian
     // language's, else the first.
-    let custom = {
+    let level = {
         let lists = &env.doc.settings.kinsoku_chars;
         let lang = doc.styles.resolve_char_in(para_style, table_chr, &p.mark).lang_ea;
         lang.as_deref()
             .and_then(|l| lists.iter().find(|k| k.lang.eq_ignore_ascii_case(l)))
             .or_else(|| lists.first())
-            .map(|k| (k.no_start.as_str(), k.no_end.as_str()))
+            .map(|k| crate::kinsoku::Level::Custom { no_start: &k.no_start, no_end: &k.no_end })
+            .unwrap_or(if env.doc.settings.strict_kinsoku { crate::kinsoku::Level::Strict } else { crate::kinsoku::Level::Standard })
     };
-    crate::kinsoku::apply(&text, &mut found, rp.kinsoku, rp.word_wrap, custom);
+    crate::kinsoku::apply(&text, &mut found, rp.kinsoku, rp.word_wrap, level);
     let opps: std::collections::HashSet<usize> = found.into_iter().filter_map(to_para).collect();
     for c in &mut b.clusters {
         c.break_after = opps.contains(&c.end) || matches!(c.kind, ClKind::Object(_) | ClKind::Tab);

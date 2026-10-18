@@ -211,7 +211,7 @@ attributes inside stories and style or list definitions; a regenerated theme. Te
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-18 | trivial | Spacing in lines (`w:beforeLines`/`w:afterLines`, Word's 行 units) and custom kinsoku lists (`w:noLineBreaksBefore`/`w:noLineBreaksAfter` per language) read and written (they were dropped / kept as opaque bytes) and laid out as Word for Mac does: a line is the grid's pitch or the Normal size, the lists replace the standard kinsoku (`east_asian.rs::custom_kinsoku_lists_and_spacing_in_lines_round_trip`) |
+| 2026-10-18 | trivial | Spacing in lines (`w:beforeLines`/`w:afterLines`, Word's 行 units), the high kinsoku level (`w:strictFirstAndLastChars`) and custom kinsoku lists (`w:noLineBreaksBefore`/`w:noLineBreaksAfter` per language) read and written (they were dropped / kept as opaque bytes) and laid out as Word for Mac does: a line is the grid's pitch or the Normal size, the lists replace the standard kinsoku (`east_asian.rs::custom_kinsoku_lists_and_spacing_in_lines_round_trip`) |
 | 2026-10-18 | minor | East Asian layout: `w:eastAsianLayout` (縦中横, 割注), `w:fitText` (均等割り付け), `w:em` (傍点) and Word's 組み文字 EQ field read and written as Word for Mac writes them |
 | 2026-10-18 | minor | East Asian text: theme fonts per script, `w:eastAsiaTheme`, `w:lang/@w:eastAsia` (was dropped on save), `w:themeFontLang` and `w:characterSpacingControl` read and written, fixtures after Word for Mac's Japanese documents |
 | 2026-10-13 | trivial | A cell's explicit top vertical alignment (`w:vAlign w:val="top"`) is kept on read and write and beats a table style that centres or bottom-aligns (#1288) |

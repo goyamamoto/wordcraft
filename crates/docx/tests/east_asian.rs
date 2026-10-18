@@ -205,6 +205,7 @@ fn custom_kinsoku_lists_and_spacing_in_lines_round_trip() {
         KinsokuChars { lang: "ja-JP".into(), no_start: "あ、".into(), no_end: "「".into() },
         KinsokuChars { lang: "zh-CN".into(), no_start: "，".into(), no_end: String::new() },
     ];
+    d.settings.strict_kinsoku = true;
     let mut p = Paragraph::with_text("行", CharProps::default());
     p.props.space_before = Some(18.0);
     p.props.space_before_lines = Some(1.0);
@@ -217,11 +218,13 @@ fn custom_kinsoku_lists_and_spacing_in_lines_round_trip() {
         "{settings}"
     );
     assert!(settings.contains(r#"<w:noLineBreaksBefore w:lang="zh-CN" w:val="，"/>"#), "{settings}");
+    assert!(settings.contains(r#"<w:strictFirstAndLastChars/>"#), "{settings}");
     assert!(!settings.contains(r#"<w:noLineBreaksAfter w:lang="zh-CN""#), "an empty list is not written: {settings}");
     let document = part(&bytes, "word/document.xml");
     assert!(document.contains(r#"<w:spacing w:before="360" w:beforeLines="100" w:afterLines="50"/>"#), "{document}");
     let r = wordcraft_docx::read(&bytes).unwrap();
     assert_eq!(r.settings.kinsoku_chars, d.settings.kinsoku_chars);
+    assert!(r.settings.strict_kinsoku);
     let p = r.body[0].as_para().unwrap();
     assert_eq!((p.props.space_before, p.props.space_before_lines, p.props.space_after_lines), (Some(18.0), Some(1.0), Some(0.5)));
     // Read straight from Word's markup, lists for one language split over the two elements.
