@@ -8504,6 +8504,63 @@ fn underlines_and_strikethroughs_sit_where_word_for_mac_draws_them() {
     assert!(v.len() == 2 && near(v[0].0, 2.399) && near(v[1].0, 2.399) && v[0].4 < v[1].3, "{v:?}");
 }
 
+/// Hiragino lines on the 18-pt grid sit where Word for Mac puts them (`hg1` probe, Hiragino
+/// Mincho ProN at 8–48 pt, each line snapped to whole grid lines): the baselines 18.96, 37.68,
+/// 65.28, 102.24, 138.96, 177.12, 226.80 and 294.24 pt below the first, which is 12.08 below
+/// its line's top — a 1.3-em line with the font's 0.88/0.12 box centred in it, so 36-pt text
+/// takes three grid lines and 48-pt four; and the underline's top 0.7 of the descent + 0.53 pt
+/// below the baseline (1.20 at 8 pt … 4.56 at 48).
+#[test]
+fn hiragino_lines_sit_on_the_grid_as_word_for_mac_lays_them() {
+    use wordcraft_doc::section::{DocGrid, DocGridType};
+    let r = wordcraft_fonts::word::resolve("Hiragino Mincho ProN", false, false);
+    if r.substituted || !r.face.get().is_east_asian() {
+        return;
+    }
+    let sizes = [8.0, 10.5, 12.0, 14.0, 16.0, 18.0, 24.0, 36.0, 48.0];
+    let mut d = Document::from_text("");
+    d.body.clear();
+    for s in sizes {
+        let chr = wordcraft_doc::CharProps {
+            font: Some("Hiragino Mincho ProN".into()),
+            font_ea: Some("Hiragino Mincho ProN".into()),
+            size: Some(s),
+            lang_ea: Some("ja-JP".into()),
+            ..Default::default()
+        };
+        let mut p = wordcraft_doc::Paragraph::with_text("漢字の下線行", chr.clone());
+        p.mark = chr;
+        p.props.snap_to_grid = Some(true);
+        p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+        p.props.space_before = Some(0.0);
+        p.props.space_after = Some(0.0);
+        d.body.push(wordcraft_doc::para_block(p));
+    }
+    d.last_section.doc_grid = Some(DocGrid { kind: DocGridType::Lines, line_pitch: 18.0, char_space: 0 });
+    let l = lay(&d);
+    let mut baselines = Vec::new();
+    for it in &l.pages[0].items {
+        if let Placed::Lines { para, l0, y, .. } = it
+            && *l0 == 0
+            && let Some(ln) = para.lines.first()
+        {
+            baselines.push((y + ln.baseline - ln.top, ln.baseline - ln.top, ln.height));
+        }
+    }
+    assert_eq!(baselines.len(), sizes.len(), "{baselines:?}");
+    let want = [0.0, 18.96, 37.68, 65.28, 102.24, 138.96, 177.12, 226.80, 294.24];
+    for (i, (b, _, h)) in baselines.iter().enumerate() {
+        let got = b - baselines[0].0;
+        assert!((got - want[i]).abs() < 0.3, "{}: {got} vs {} ({baselines:?})", sizes[i], want[i]);
+        let lines = (1.3 * sizes[i] / 18.0).ceil();
+        assert!((h - lines * 18.0).abs() < 0.01, "{}: {h} vs {lines} grid lines", sizes[i]);
+    }
+    assert!((baselines[0].1 - 12.08).abs() < 0.3, "{baselines:?}");
+    // The underline's top below the baseline: 0.084 em + 0.53.
+    let st = &first_para(&l).styles[0];
+    assert!((st.deco.underline_top - (0.7 * 0.12 * 8.0 + 0.53)).abs() < 0.02, "{:?}", st.deco);
+}
+
 /// Word lays its own Yu Mincho and Yu Gothic out with their Office builds' line metrics — a
 /// 1.43 em line, the baseline 1.051 em below its top — whatever face stands in for them here
 /// (the macOS 游明朝体 is a 1.5 em font): measured in Word for Mac at 10.5 pt, lines 15.0 pt

@@ -1425,20 +1425,21 @@ impl PermRange {
     }
 }
 
-/// Words in `s` as Word counts them: tokens separated by whitespace that contain a letter or
-/// digit, and — since Chinese and Japanese put no spaces between words — every East Asian
-/// character, punctuation included, as a word of its own (漢字かなabc 123、「テスト」。Hello world
-/// is 15 words in Word for Mac).
+/// Words in `s` as Word for Mac counts them (2026-10-19): every run of characters between
+/// whitespace, em dashes or en dashes is a word, whatever it holds (a lone `.` or `--` counts;
+/// `a—b` and `a–b` are two words, `a…b`, `a/b`, `a―b`, `a‐b` and `(ABC)` one) — and, since Chinese, Japanese and Korean put no spaces between
+/// words, every East Asian character and Hangul syllable, punctuation included, is a word of its
+/// own, with the Latin text between them words too (漢字かなabc 123、「テスト」。Hello world is 15
+/// words; 테스트입니다. seven; 日本語ABC four).
 pub fn count_words(s: &str) -> usize {
     let mut n = 0usize;
-    for token in s.split(|c: char| c.is_whitespace() || c == para::OBJ) {
-        // A run of other characters with a letter or digit in it: one word.
+    for token in s.split(|c: char| c.is_whitespace() || c == para::OBJ || matches!(c, '\u{2013}' | '\u{2014}')) {
         let mut word = false;
         for c in token.chars() {
-            if east_asian::is_east_asian(c) {
+            if east_asian::is_east_asian(c) || east_asian::is_hangul(c) {
                 n = n.saturating_add(1 + usize::from(word));
                 word = false;
-            } else if c.is_alphanumeric() {
+            } else {
                 word = true;
             }
         }
@@ -1451,21 +1452,10 @@ pub fn count_words(s: &str) -> usize {
 /// East Asian character that is not a space — ideographs, kana, half-width katakana, full-width
 /// letters and punctuation alike, as Word for Mac counts them (2026-10-19: 33 for
 /// 日本語の文章です。 / ABC def 123 ｶﾀｶﾅ　全角スペース ＡＢＣ / 漢字かなカナ、句読点。 / a b) —
-/// plus a word for each run of Hangul.
+/// and every Hangul syllable, each its own "Korean word" too (28 for 한국어 단어 테스트입니다. /
+/// 서울 Seoul 서울시 123 한글 / 日本語と한국어の混在, 31 words).
 pub fn count_east_asian(s: &str) -> usize {
-    let mut n = 0usize;
-    let mut hangul = false;
-    for c in s.chars() {
-        if east_asian::is_east_asian(c) && !c.is_whitespace() {
-            n = n.saturating_add(1);
-        }
-        let h = east_asian::script_of_char(c) == Some("Hang");
-        if h && !hangul {
-            n = n.saturating_add(1);
-        }
-        hangul = h;
-    }
-    n
+    s.chars().filter(|&c| (east_asian::is_east_asian(c) && !c.is_whitespace()) || east_asian::is_hangul(c)).count()
 }
 
 fn walk(bl: &Blocks, prefix: &mut Vec<u32>, out: &mut Vec<Path>, depth: usize) {
