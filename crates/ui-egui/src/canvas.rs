@@ -84,6 +84,12 @@ pub struct CanvasState {
     pub(crate) widget_id: Option<egui::Id>,
     pub render_ms: f64,
     pub ime_preedit: String,
+    /// What the input method may read this frame (the caret's paragraph and the selection), set
+    /// while the document has the keyboard; the desktop app reports it to the platform (`ime`).
+    pub ime_surrounding: Option<crate::ime::ImeSurrounding>,
+    /// The range of `ime_surrounding` (UTF-16 code units) the input method asked to replace with
+    /// the composition arriving in this frame's `Preedit` (reconversion of committed text).
+    pub ime_replace: Option<std::ops::Range<usize>>,
     /// Document faces added to the interface fonts so the input method's composition (#565) and a
     /// file name in the window caption can be drawn.
     pub(crate) ime_faces: Vec<std::sync::Arc<wordcraft_fonts::FontFace>>,
@@ -212,6 +218,8 @@ impl Default for CanvasState {
             widget_id: None,
             render_ms: 0.0,
             ime_preedit: String::new(),
+            ime_surrounding: None,
+            ime_replace: None,
             ime_faces: Vec::new(),
             want_focus: true,
             context_issue: None,
@@ -1376,13 +1384,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             if focused {
                 ui.ctx().request_repaint_after(std::time::Duration::from_millis(530 - (since as u64 % 530)));
             }
-            // IME candidate window placement.
+            // IME candidate window placement, and what the input method may read (`ime`).
             let cr = Rect::from_min_max(pos2(x, y0), pos2(x + 1.0, y1));
             if focused {
                 ui.ctx().output_mut(|o| {
                     o.ime =
                         Some(egui::output::IMEOutput { rect: cr, cursor_rect: cr, purpose: Default::default(), should_interrupt_composition: false });
                 });
+                app.canvas.ime_surrounding = crate::ime::surrounding(&app.session);
             }
             if !app.canvas.ime_preedit.is_empty() {
                 // The composition is interface text, but it may be in a script the interface fonts lack
@@ -4792,6 +4801,72 @@ mod tests {
         h.step();
         assert_eq!(text(&h), "ab");
         assert!(h.state().session.composition().is_none());
+    }
+
+    /// 再変換: the input method reads the caret's paragraph and the selection (reported each
+    /// frame for the platform), names the committed text its composition replaces, and that text
+    /// gives way to the composition — put back if the composition is dismissed, replaced for good
+    /// by the commit — as Word for Mac does.
+    #[test]
+    fn ime_reconverts_committed_text_it_asked_to_replace() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("document.setText", json!({"text": "a日本語b"})).unwrap();
+        app.run("select.text", json!({"text": "日本語"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for _ in 0..8 {
+            h.step();
+        }
+        let text = |h: &egui_kittest::Harness<'_, WordApp>| h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+        // What the input method may read: the paragraph and the selection in UTF-16 units.
+        assert_eq!(
+            h.state().canvas.ime_surrounding,
+            Some(crate::ime::ImeSurrounding { text: "a日本語b".into(), selected: 1..4 }),
+            "the paragraph and the selection are reported"
+        );
+        h.state_mut().session.dirty = false;
+        // The input method asks for 1..4 to be replaced by the reading it marks.
+        h.state_mut().canvas.ime_replace = Some(1..4);
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "にほんご".into(), active_range_chars: Some(0..4) }));
+        h.step();
+        assert_eq!(text(&h), "aにほんごb", "the committed text gives way to the composition");
+        assert!(h.state().canvas.ime_replace.is_none(), "taken");
+        assert!(!h.state().session.dirty);
+        // Dismissed: the committed text is back, still selected.
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None }));
+        h.step();
+        assert_eq!(text(&h), "a日本語b");
+        assert_eq!(h.state().session.selected_text(), "日本語");
+        // Reconverted and committed: replaced through typing, one undo step.
+        h.state_mut().run("caret.end", json!({})).unwrap();
+        h.step();
+        assert_eq!(h.state().canvas.ime_surrounding.as_ref().map(|s| s.selected.clone()), Some(5..5), "the caret");
+        h.state_mut().canvas.ime_replace = Some(1..4);
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "にほんご".into(), active_range_chars: Some(0..4) }));
+        h.step();
+        assert_eq!(text(&h), "aにほんごb");
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None }));
+        h.event(egui::Event::Ime(egui::ImeEvent::Commit("二本後".into())));
+        h.step();
+        assert_eq!(text(&h), "a二本後b");
+        assert!(h.state().session.dirty);
+        let _ = h.state_mut().run("edit.undo", json!({}));
+        assert_eq!(text(&h), "a日本語b");
+        // A range that doesn't fit the paragraph is ignored: the composition goes at the caret.
+        h.state_mut().run("caret.end", json!({})).unwrap();
+        h.state_mut().canvas.ime_replace = Some(2..40);
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "あ".into(), active_range_chars: None }));
+        h.step();
+        assert_eq!(text(&h), "a日本語bあ");
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None }));
+        h.step();
+        assert_eq!(text(&h), "a日本語b");
     }
 
     #[test]
