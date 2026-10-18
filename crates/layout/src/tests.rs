@@ -1677,8 +1677,11 @@ fn runs_differing_only_in_link_or_decoration_keep_their_own_style() {
     };
     assert_eq!(link_of("Alpha"), Some(Some("https://a.example/".into())));
     assert_eq!(link_of("Beta"), Some(Some("https://b.example/".into())));
-    let strokes: Vec<_> = items.iter().filter_map(|i| if let display::Draw::Line { stroke, .. } = i { Some(*stroke) } else { None }).collect();
-    assert!(strokes.contains(&display::Stroke::Solid) && strokes.contains(&display::Stroke::Double), "{strokes:?}");
+    // Gamma's strikethrough is one line, Delta's two (a thickness either side of it).
+    let lines: Vec<(f32, f32)> =
+        items.iter().filter_map(|i| if let display::Draw::Line { x0, y0, .. } = i { Some((*x0, *y0)) } else { None }).collect();
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert!(lines[1].0 == lines[2].0 && lines[1].1 != lines[2].1 && lines[0].0 < lines[1].0, "{lines:?}");
     // Underline colour is per run too.
     let mut d = Document::from_text("Red Blue");
     let red = wordcraft_doc::props::Rgb(0xFF, 0, 0);
@@ -8186,34 +8189,229 @@ fn combine_characters_make_one_character_cell() {
     assert!((w6 - 10.0).abs() < 0.5, "six characters at 66%: {w6}");
 }
 
+/// 傍点 emphasis marks measured in Word for Mac (ink of its mark glyphs at 8–36 pt on 10.5-pt
+/// 游明朝, 2026-10-19): the marks take 0.36 em of room on their side of the line (18 → 21.78 at
+/// 10.5 pt without a grid), one mark per character, its centre 1.075 em above the baseline for a
+/// dot (0.12 em across), 1.03 em and 0.05 em right of the character's centre for a sesame dot
+/// (the ideographic comma's teardrop, 0.22 em square), 0.955 em for a circle, and 0.31 em below
+/// for an under dot.
 #[test]
-fn emphasis_marks_take_a_third_of_an_em_and_draw_one_mark_per_character() {
+fn emphasis_marks_take_their_room_and_sit_where_word_for_mac_draws_them() {
     use wordcraft_doc::props::EmphasisMark;
     let Some(plain) = ja_doc(&[("傍点つき", Default::default())]) else { return };
-    let h0 = first_para(&lay(&plain)).lines[0].height;
+    let l0 = lay(&plain);
+    let (h0, b0) = (first_para(&l0).lines[0].height, first_para(&l0).lines[0].baseline - first_para(&l0).lines[0].top);
     let em = |em: EmphasisMark| wordcraft_doc::CharProps { em: Some(em), ..Default::default() };
-    for (mark, below) in [(EmphasisMark::Dot, false), (EmphasisMark::Comma, false), (EmphasisMark::Circle, false), (EmphasisMark::UnderDot, true)] {
+    for (mark, below, centre) in [
+        (EmphasisMark::Dot, false, -1.075),
+        (EmphasisMark::Comma, false, -1.03),
+        (EmphasisMark::Circle, false, -0.955),
+        (EmphasisMark::UnderDot, true, 0.31),
+    ] {
         let d = ja_doc(&[("傍点つき", em(mark))]).unwrap();
         let l = lay(&d);
-        let h = first_para(&l).lines[0].height;
-        assert!((h - h0 - 10.5 * 0.33).abs() < 0.5, "{mark:?}: line {h} vs {h0}");
+        let line = &first_para(&l).lines[0];
+        assert!((line.height - h0 - 10.5 * 0.36).abs() < 0.05, "{mark:?}: line {} vs {h0}", line.height);
+        // The room on the ascent side moves the baseline down; under the text it does not.
+        let lift = if below { 0.0 } else { 10.5 * 0.36 };
+        assert!((line.baseline - line.top - b0 - lift).abs() < 0.05, "{mark:?}: baseline {} vs {b0}", line.baseline - line.top);
         let draws = display::page_display(&d, &l.pages[0], &Default::default());
-        let base = draws.iter().find_map(|d| if let display::Draw::Glyphs { glyphs, .. } = d { glyphs.first().map(|g| g.2) } else { None }).unwrap();
-        let marks: Vec<f32> = draws
+        let (base, cx) = draws
+            .iter()
+            .find_map(|d| if let display::Draw::Glyphs { glyphs, .. } = d { glyphs.get(1).map(|g| (g.2, g.1 + 5.25)) } else { None })
+            .unwrap();
+        // (x, y) of each mark's centre: a shape's rectangle, or a path's bounding box.
+        let marks: Vec<(f32, f32)> = draws
             .iter()
             .filter_map(|d| match d {
-                display::Draw::Shape { rect, fill, stroke, .. } if fill.is_some() || stroke.is_some() => Some(rect.y + rect.h / 2.0),
+                display::Draw::Shape { rect, fill, stroke, .. } if fill.is_some() || stroke.is_some() => {
+                    Some((rect.x + rect.w / 2.0, rect.y + rect.h / 2.0))
+                }
                 display::Draw::Path { segs, .. } => {
-                    segs.iter().find_map(|s| if let wordcraft_doc::graphic::PathSeg::Move(_, y) = s { Some(*y) } else { None })
+                    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+                    for s in segs {
+                        let pts: Vec<(f32, f32)> = match s {
+                            wordcraft_doc::graphic::PathSeg::Move(x, y) | wordcraft_doc::graphic::PathSeg::Line(x, y) => vec![(*x, *y)],
+                            wordcraft_doc::graphic::PathSeg::Cubic(_, _, _, _, x, y) => vec![(*x, *y)],
+                            _ => vec![],
+                        };
+                        for (x, y) in pts {
+                            (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+                        }
+                    }
+                    Some(((x0 + x1) / 2.0, (y0 + y1) / 2.0))
                 }
                 _ => None,
             })
             .collect();
         assert_eq!(marks.len(), 4, "{mark:?}: one mark per character");
-        for y in marks {
-            assert_eq!(y > base, below, "{mark:?}: mark at {y}, baseline {base}");
+        for (_, y) in &marks {
+            assert_eq!(*y > base, below, "{mark:?}: mark at {y}, baseline {base}");
         }
+        // The second character's mark, where Word's ink is.
+        let (x, y) = marks[1];
+        let dx = if mark == EmphasisMark::Comma { 0.05 * 10.5 } else { 0.0 };
+        assert!((y - (base + centre * 10.5)).abs() < 0.15, "{mark:?}: centre {} above the baseline, Word {}", (base - y) / 10.5, -centre);
+        assert!((x - cx - dx).abs() < 0.15, "{mark:?}: centre {x} vs the character's {cx} + {dx}");
     }
+}
+
+/// On Word's 18-pt line grid the marks' room is taken from the grid's slack first (measured in
+/// Word for Mac, 2026-10-19): a 16-pt line with dots keeps its two grid lines and its baseline;
+/// with under dots it keeps the two lines but its baseline moves up by the room (17.52 pt from
+/// the top instead of 23.28); 10.5-pt lines, whose slack is smaller than the room, grow by it
+/// (18 → 21.8).
+#[test]
+fn emphasis_mark_room_comes_out_of_the_grid_slack_first_as_in_word_for_mac() {
+    use wordcraft_doc::props::EmphasisMark;
+    use wordcraft_doc::section::{DocGrid, DocGridType};
+    if !wordcraft_fonts::word::resolve("游明朝", false, false).face.covers('語') {
+        return;
+    }
+    let mut d = Document::from_text("");
+    d.body.clear();
+    let cases = [
+        (16.0, None),
+        (16.0, Some(EmphasisMark::Dot)),
+        (16.0, Some(EmphasisMark::UnderDot)),
+        (10.5, None),
+        (10.5, Some(EmphasisMark::Dot)),
+        (10.5, Some(EmphasisMark::UnderDot)),
+    ];
+    for (size, em) in cases {
+        let chr = wordcraft_doc::CharProps {
+            font: Some("游明朝".into()),
+            font_ea: Some("游明朝".into()),
+            size: Some(size),
+            lang_ea: Some("ja-JP".into()),
+            em,
+            ..Default::default()
+        };
+        let mut p = wordcraft_doc::Paragraph::with_text("傍点の行", chr);
+        p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+        p.props.snap_to_grid = Some(true);
+        d.body.push(wordcraft_doc::para_block(p));
+    }
+    d.last_section.doc_grid = Some(DocGrid { kind: DocGridType::Lines, line_pitch: 18.0, char_space: 0 });
+    let l = lay(&d);
+    let mut lines: Vec<(usize, f32, f32)> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Lines { story: StoryRef::Body, path, para, .. } => {
+                let line = para.lines.first()?;
+                Some((path.0[0] as usize, line.height, line.baseline - line.top))
+            }
+            _ => None,
+        })
+        .collect();
+    lines.sort_by_key(|x| x.0);
+    assert_eq!(lines.len(), 6, "{lines:?}");
+    let near = |a: f32, b: f32| (a - b).abs() < 0.1;
+    // 16 pt: two grid lines, the 22.88-pt line centred (6.56 pt of slack each side).
+    assert!(near(lines[0].1, 36.0) && near(lines[0].2, 23.376), "16 pt plain {:?}", lines[0]);
+    assert!(near(lines[1].1, 36.0) && near(lines[1].2, 23.376), "16 pt dots {:?}", lines[1]);
+    assert!(near(lines[2].1, 36.0) && near(lines[2].2, 23.376 - 5.76), "16 pt under dots {:?}", lines[2]);
+    // 10.5 pt: one grid line with 1.49 pt of slack each side, less than the 3.78-pt room.
+    assert!(near(lines[3].1, 18.0), "10.5 pt plain {:?}", lines[3]);
+    assert!(near(lines[4].1, 21.78) && near(lines[4].2, lines[3].2 + 3.78), "10.5 pt dots {:?}", lines[4]);
+    assert!(near(lines[5].1, 21.78) && near(lines[5].2, lines[3].2), "10.5 pt under dots {:?}", lines[5]);
+}
+
+/// Underlines and strikethroughs measured in Word for Mac's PDF at 8–48 pt (2026-10-19). On
+/// Word's own 游明朝/游ゴシック the underline's top edge is 0.153 em + 0.53 pt below the
+/// baseline and the line 0.05 em thick (10.5 pt: 2.16 and 0.53; 48 pt: 7.92 and 2.40); the
+/// strikethrough's top is 0.42 em above the baseline, 0.045 em thick. On Aptos the underline is
+/// 0.05 em below and 0.025 em thick, the strikethrough 0.36 em above and 0.05 em thick. A thick
+/// line is twice the thickness and at least 1.2 pt, from the same top edge; a double line's
+/// second stroke lies that far below the first (1.2 at 10.5 pt, 2.4 at 24); a double
+/// strikethrough is a thickness either side of the single one's centre; dotted lines run
+/// 1.44 on / 1.44 off and dashed 3.84 / 1.92 at every size; a wave is a zigzag of 1.2-pt runs,
+/// max(1.3 × thickness, 0.48) peak to peak from the underline's top; a run mixing faces (abc漢字)
+/// gets one line at the mean of their positions, the thickest of them; Words underlines each
+/// word on its own.
+#[test]
+fn underlines_and_strikethroughs_sit_where_word_for_mac_draws_them() {
+    use display::{Draw, Stroke};
+    use wordcraft_doc::props::Underline;
+    if ja_doc(&[("語", Default::default())]).is_none() {
+        return;
+    }
+    // (baseline, [(centre y, width, stroke, x0, x1)] of the horizontal lines drawn).
+    let lines_of = |pieces: &[(&str, wordcraft_doc::CharProps)]| -> (f32, Vec<(f32, f32, Stroke, f32, f32)>) {
+        let d = ja_doc(pieces).unwrap();
+        let l = lay(&d);
+        let draws = display::page_display(&d, &l.pages[0], &Default::default());
+        let base = draws.iter().find_map(|d| if let Draw::Glyphs { glyphs, .. } = d { glyphs.first().map(|g| g.2) } else { None }).unwrap();
+        let mut v: Vec<(f32, f32, Stroke, f32, f32)> = draws
+            .iter()
+            .filter_map(|d| match d {
+                Draw::Line { x0, y0, x1, y1, width, stroke, .. } if (y0 - y1).abs() < 1e-3 => Some((*y0 - base, *width, *stroke, *x0, *x1)),
+                _ => None,
+            })
+            .collect();
+        v.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.3.total_cmp(&b.3)));
+        (base, v)
+    };
+    let near = |a: f32, b: f32| (a - b).abs() < 0.02;
+    let yu = |size: f32, f: &dyn Fn(&mut wordcraft_doc::CharProps)| {
+        let mut p = wordcraft_doc::CharProps { size: Some(size), ..Default::default() };
+        f(&mut p);
+        p
+    };
+    let ul = |u: Underline| move |p: &mut wordcraft_doc::CharProps| p.underline = Some(u);
+    // Single, 10.5 pt: top 2.1365 below the baseline, 0.525 thick.
+    let (_, v) = lines_of(&[("下線あり", yu(10.5, &ul(Underline::Single)))]);
+    assert!(v.len() == 1 && near(v[0].0, 2.1365 + 0.2625) && near(v[0].1, 0.525) && v[0].2 == Stroke::Solid, "{v:?}");
+    // 48 pt: top 7.874 below, 2.4 thick.
+    let (_, v) = lines_of(&[("下線", yu(48.0, &ul(Underline::Single)))]);
+    assert!(v.len() == 1 && near(v[0].0, 7.874 + 1.2) && near(v[0].1, 2.4), "{v:?}");
+    // Strikethrough: top 4.41 above, 0.4725 thick, so its centre 4.17375 above the baseline.
+    let (_, v) = lines_of(&[("取消", yu(10.5, &|p| p.strike = Some(true)))]);
+    assert!(v.len() == 1 && near(v[0].0, -4.17375) && near(v[0].1, 0.4725), "{v:?}");
+    // Double strikethrough: a thickness either side.
+    let (_, v) = lines_of(&[("取消", yu(10.5, &|p| p.double_strike = Some(true)))]);
+    assert!(v.len() == 2 && near(v[0].0, -4.17375 - 0.4725) && near(v[1].0, -4.17375 + 0.4725), "{v:?}");
+    // Double underline: the second stroke max(2 t, 1.2) below the first: 1.2 at 10.5 pt, 2.4 at 24.
+    let (_, v) = lines_of(&[("二重", yu(10.5, &ul(Underline::Double)))]);
+    assert!(v.len() == 2 && near(v[0].0, 2.399) && near(v[1].0, 2.399 + 1.2) && near(v[1].1, 0.525), "{v:?}");
+    let (_, v) = lines_of(&[("二重", yu(24.0, &ul(Underline::Double)))]);
+    assert!(v.len() == 2 && near(v[0].0, 4.202 + 0.6) && near(v[1].0, 4.202 + 0.6 + 2.4) && near(v[1].1, 1.2), "{v:?}");
+    // Thick: 1.2 pt from the same top edge.
+    let (_, v) = lines_of(&[("太線", yu(10.5, &ul(Underline::Thick)))]);
+    assert!(v.len() == 1 && near(v[0].0, 2.1365 + 0.6) && near(v[0].1, 1.2), "{v:?}");
+    // Dotted and dashed patterns, the same at every size.
+    for size in [10.5, 36.0] {
+        let (_, v) = lines_of(&[("点線", yu(size, &ul(Underline::Dotted)))]);
+        assert!(v.len() == 1 && v[0].2 == Stroke::Dashes { on: 1.44, off: 1.44 }, "{size}: {v:?}");
+        let (_, v) = lines_of(&[("破線", yu(size, &ul(Underline::Dash)))]);
+        assert!(v.len() == 1 && v[0].2 == Stroke::Dashes { on: 3.84, off: 1.92 }, "{size}: {v:?}");
+    }
+    // Wave: a 0.24-pt zigzag of 1.2-pt runs, 0.6825 peak to peak, from the underline's top.
+    let (_, v) = lines_of(&[("波線", yu(10.5, &ul(Underline::Wave)))]);
+    assert!(v.len() == 1 && near(v[0].0, 2.1365 + 0.34125) && near(v[0].1, 0.24), "{v:?}");
+    assert!(matches!(v[0].2, Stroke::Zigzag { amp, step } if near(amp, 0.34125) && near(step, 1.2)), "{v:?}");
+    // Double wave: two half-size zigzags stacked.
+    let (_, v) = lines_of(&[("波線", yu(10.5, &ul(Underline::DoubleWave)))]);
+    assert!(v.len() == 2 && near(v[0].0, 2.1365 + 0.170625) && near(v[1].0, 2.1365 + 0.511875), "{v:?}");
+    assert!(v.iter().all(|l| matches!(l.2, Stroke::Zigzag { amp, .. } if near(amp, 0.170625))), "{v:?}");
+    // Aptos (by name; whatever face stands in): 0.525 below, 0.2625 thick; strike 3.78 above, 0.525 thick.
+    let aptos = |f: &dyn Fn(&mut wordcraft_doc::CharProps)| {
+        let mut p = wordcraft_doc::CharProps { font: Some("Aptos".into()), size: Some(10.5), ..Default::default() };
+        f(&mut p);
+        p
+    };
+    let (_, v) = lines_of(&[("abc", aptos(&ul(Underline::Single)))]);
+    assert!(v.len() == 1 && near(v[0].0, 0.525 + 0.13125) && near(v[0].1, 0.2625), "{v:?}");
+    let (_, v) = lines_of(&[("abc", aptos(&|p| p.strike = Some(true)))]);
+    assert!(v.len() == 1 && near(v[0].0, -(3.78 - 0.2625)) && near(v[0].1, 0.525), "{v:?}");
+    // A run mixing Aptos and 游明朝: one line at the mean top (1.33), the thicker line (drawn
+    // in a piece per face, meeting end to end).
+    let (_, v) = lines_of(&[("abc漢字", aptos(&ul(Underline::Single)))]);
+    assert!(v.len() == 2 && v.iter().all(|l| near(l.0, (0.525 + 2.1365) / 2.0 + 0.2625) && near(l.1, 0.525)) && near(v[0].4, v[1].3), "{v:?}");
+    // Words: one line per word, none under the space between them.
+    let (_, v) = lines_of(&[("漢字 漢字", yu(10.5, &ul(Underline::Words)))]);
+    assert!(v.len() == 2 && near(v[0].0, 2.399) && near(v[1].0, 2.399) && v[0].4 < v[1].3, "{v:?}");
 }
 
 /// Word lays its own Yu Mincho and Yu Gothic out with their Office builds' line metrics — a

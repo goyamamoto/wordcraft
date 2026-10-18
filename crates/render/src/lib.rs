@@ -677,6 +677,37 @@ fn wave_path(a: f64, b: f64, y: f64, amp: f64) -> BezPath {
     p
 }
 
+/// A zigzag from `a` to `b` about `y`: straight runs `step` long between peaks `amp` either
+/// side, starting at the lower peak (y + amp), as Word draws its wavy underlines. Hostile
+/// values give a straight line; the point count is capped.
+fn zigzag_path(a: f64, b: f64, y: f64, amp: f64, step: f64) -> BezPath {
+    let mut p = BezPath::new();
+    if !(a.is_finite() && b.is_finite() && y.is_finite() && amp.is_finite() && step.is_finite()) || step <= 1e-3 || amp < 0.0 {
+        p.move_to((a, y));
+        p.line_to((b, y));
+        return p;
+    }
+    p.move_to((a, y + amp));
+    let mut x = a;
+    let mut up = true;
+    let mut n = 0;
+    while x < b && n < 20_000 {
+        let nx = (x + step).min(b);
+        if nx <= x {
+            break;
+        }
+        // The last, cut run stops at the height it reaches.
+        let t = (nx - x) / step;
+        let from = if up { y + amp } else { y - amp };
+        let to = if up { y - amp } else { y + amp };
+        p.line_to((nx, from + (to - from) * t));
+        x = nx;
+        up = !up;
+        n += 1;
+    }
+    p
+}
+
 fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visible: &kurbo::Rect, opts: &RenderOptions) {
     match it {
         Draw::Figure { draws, .. } => {
@@ -701,6 +732,12 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             match stroke {
                 Stroke::Dotted => st = st.with_dashes(0.0, [w, w * 2.0]),
                 Stroke::Dashed => st = st.with_dashes(0.0, [w * 4.0, w * 2.0]),
+                Stroke::Dashes { on, off } => {
+                    let (on, off) = (f64::from(*on), f64::from(*off));
+                    if on.is_finite() && off.is_finite() && on > 0.0 && off >= 0.0 {
+                        st = st.with_dashes(0.0, [on, off]);
+                    }
+                }
                 _ => {}
             }
             let line = |ctx: &mut RenderContext, dy: f64| {
@@ -721,6 +758,12 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 ctx.set_stroke(kurbo::Stroke::new(w * 0.6));
                 line(ctx, -w * 0.9);
                 line(ctx, w * 0.9);
+                return;
+            }
+            if let Stroke::Zigzag { amp, step } = stroke {
+                let (a, b) = ((*x0).min(*x1) as f64, (*x0).max(*x1) as f64);
+                ctx.set_stroke(kurbo::Stroke::new(w).with_join(kurbo::Join::Round));
+                ctx.stroke_path(&zigzag_path(a, b, *y0 as f64, f64::from(*amp), f64::from(*step)));
                 return;
             }
             ctx.set_stroke(st);
@@ -1485,7 +1528,8 @@ mod tests {
                 _ => None,
             })
             .unwrap();
-        assert!(w >= 1.5, "thick underline {w}");
+        // Word's thick line is at least 1.2 pt (on Aptos 1.2 at every size, measured in Word for Mac).
+        assert!(w >= 1.2 - 0.01, "thick underline {w}");
         let (px, py) = (((x0 + x1) / 2.0) as u32, y.round() as u32);
         let dark = render_page(&d, &l.pages[0], 4.0, &RenderOptions { dark: true, ..Default::default() });
         let [r8, g8, b8, _] = dark.pixel(px * 4, py * 4);
