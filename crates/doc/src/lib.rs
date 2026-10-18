@@ -1447,6 +1447,27 @@ pub fn count_words(s: &str) -> usize {
     n
 }
 
+/// Word's "Asian characters and Korean words" statistic (全角文字 + 半角カタカナの数): every
+/// East Asian character that is not a space — ideographs, kana, half-width katakana, full-width
+/// letters and punctuation alike, as Word for Mac counts them (2026-10-19: 33 for
+/// 日本語の文章です。 / ABC def 123 ｶﾀｶﾅ　全角スペース ＡＢＣ / 漢字かなカナ、句読点。 / a b) —
+/// plus a word for each run of Hangul.
+pub fn count_east_asian(s: &str) -> usize {
+    let mut n = 0usize;
+    let mut hangul = false;
+    for c in s.chars() {
+        if east_asian::is_east_asian(c) && !c.is_whitespace() {
+            n = n.saturating_add(1);
+        }
+        let h = east_asian::script_of_char(c) == Some("Hang");
+        if h && !hangul {
+            n = n.saturating_add(1);
+        }
+        hangul = h;
+    }
+    n
+}
+
 fn walk(bl: &Blocks, prefix: &mut Vec<u32>, out: &mut Vec<Path>, depth: usize) {
     if depth > 16 {
         return;

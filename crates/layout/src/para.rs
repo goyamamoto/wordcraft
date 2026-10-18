@@ -497,6 +497,15 @@ impl Grid {
             _ => 0.0,
         }
     }
+    /// What a character pitch (`w:charSpace`, lines-and-characters or snap-to-characters) adds
+    /// to the default size: the gap an indent in characters takes per character (Word for Mac,
+    /// measured on a lines-and-characters grid; 0 without a character pitch).
+    pub fn char_gap(&self) -> f32 {
+        match self.chars {
+            Some(pitch) if pitch.is_finite() => (pitch - self.font_size).clamp(-self.font_size, 1584.0),
+            _ => 0.0,
+        }
+    }
     /// The advance of an East Asian character of `size` points on the grid: its size plus the
     /// gap (lines and characters), whole cells (snap to characters), its size (no grid).
     pub fn ea_advance(&self, size: f32) -> f32 {
@@ -1801,9 +1810,17 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
             rp.after_auto = false;
         }
     }
-    // Indents in characters are measured in the paragraph mark's font size.
+    // Indents in characters, as Word for Mac measures them (`ci1`–`ci3` probes, 2026-10-19): the
+    // left and right indents in the Normal style's size, the first-line and hanging indents in
+    // the paragraph's first character's size (its mark's when it is empty), each plus the
+    // character grid's gap (`w:charSpace`) when the section has one: 1 ch = 11.7 pt on Word's
+    // 18-pt lines-and-characters grid at 10.5 pt, 17.2 for 16-pt text.
     if rp.indent_chars.iter().any(|c| *c != 0.0) {
-        rp.set_char_unit(doc.styles.resolve_char_in(para_style, table_chr, &p.mark).size);
+        let gap = env.grid.char_gap();
+        let normal = doc.styles.resolve_char(Some("Normal"), &CharProps::default()).size;
+        let first = p.runs.iter().find(|r| r.len > 0).map_or(&p.mark, |r| &r.props);
+        let first = doc.styles.resolve_char_in(para_style, table_chr, first).size;
+        rp.set_char_units(normal + gap, first + gap);
     }
     // List level indents apply unless the paragraph sets its own, or, for a list from the style,
     // the style giving the list (or one based on it) does (`indents_over_list`). A paragraph

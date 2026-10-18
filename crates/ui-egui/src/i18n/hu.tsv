@@ -123,6 +123,8 @@
 	Character Spacing	Betűköz
 	Characters (no spaces)	Karakterek (szóközök nélkül)
 	Characters (with spaces)	Karakterek (szóközökkel)
+	Non-Asian words	Nem ázsiai szavak
+	Asian characters and Korean words	Ázsiai karakterek és koreai szavak
 	Chart	Diagram
 	Check Accessibility	Akadálymentesség ellenőrzése
 	Check Compatibility	Kompatibilitás ellenőrzése
@@ -217,6 +219,7 @@
 	Document Title	Dokumentum címe
 	Documents you open will show up here.	A megnyitott dokumentumaid itt jelennek meg.
 	Dot-dash	Pont-vonal
+	Dot-dot-dash	Pont-pont-vonal
 	Dotted	Pontozott
 	Double	Dupla
 	Double Spacing	Dupla sorköz
@@ -1692,6 +1695,7 @@
 	Mail Merge	Körlevél
 	More Columns…	További hasábok…
 	More Symbols…	További szimbólumok…
+	More Underlines…	További aláhúzások…
 	No-Width Non Break	Nulla szélességű nem törő jel
 	No-Width Optional Break	Nulla szélességű feltételes törés
 	Paragraph Mark	Bekezdésjel
@@ -2639,6 +2643,7 @@
 	Adjust Width	Szélesség igazítása
 	Emphasis Mark	Kiemelő jel
 	Emphasis mark:	Kiemelő jel:
+	Underline style:	Aláhúzás stílusa:
 	Enclose in characters:	Karakterek közé zárás:
 	Fit in line	Sorhoz igazítás
 	Current text width:	Jelenlegi szövegszélesség:

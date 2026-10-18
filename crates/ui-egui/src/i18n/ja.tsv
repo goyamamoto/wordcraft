@@ -253,6 +253,8 @@
 	Character Border	文字の罫線
 	Characters (no spaces)	文字数（スペースを含めない）
 	Characters (with spaces)	文字数（スペースを含める）
+	Non-Asian words	半角英数の単語数
+	Asian characters and Korean words	全角文字 + 半角カタカナの数
 	Chart	グラフ
 	Check Accessibility	アクセシビリティ チェック
 	Check Compatibility	互換性チェック
@@ -360,6 +362,7 @@
 	Document Title	文書のタイトル
 	Documents you open will show up here.	開いた文書がここに表示されます。
 	Dot-dash	一点鎖線
+	Dot-dot-dash	二点鎖線
 	Dotted	点線
 	Double	二重線
 	Double Spacing	2 行
@@ -1259,6 +1262,7 @@
 	Mail Merge	差し込み印刷
 	More Columns…	段組みの詳細設定…
 	More Symbols…	その他の記号…
+	More Underlines…	その他の下線…
 	No-Width Non Break	幅なし改行禁止
 	No-Width Optional Break	幅なし任意改行
 	Paragraph Mark	段落記号
@@ -2244,6 +2248,7 @@
 	Adjust Width	文字の均等割り付け
 	Emphasis Mark	傍点
 	Emphasis mark:	傍点：
+	Underline style:	下線:
 	Enclose in characters:	括弧で囲む：
 	Fit in line	行の幅に合わせる
 	Current text width:	現在の文字列の幅：

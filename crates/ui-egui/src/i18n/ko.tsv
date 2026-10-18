@@ -217,6 +217,8 @@
 	Characters	문자
 	Characters (no spaces)	문자 수(공백 제외)
 	Characters (with spaces)	문자 수(공백 포함)
+	Non-Asian words	비아시아 단어 수
+	Asian characters and Korean words	아시아 문자 및 한국어 단어 수
 	Chart	차트
 	Check Accessibility	접근성 검사
 	Check Compatibility	호환성 검사
@@ -350,6 +352,7 @@
 	Document Title	문서 제목
 	Documents you open will show up here.	열어 본 문서가 여기에 표시됩니다.
 	Dot-dash	일점쇄선
+	Dot-dot-dash	점-점-선
 	Dotted	점선
 	Double	이중선
 	Double Spacing	두 줄 간격
@@ -1251,6 +1254,7 @@
 	Mail Merge	메일 병합
 	More Columns…	열 더 보기…
 	More Symbols…	기호 더 보기…
+	More Underlines…	밑줄 더 보기…
 	No-Width Non Break	폭 없는 줄 바꿈 방지 문자
 	No-Width Optional Break	폭 없는 선택적 줄 바꿈 문자
 	Paragraph Mark	단락 기호
@@ -2499,6 +2503,7 @@ preview	Title	제목
 	Adjust Width	너비 조정
 	Emphasis Mark	강조점
 	Emphasis mark:	강조점:
+	Underline style:	밑줄 스타일:
 	Enclose in characters:	문자로 묶기:
 	Fit in line	줄에 맞춤
 	Current text width:	현재 텍스트 너비:

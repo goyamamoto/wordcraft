@@ -106,27 +106,57 @@ pub enum Underline {
     Double,
     Thick,
     Dotted,
+    DottedHeavy,
     Dash,
+    DashedHeavy,
+    DashLong,
+    DashLongHeavy,
     DotDash,
+    DashDotHeavy,
     DotDotDash,
+    DashDotDotHeavy,
     Wave,
+    WavyHeavy,
+    /// Named as OOXML names it in JSON (`wavyDouble`); `doubleWave` is read for old callers.
+    #[serde(rename = "wavyDouble", alias = "doubleWave")]
     DoubleWave,
 }
 
 impl Underline {
-    pub const ALL: [Underline; 11] = [
+    /// Every style, in the order of Word's Font dialog list.
+    pub const ALL: [Underline; 18] = [
         Underline::None,
         Underline::Single,
         Underline::Words,
         Underline::Double,
         Underline::Thick,
         Underline::Dotted,
+        Underline::DottedHeavy,
         Underline::Dash,
+        Underline::DashedHeavy,
+        Underline::DashLong,
+        Underline::DashLongHeavy,
         Underline::DotDash,
+        Underline::DashDotHeavy,
         Underline::DotDotDash,
+        Underline::DashDotDotHeavy,
         Underline::Wave,
+        Underline::WavyHeavy,
         Underline::DoubleWave,
     ];
+    /// Word's heavy styles: the thick line and the heavy patterns, drawn at the thick line's
+    /// width.
+    pub fn is_heavy(self) -> bool {
+        matches!(
+            self,
+            Underline::Thick
+                | Underline::DottedHeavy
+                | Underline::DashedHeavy
+                | Underline::DashLongHeavy
+                | Underline::DashDotHeavy
+                | Underline::DashDotDotHeavy
+        )
+    }
     /// The OOXML `w:u/@w:val` name.
     pub fn ooxml(self) -> &'static str {
         match self {
@@ -136,22 +166,23 @@ impl Underline {
             Underline::Double => "double",
             Underline::Thick => "thick",
             Underline::Dotted => "dotted",
+            Underline::DottedHeavy => "dottedHeavy",
             Underline::Dash => "dash",
+            Underline::DashedHeavy => "dashedHeavy",
+            Underline::DashLong => "dashLong",
+            Underline::DashLongHeavy => "dashLongHeavy",
             Underline::DotDash => "dotDash",
+            Underline::DashDotHeavy => "dashDotHeavy",
             Underline::DotDotDash => "dotDotDash",
+            Underline::DashDotDotHeavy => "dashDotDotHeavy",
             Underline::Wave => "wave",
+            Underline::WavyHeavy => "wavyHeavy",
             Underline::DoubleWave => "wavyDouble",
         }
     }
+    /// The style of an OOXML `w:u/@w:val` name (an unknown one is a single underline).
     pub fn from_ooxml(s: &str) -> Underline {
-        Underline::ALL.iter().copied().find(|u| u.ooxml() == s).unwrap_or(match s {
-            "thickDash" | "dashLong" | "dashedHeavy" | "dashLongHeavy" => Underline::Dash,
-            "dottedHeavy" => Underline::Dotted,
-            "wavyHeavy" => Underline::Wave,
-            "dashDotHeavy" => Underline::DotDash,
-            "dashDotDotHeavy" => Underline::DotDotDash,
-            _ => Underline::Single,
-        })
+        Underline::ALL.iter().copied().find(|u| u.ooxml() == s).unwrap_or(Underline::Single)
     }
 }
 

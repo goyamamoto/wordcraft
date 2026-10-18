@@ -118,6 +118,8 @@
 	Characters	Märgid
 	Characters (no spaces)	Märgid (tühikuteta)
 	Characters (with spaces)	Märgid (tühikutega)
+	Non-Asian words	Mitte-Aasia sõnad
+	Asian characters and Korean words	Aasia märgid ja korea sõnad
 	Chart	Diagramm
 	Check Accessibility	Kontrolli ligipääsetavust
 	Check Compatibility	Kontrolli ühilduvust
@@ -220,6 +222,7 @@
 	Document Title	Dokumendi pealkiri
 	Documents you open will show up here.	Avatud dokumendid kuvatakse siin.
 	Dot-dash	Punkt-kriipsjoon
+	Dot-dot-dash	Punkt-punkt-kriips
 	Dotted	Punktiir
 	Double	Kahekordne
 	Double Spacing	Kahekordne reavahe
@@ -1382,6 +1385,7 @@
 	Mail Merge	Kirjakooste
 	More Columns…	Rohkem veerge…
 	More Symbols…	Rohkem sümboleid…
+	More Underlines…	Veel allajoonimisi…
 	No-Width Non Break	Nullaiusega mittemurduv
 	No-Width Optional Break	Nullaiusega valikuline murdekoht
 	Paragraph Mark	Lõigumärk
@@ -2278,6 +2282,7 @@
 	Adjust Width	Laiuse kohandamine
 	Emphasis Mark	Rõhumärk
 	Emphasis mark:	Rõhumärk:
+	Underline style:	Allajoonimise laad:
 	Enclose in characters:	Ümbritse märkidega:
 	Fit in line	Mahuta reale
 	Current text width:	Teksti praegune laius:

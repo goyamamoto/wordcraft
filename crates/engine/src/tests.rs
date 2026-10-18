@@ -2944,6 +2944,38 @@ fn word_count_includes_text_boxes_by_default() {
     assert_eq!(s.word_count(), 2);
 }
 
+/// Word Count on Japanese text, as Word for Mac counts it (`compute statistics`, 2026-10-19):
+/// every East Asian character — kana, ideographs, half-width katakana, full-width letters and
+/// punctuation — is a word and an "Asian character"; a full-width space is a space; the rest are
+/// non-Asian words.
+#[test]
+fn word_count_counts_east_asian_characters_as_word_for_mac_does() {
+    let text = "日本語の文章です。\nABC def 123 ｶﾀｶﾅ　全角スペース ＡＢＣ\n漢字かなカナ、句読点。\na b";
+    let mut s = Session::new(wordcraft_doc::Document::from_text(text));
+    let v = run(&mut s, "review.wordCount", json!({}));
+    assert_eq!(v["words"].as_u64(), Some(38), "{v}");
+    assert_eq!(v["characters"].as_u64(), Some(44), "{v}");
+    assert_eq!(v["charactersWithSpaces"].as_u64(), Some(50), "{v}");
+    assert_eq!(v["eastAsianCharacters"].as_u64(), Some(33), "{v}");
+    assert_eq!(v["nonAsianWords"].as_u64(), Some(5), "{v}");
+    assert_eq!(v["paragraphs"].as_u64(), Some(4), "{v}");
+    for (text, words, chars, with_spaces, ea) in [
+        ("ABC def", 2, 6, 7, 0),
+        ("全角　スペース", 6, 6, 7, 6),
+        ("ｶﾀｶﾅ", 4, 4, 4, 4),
+        ("スペース", 4, 4, 4, 4),
+        ("。、", 2, 2, 2, 2),
+        ("ＡＢＣ", 3, 3, 3, 3),
+        ("a  b", 2, 2, 4, 0),
+        ("한국어 단어", 2, 5, 6, 2),
+    ] {
+        let mut s = Session::new(wordcraft_doc::Document::from_text(text));
+        let v = run(&mut s, "review.wordCount", json!({}));
+        let got = (v["words"].as_u64(), v["characters"].as_u64(), v["charactersWithSpaces"].as_u64(), v["eastAsianCharacters"].as_u64());
+        assert_eq!(got, (Some(words), Some(chars), Some(with_spaces), Some(ea)), "{text}: {v}");
+    }
+}
+
 #[test]
 fn word_count_includes_numbered_list_labels_in_words_but_not_characters() {
     let mut d = wordcraft_doc::Document::new();

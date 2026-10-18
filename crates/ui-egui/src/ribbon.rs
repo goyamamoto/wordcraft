@@ -837,11 +837,15 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                         ("Dotted", "dotted"),
                         ("Dashed", "dash"),
                         ("Dot-dash", "dotDash"),
+                        ("Dot-dot-dash", "dotDotDash"),
                         ("Wave", "wave"),
                         ("Words only", "words"),
                     ] {
                         mi(ui, app, l, "format.underline", json!({"style": s}));
                     }
+                    // Word's remaining styles are in the Font dialog's Underline style list.
+                    ui.separator();
+                    mi(ui, app, "More Underlines…", "format.fontDialog", json!({}));
                 });
                 small(ui, app, "strike", None, "Strikethrough", "format.strikethrough", json!({}), flag("strike"));
                 small(ui, app, "subscript", None, "Subscript", "format.subscript", json!({}), flag("subscript"));

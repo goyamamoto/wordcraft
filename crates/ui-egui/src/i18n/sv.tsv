@@ -233,6 +233,8 @@
 	Characters	Tecken
 	Characters (no spaces)	Tecken (utan blanksteg)
 	Characters (with spaces)	Tecken (med blanksteg)
+	Non-Asian words	Icke-asiatiska ord
+	Asian characters and Korean words	Asiatiska tecken och koreanska ord
 	Chart	Diagram
 	Check Accessibility	Kontrollera tillgänglighet
 	Check Compatibility	Kontrollera kompatibilitet
@@ -345,6 +347,7 @@
 	Document Title	Dokumenttitel
 	Documents you open will show up here.	Dokument som du öppnar visas här.
 	Dot-dash	Punkt-streck
+	Dot-dot-dash	Punkt-punkt-streck
 	Dotted	Prickad
 	Double	Dubbel
 	Double Spacing	Dubbelt radavstånd
@@ -1288,6 +1291,7 @@
 	Mail Merge	Dokumentkoppling
 	More Columns…	Fler kolumner…
 	More Symbols…	Fler symboler…
+	More Underlines…	Fler understrykningar…
 	No-Width Non Break	Nollbredd, ingen brytning
 	No-Width Optional Break	Nollbredd, valfri brytning
 	Paragraph Mark	Stycketecken
@@ -2658,6 +2662,7 @@ preview	Title	Titel
 	Adjust Width	Justera bredd
 	Emphasis Mark	Betoningstecken
 	Emphasis mark:	Betoningstecken:
+	Underline style:	Understrykning:
 	Enclose in characters:	Omslut med tecken:
 	Fit in line	Anpassa till raden
 	Current text width:	Aktuell textbredd:
