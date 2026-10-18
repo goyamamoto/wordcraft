@@ -42,6 +42,15 @@ pub struct ResolvedChar {
     pub outline: bool,
     pub shadow: bool,
     pub emboss: bool,
+    /// Emphasis mark (傍点).
+    #[serde(default)]
+    pub em: crate::props::EmphasisMark,
+    /// 均等割り付け: the run belongs to a block spread to this width.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fit_text: Option<crate::props::FitText>,
+    /// 縦中横 / 割注.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub east_asian_layout: Option<crate::props::EastAsianLayout>,
     pub engrave: bool,
     /// WordArt text effects (sanitized; `None` when there are none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -96,6 +105,12 @@ impl ResolvedChar {
             outline: c.outline.unwrap_or(false),
             shadow: c.shadow.unwrap_or(false),
             emboss: c.emboss.unwrap_or(false),
+            em: c.em.unwrap_or_default(),
+            fit_text: c
+                .fit_text
+                .filter(|f| f.width.is_finite() && f.width > 0.0)
+                .map(|f| crate::props::FitText { width: f.width.clamp(0.1, 1584.0), id: f.id }),
+            east_asian_layout: c.east_asian_layout.filter(|l| !l.is_none()),
             engrave: c.engrave.unwrap_or(false),
             text_effects: c.text_effects.as_deref().map(crate::wordart::TextEffects::sanitized).filter(|t| !t.is_empty()).map(Box::new),
             link: c.link.clone(),

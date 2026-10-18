@@ -7281,6 +7281,56 @@ fn a_japanese_region_starts_from_words_japanese_normal_template() {
 /// Word's font box names the East Asian font on 漢字 (Yu Mincho there) and the Latin font on abc in
 /// the same paragraph; a selection goes by its first character.
 #[test]
+fn asian_layout_commands_set_the_run_properties_as_word_writes_them() {
+    use wordcraft_doc::props::{CombineBrackets, EmphasisMark};
+    let mut s = Session::new(crate::blank_document(&wordcraft_geom::Region::from_tag("ja-JP")));
+    run(&mut s, "text.insert", json!({"text": "傍点：強調します。"}));
+    // Without a selection the Asian layout commands have nothing to work on.
+    assert!(s.run("format.twoLinesInOne", &json!({"brackets": "round"})).is_err());
+    run(&mut s, "select.text", json!({"text": "強調"}));
+    run(&mut s, "format.emphasisMark", json!({"mark": "comma"}));
+    let st = run(&mut s, "format.state", json!({}));
+    assert_eq!(st["emphasisMark"], "comma");
+    run(&mut s, "format.twoLinesInOne", json!({"brackets": "square"}));
+    let st = run(&mut s, "format.state", json!({}));
+    assert_eq!((st["eastAsianLayout"]["combine"].as_bool(), st["eastAsianLayout"]["combineBrackets"].as_str()), (Some(true), Some("square")));
+    assert!(st["eastAsianLayout"]["id"].as_i64().is_some_and(|id| id != 0), "a block id as Word writes one");
+    run(&mut s, "format.horizontalInVertical", json!({"compress": true}));
+    let st = run(&mut s, "format.state", json!({}));
+    assert_eq!(
+        (st["eastAsianLayout"]["vert"].as_bool(), st["eastAsianLayout"]["vertCompress"].as_bool(), st["eastAsianLayout"]["combine"].as_bool()),
+        (Some(true), Some(true), Some(false))
+    );
+    run(&mut s, "format.combineCharacters", json!({}));
+    assert_eq!(run(&mut s, "format.state", json!({}))["eastAsianLayout"]["combineChars"], true);
+    run(&mut s, "format.combineCharacters", json!({"off": true}));
+    assert!(run(&mut s, "format.state", json!({}))["eastAsianLayout"].is_null());
+    // Combine Characters takes at most six characters, as Word's dialog does.
+    run(&mut s, "select.text", json!({"text": "強調します。"}));
+    assert!(s.run("format.combineCharacters", &json!({})).is_ok());
+    run(&mut s, "select.text", json!({"text": "傍点：強調します"}));
+    assert!(s.run("format.combineCharacters", &json!({})).is_err());
+    // Adjust Width: a width in points, or in characters at the font size (10.5 pt here); the
+    // runs carry one block id. A single character is padded with ideographic spaces, as Word
+    // writes "　均　" for 均 spread to 40 pt.
+    run(&mut s, "select.text", json!({"text": "強調"}));
+    run(&mut s, "format.fitText", json!({"chars": 4}));
+    let st = run(&mut s, "format.state", json!({}));
+    assert_eq!(st["fitText"], 42.0);
+    run(&mut s, "format.fitText", json!({"width": 100}));
+    assert_eq!(run(&mut s, "format.state", json!({}))["fitText"], 100.0);
+    run(&mut s, "format.fitText", json!({"off": true}));
+    assert!(run(&mut s, "format.state", json!({}))["fitText"].is_null());
+    run(&mut s, "select.text", json!({"text": "強"}));
+    run(&mut s, "format.fitText", json!({"width": 40}));
+    assert_eq!(text(&s), "傍点：\u{3000}強\u{3000}調します。");
+    assert_eq!(run(&mut s, "format.state", json!({}))["fitText"], 40.0);
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(text(&s), "傍点：強調します。");
+    let _ = (CombineBrackets::Round, EmphasisMark::Dot);
+}
+
+#[test]
 fn change_case_converts_japanese_kinds_as_word() {
     // Word's Change Case with an East Asian editing language adds Half-width, Full-width,
     // Hiragana and Katakana (文字種の変換); outputs observed in Word for Mac (2026-10-18).

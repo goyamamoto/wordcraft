@@ -5,7 +5,10 @@
 //! `layout.hyphenation`, `layout.manualHyphenation` with `caret.set` and `text.optionalHyphen`,
 //! `review.language`, `mailings.envelopes`, `mailings.labels`, `table.formula`, `table.sort`), so
 //! scripts and agents get the same result without the dialog. Shown through
-//! [`crate::dialogs::Dialog::Layout`].
+//! [`crate::dialogs::Dialog::Layout`]. Word's Asian Layout dialogs (Home › Paragraph › Asian
+//! Layout: Horizontal in Vertical, Combine Characters, Two Lines in One, Adjust Width) live here
+//! too and run `format.horizontalInVertical`, `format.combineCharacters`, `format.twoLinesInOne`
+//! and `format.fitText`.
 
 use egui::{Ui, vec2};
 use serde::Serialize;
@@ -29,6 +32,10 @@ pub enum LayoutDialog {
     Labels(LabelsForm),
     Formula(FormulaForm),
     Sort(SortForm),
+    HorizontalInVertical(HorizontalInVerticalForm),
+    CombineCharacters(CombineCharactersForm),
+    TwoLinesInOne(TwoLinesInOneForm),
+    AdjustWidth(AdjustWidthForm),
 }
 
 impl LayoutDialog {
@@ -42,6 +49,10 @@ impl LayoutDialog {
             LayoutDialog::Labels(_) => "labels",
             LayoutDialog::Formula(_) => "tableFormula",
             LayoutDialog::Sort(_) => "tableSort",
+            LayoutDialog::HorizontalInVertical(_) => "horizontalInVertical",
+            LayoutDialog::CombineCharacters(_) => "combineCharacters",
+            LayoutDialog::TwoLinesInOne(_) => "twoLinesInOne",
+            LayoutDialog::AdjustWidth(_) => "adjustWidth",
         }
     }
 
@@ -56,6 +67,10 @@ impl LayoutDialog {
             LayoutDialog::Labels(_) => "Labels",
             LayoutDialog::Formula(_) => "Formula",
             LayoutDialog::Sort(_) => "Sort",
+            LayoutDialog::HorizontalInVertical(_) => "Horizontal in Vertical",
+            LayoutDialog::CombineCharacters(_) => "Combine Characters",
+            LayoutDialog::TwoLinesInOne(_) => "Two Lines in One",
+            LayoutDialog::AdjustWidth(_) => "Adjust Width",
         }
     }
 }
@@ -71,6 +86,10 @@ pub fn open(name: &str, app: &mut WordApp) -> Option<LayoutDialog> {
         "labels" => LayoutDialog::Labels(LabelsForm::read(app)),
         "tableFormula" => LayoutDialog::Formula(FormulaForm::read(app)?),
         "tableSort" => LayoutDialog::Sort(SortForm::read(app)?),
+        "horizontalInVertical" => LayoutDialog::HorizontalInVertical(HorizontalInVerticalForm::read(app)),
+        "combineCharacters" => LayoutDialog::CombineCharacters(CombineCharactersForm::read(app)),
+        "twoLinesInOne" => LayoutDialog::TwoLinesInOne(TwoLinesInOneForm::read(app)),
+        "adjustWidth" => LayoutDialog::AdjustWidth(AdjustWidthForm::read(app)),
         _ => return None,
     })
 }
@@ -86,7 +105,231 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, d: &mut LayoutDialog) -> bool {
         LayoutDialog::Labels(f) => labels_ui(app, ui, f),
         LayoutDialog::Formula(f) => formula_ui(app, ui, f),
         LayoutDialog::Sort(f) => sort_ui(app, ui, f),
+        LayoutDialog::HorizontalInVertical(f) => horizontal_in_vertical_ui(app, ui, f),
+        LayoutDialog::CombineCharacters(f) => combine_characters_ui(app, ui, f),
+        LayoutDialog::TwoLinesInOne(f) => two_lines_in_one_ui(app, ui, f),
+        LayoutDialog::AdjustWidth(f) => adjust_width_ui(app, ui, f),
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Asian Layout (Home › Paragraph › Asian Layout)
+
+/// What `format.state` says about the selection's `w:eastAsianLayout`, for the dialogs.
+fn east_asian_layout(app: &WordApp) -> Value {
+    wordcraft_engine::cmd::format::state(&app.session).get("eastAsianLayout").cloned().unwrap_or(Value::Null)
+}
+
+/// The selected text, one line (the word at the caret counts, as the commands take it).
+fn selection_text(app: &WordApp) -> String {
+    app.session.selected_text().replace(['\r', '\n'], " ")
+}
+
+/// OK, a Remove button (enabled when `removable`) and Cancel; returns (ok, remove, cancel).
+fn buttons_with_remove(ui: &mut Ui, removable: bool) -> (bool, bool, bool) {
+    let mut r = (false, false, false);
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button(tl!("Cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                r.2 = true;
+            }
+            if ui.add_enabled(removable, egui::Button::new(tl!("Remove"))).clicked() {
+                r.1 = true;
+            }
+            if ui.add(crate::widgets::primary_button(ui, tl!("OK"))).clicked() {
+                r.0 = true;
+            }
+        });
+    });
+    r
+}
+
+/// Horizontal in Vertical (縦中横): the selected text lies horizontal in vertical text.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HorizontalInVerticalForm {
+    pub text: String,
+    /// Fit in line (`w:vertCompress`).
+    pub fit: bool,
+    /// The selection already has it (Remove is enabled).
+    pub current: bool,
+}
+
+impl HorizontalInVerticalForm {
+    pub fn read(app: &WordApp) -> HorizontalInVerticalForm {
+        let l = east_asian_layout(app);
+        let current = l.get("vert").and_then(Value::as_bool).unwrap_or(false);
+        let fit = l.get("vertCompress").and_then(Value::as_bool).unwrap_or(false);
+        HorizontalInVerticalForm { text: selection_text(app), fit, current }
+    }
+}
+
+fn horizontal_in_vertical_ui(app: &mut WordApp, ui: &mut Ui, f: &mut HorizontalInVerticalForm) -> bool {
+    ui.horizontal(|ui| {
+        ui.label(tl!("Text:"));
+        ui.label(egui::RichText::new(f.text.as_str()).font(semibold(12.5)));
+    });
+    ui.checkbox(&mut f.fit, tl!("Fit in line"));
+    let (ok, remove, cancel) = buttons_with_remove(ui, f.current);
+    if ok {
+        return run(app, "format.horizontalInVertical", json!({"compress": f.fit}));
+    }
+    if remove {
+        return run(app, "format.horizontalInVertical", json!({"off": true}));
+    }
+    cancel
+}
+
+/// Combine Characters (組み文字): up to six characters in one character's cell.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CombineCharactersForm {
+    pub text: String,
+    pub current: bool,
+}
+
+impl CombineCharactersForm {
+    pub fn read(app: &WordApp) -> CombineCharactersForm {
+        let current = east_asian_layout(app).get("combineChars").and_then(Value::as_bool).unwrap_or(false);
+        CombineCharactersForm { text: selection_text(app), current }
+    }
+    /// Word's limit: one to six characters.
+    pub fn fits(&self) -> bool {
+        (1..=wordcraft_doc::props::EastAsianLayout::COMBINE_CHARS_MAX).contains(&self.text.chars().count())
+    }
+}
+
+fn combine_characters_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CombineCharactersForm) -> bool {
+    ui.horizontal(|ui| {
+        ui.label(tl!("Text:"));
+        ui.label(egui::RichText::new(f.text.as_str()).font(semibold(12.5)));
+    });
+    if !f.fits() {
+        ui.label(egui::RichText::new(tl!("Select one to six characters.")).weak());
+    }
+    let (ok, remove, cancel) = buttons_with_remove(ui, f.current);
+    if ok {
+        return run(app, "format.combineCharacters", json!({}));
+    }
+    if remove {
+        return run(app, "format.combineCharacters", json!({"off": true}));
+    }
+    cancel
+}
+
+/// The bracket choices of Two Lines in One: OOXML name and label.
+pub const COMBINE_BRACKETS: [(&str, &str); 5] = [("none", "None"), ("round", "( )"), ("square", "[ ]"), ("angle", "< >"), ("curly", "{ }")];
+
+/// Two Lines in One (割注): the selected text as two half-size lines, optionally in brackets.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TwoLinesInOneForm {
+    pub text: String,
+    /// `none|round|square|angle|curly`.
+    pub brackets: String,
+    pub current: bool,
+}
+
+impl TwoLinesInOneForm {
+    pub fn read(app: &WordApp) -> TwoLinesInOneForm {
+        let l = east_asian_layout(app);
+        let current = l.get("combine").and_then(Value::as_bool).unwrap_or(false);
+        let brackets = l.get("combineBrackets").and_then(Value::as_str).filter(|_| current).unwrap_or("none").to_string();
+        TwoLinesInOneForm { text: selection_text(app), brackets, current }
+    }
+}
+
+fn two_lines_in_one_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TwoLinesInOneForm) -> bool {
+    ui.horizontal(|ui| {
+        ui.label(tl!("Text:"));
+        ui.label(egui::RichText::new(f.text.as_str()).font(semibold(12.5)));
+    });
+    ui.label(tl!("Enclose in characters:"));
+    for (v, l) in COMBINE_BRACKETS {
+        let label = if v == "none" { tl!(l).to_string() } else { l.to_string() };
+        ui.radio_value(&mut f.brackets, v.to_string(), label);
+    }
+    let (ok, remove, cancel) = buttons_with_remove(ui, f.current);
+    if ok {
+        return run(app, "format.twoLinesInOne", json!({"brackets": f.brackets}));
+    }
+    if remove {
+        return run(app, "format.twoLinesInOne", json!({"off": true}));
+    }
+    cancel
+}
+
+/// Adjust Width (文字の均等割り付け): the selected text spread to a width in characters (at
+/// the text's font size) or points.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdjustWidthForm {
+    pub text: String,
+    /// The text's font size (what one character measures).
+    pub size: f32,
+    /// The current width in points: the block's, else the text's natural length in characters
+    /// at the font size.
+    pub current_width: f32,
+    /// The selection already has a width (Remove is enabled).
+    pub current: bool,
+    /// New width in the chosen unit.
+    pub width: f32,
+    /// Unit: true = characters, false = points.
+    pub chars: bool,
+}
+
+impl AdjustWidthForm {
+    pub fn read(app: &WordApp) -> AdjustWidthForm {
+        let st = wordcraft_engine::cmd::format::state(&app.session);
+        let size = st.get("size").and_then(Value::as_f64).map(|v| v as f32).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(10.5);
+        let fit = st.get("fitText").and_then(Value::as_f64).map(|v| v as f32).filter(|v| v.is_finite() && *v > 0.0);
+        let text = selection_text(app);
+        let n = text.chars().count() as f32;
+        let current_width = fit.unwrap_or(n * size);
+        AdjustWidthForm { text, size, current_width, current: fit.is_some(), width: current_width / size, chars: true }
+    }
+    /// `format.fitText` parameters for OK.
+    pub fn params(&self) -> Value {
+        if self.chars { json!({"chars": self.width}) } else { json!({"width": self.width}) }
+    }
+}
+
+fn adjust_width_ui(app: &mut WordApp, ui: &mut Ui, f: &mut AdjustWidthForm) -> bool {
+    ui.horizontal(|ui| {
+        ui.label(tl!("Text:"));
+        ui.label(egui::RichText::new(f.text.as_str()).font(semibold(12.5)));
+    });
+    egui::Grid::new("adjust_width").num_columns(3).show(ui, |ui| {
+        ui.label(tl!("Current text width:"));
+        let current = if f.chars { f.current_width / f.size } else { f.current_width };
+        ui.label(format!("{current:.2}"));
+        ui.label(if f.chars { tl!("Characters") } else { tl!("Points") });
+        ui.end_row();
+        ui.label(tl!("New text width:"));
+        let range = if f.chars { 0.1..=200.0 } else { 0.1..=1584.0 };
+        ui.add(egui::DragValue::new(&mut f.width).speed(if f.chars { 0.05 } else { 0.5 }).range(range).max_decimals(2));
+        let shown = if f.chars { tl!("Characters") } else { tl!("Points") };
+        egui::ComboBox::from_id_salt("adjust_width_unit").selected_text(shown).show_ui(ui, |ui| {
+            if ui.selectable_label(f.chars, tl!("Characters")).clicked() && !f.chars {
+                f.chars = true;
+                f.width /= f.size.max(0.1);
+            }
+            if ui.selectable_label(!f.chars, tl!("Points")).clicked() && f.chars {
+                f.chars = false;
+                f.width *= f.size;
+            }
+        });
+        ui.end_row();
+    });
+    let (ok, remove, cancel) = buttons_with_remove(ui, f.current);
+    if ok {
+        return run(app, "format.fitText", f.params());
+    }
+    if remove {
+        return run(app, "format.fitText", json!({"off": true}));
+    }
+    cancel
 }
 
 /// The accent button and Cancel; returns (ok, cancel).
@@ -922,6 +1165,69 @@ mod tests {
             let f = LanguageForm::read(&a);
             assert_eq!((f.lang.as_str(), f.no_proof), ("fr-FR", false), "direct formatting overrides {source}");
         }
+    }
+
+    /// Word's Asian Layout dialogs open by name and end in their commands: Two Lines in One's OK
+    /// sets 割注 with the chosen brackets, Remove clears it; Adjust Width converts characters at
+    /// the font size into points for `format.fitText`.
+    #[test]
+    fn asian_layout_dialogs_run_their_commands() {
+        use egui_kittest::kittest::Queryable;
+        let doc = wordcraft_engine::blank_document(&wordcraft_engine::Region::from_tag("ja-JP"));
+        let mut a = WordApp::new(Session::new(doc), Services::default());
+        a.run("ui.language", json!({"value": "en"})).unwrap();
+        a.run("text.insert", json!({"text": "割注 これは割注の本文です"})).unwrap();
+        a.run("select.text", json!({"text": "これは割注の本文です"})).unwrap();
+        a.run("ui.dialog", json!({"name": "twoLinesInOne"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(3);
+        h.get_by_label("[ ]").click();
+        h.run_steps(2);
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none());
+        let st = h.state_mut().run("format.state", json!({})).unwrap();
+        assert_eq!((st["eastAsianLayout"]["combine"].as_bool(), st["eastAsianLayout"]["combineBrackets"].as_str()), (Some(true), Some("square")));
+        // Reopened, the dialog shows the current brackets and Remove clears the layout.
+        let f = TwoLinesInOneForm::read(h.state());
+        assert_eq!((f.brackets.as_str(), f.current), ("square", true));
+        h.state_mut().run("ui.dialog", json!({"name": "twoLinesInOne"})).unwrap();
+        h.run_steps(3);
+        h.get_by_label("Remove").click();
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none());
+        let st = h.state_mut().run("format.state", json!({})).unwrap();
+        assert!(st["eastAsianLayout"].is_null());
+        // Adjust Width: 10.5 pt text, 10 characters selected = 105 pt now; 12 characters → 126 pt.
+        let mut f = AdjustWidthForm::read(h.state());
+        assert_eq!((f.size, f.current_width, f.current, f.chars), (10.5, 105.0, false, true));
+        f.width = 12.0;
+        assert_eq!(f.params(), json!({"chars": 12.0}));
+        f.chars = false;
+        f.width = 126.0;
+        assert_eq!(f.params(), json!({"width": 126.0}));
+        h.state_mut().run("format.fitText", f.params()).unwrap();
+        let f = AdjustWidthForm::read(h.state());
+        assert_eq!((f.current_width, f.current), (126.0, true));
+        // Combine Characters: Word's limit shows in the form.
+        assert!(!CombineCharactersForm::read(h.state()).fits(), "ten characters are too many");
+        h.state_mut().run("select.text", json!({"text": "割注の本"})).unwrap();
+        assert!(CombineCharactersForm::read(h.state()).fits());
+        h.state_mut().run("ui.dialog", json!({"name": "horizontalInVertical"})).unwrap();
+        h.run_steps(3);
+        h.get_by_label("Fit in line").click();
+        h.run_steps(2);
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        let st = h.state_mut().run("format.state", json!({})).unwrap();
+        assert_eq!((st["eastAsianLayout"]["vert"].as_bool(), st["eastAsianLayout"]["vertCompress"].as_bool()), (Some(true), Some(true)));
     }
 
     /// #2717: opening and accepting the dialog must not reset inherited proofing.

@@ -2,7 +2,9 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::eq::{EncloseShape, EncloseStyle, Enclosure};
-use wordcraft_doc::props::{Border, CharProps, Highlight, Rgb, TextColor, Underline, VertAlign};
+use wordcraft_doc::props::{
+    Border, CharProps, CombineBrackets, EastAsianLayout, EmphasisMark, FitText, Highlight, Rgb, TextColor, Underline, VertAlign,
+};
 use wordcraft_doc::resolve::ResolvedChar;
 use wordcraft_doc::{Pos, RevisionKind};
 
@@ -144,6 +146,51 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("format.enclose", "Enclose Characters", "Home › Font", enclose)
             .params(r#"{"shape": "circle|square|triangle|diamond" | null, "style"?: "shrink|enlarge", "text"?: string}"#),
+        CommandSpec::new("format.emphasisMark", "Emphasis Mark", "Home › Font › Font", |s, v| {
+            let m = p::req_str(v, "mark")?;
+            let m = EmphasisMark::from_ooxml(m).ok_or_else(|| CmdError::Params("mark: none|dot|comma|circle|underDot".into()))?;
+            apply(s, &|c| c.em = Some(m))
+        })
+        .params(r#"{"mark": "none|dot|comma|circle|underDot"}"#),
+        CommandSpec::new("format.fitText", "Adjust Width", "Home › Paragraph", fit_text)
+            .params(r#"{"width"?: points, "chars"?: number (at the text's font size), "off"?: true} (Word's 文字の均等割り付け: the selected text spread or squeezed to the width)"#),
+        CommandSpec::new("format.horizontalInVertical", "Horizontal in Vertical", "Home › Paragraph › Asian Layout", |s, v| {
+            let compress = p::bool(v, "compress").unwrap_or(false);
+            asian_layout(s, v, &|l| {
+                l.vert = true;
+                l.vert_compress = compress;
+                l.combine = false;
+                l.combine_chars = false;
+            })
+        })
+        .params(r#"{"compress"?: bool, "off"?: true} (縦中横: the selected text lies horizontal in vertical text)"#),
+        CommandSpec::new("format.combineCharacters", "Combine Characters", "Home › Paragraph › Asian Layout", |s, v| {
+            if !p::bool(v, "off").unwrap_or(false) {
+                let n = selected_text(s)?.chars().count();
+                if n == 0 || n > EastAsianLayout::COMBINE_CHARS_MAX {
+                    return Err(CmdError::Params(format!("Combine Characters takes 1 to {} characters", EastAsianLayout::COMBINE_CHARS_MAX)));
+                }
+            }
+            asian_layout(s, v, &|l| {
+                l.combine_chars = true;
+                l.vert = false;
+                l.combine = false;
+            })
+        })
+        .params(r#"{"off"?: true} (組み文字: up to six selected characters set as two half-size lines in one character)"#),
+        CommandSpec::new("format.twoLinesInOne", "Two Lines in One", "Home › Paragraph › Asian Layout", |s, v| {
+            let brackets = match p::str(v, "brackets") {
+                Some(b) => CombineBrackets::from_ooxml(b).ok_or_else(|| CmdError::Params("brackets: none|round|square|angle|curly".into()))?,
+                None => CombineBrackets::None,
+            };
+            asian_layout(s, v, &|l| {
+                l.combine = true;
+                l.combine_brackets = brackets;
+                l.vert = false;
+                l.combine_chars = false;
+            })
+        })
+        .params(r#"{"brackets"?: "none|round|square|angle|curly", "off"?: true} (割注: the selected text set as two half-size lines in one)"#),
         CommandSpec::new("format.state", "Formatting at Selection", "Home › Font", |s, _| Ok(state(s))).pure(),
     ]
 }
@@ -181,6 +228,87 @@ fn column_rows(s: &Session) -> Option<Vec<(Pos, Pos)>> {
         .collect();
     // An empty block (column mode just started) formats like a caret.
     (!rows.is_empty()).then_some(rows)
+}
+
+/// The selected text (the word at the caret without a selection), for the Asian layout
+/// commands, which need text to work on.
+fn selected_text(s: &Session) -> Result<String, CmdError> {
+    let (a, b) = target(s).ok_or_else(|| CmdError::Failed("select the text first".into()))?;
+    Ok(s.doc
+        .paths_between(&a, &b)
+        .iter()
+        .filter_map(|path| {
+            let p = s.doc.para(a.story, path)?;
+            let from = if *path == a.path { a.off } else { 0 };
+            let to = if *path == b.path { b.off } else { p.len() };
+            p.text.get(from..to).map(str::to_string)
+        })
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+
+/// A block id for `w:fitText`/`w:eastAsianLayout` from where the block starts (non-zero,
+/// stable for the same place).
+fn block_id(a: &Pos) -> i32 {
+    let mut h: u32 = 0x811c_9dc5;
+    for b in format!("{:?}/{}", a.path, a.off).bytes() {
+        h = (h ^ u32::from(b)).wrapping_mul(0x0100_0193);
+    }
+    let id = (h & 0x7fff_ffff) as i32;
+    if id == 0 { 1 } else { id }
+}
+
+/// Word's Asian Layout commands set `w:eastAsianLayout` on the selection; `off` removes it.
+fn asian_layout(s: &mut Session, v: &Value, set: &dyn Fn(&mut EastAsianLayout)) -> CmdResult {
+    let (a, b) = target(s).ok_or_else(|| CmdError::Failed("select the text first".into()))?;
+    if p::bool(v, "off").unwrap_or(false) {
+        s.doc.format_range(&a, &b, &|c| c.east_asian_layout = None)?;
+        return sel_result(s);
+    }
+    let id = block_id(&a);
+    s.doc.format_range(&a, &b, &|c| {
+        let mut l = EastAsianLayout { id, ..Default::default() };
+        set(&mut l);
+        c.east_asian_layout = Some(l);
+    })?;
+    sel_result(s)
+}
+
+/// Word's Adjust Width (文字の均等割り付け): `width` points or `chars` characters at the text's
+/// font size; a single character is padded with an ideographic space on each side, as Word
+/// does; `off` removes it.
+fn fit_text(s: &mut Session, v: &Value) -> CmdResult {
+    let (a, mut b) = target(s).ok_or_else(|| CmdError::Failed("select the text first".into()))?;
+    if p::bool(v, "off").unwrap_or(false) {
+        s.doc.format_range(&a, &b, &|c| c.fit_text = None)?;
+        return sel_result(s);
+    }
+    if a.path != b.path {
+        return Err(CmdError::Failed("Adjust Width works within one paragraph".into()));
+    }
+    let size = resolved(s).first().map(|r| r.size).unwrap_or(10.5);
+    let width = match (p::f32(v, "width"), p::f32(v, "chars")) {
+        (Some(w), _) => w,
+        (None, Some(n)) => n * size,
+        (None, None) => return Err(CmdError::Params("`width` (points) or `chars` is required".into())),
+    };
+    if !width.is_finite() || width <= 0.0 {
+        return Err(CmdError::Params("width must be positive".into()));
+    }
+    let width = width.clamp(0.1, 1584.0);
+    let text = s.doc.para(a.story, &a.path).and_then(|p| p.text.get(a.off..b.off).map(str::to_string)).unwrap_or_default();
+    if text.chars().count() == 1 {
+        let props = s.doc.para(a.story, &a.path).map(|p| p.props_of_char(a.off).clone()).unwrap_or_default();
+        let para = s.doc.para_mut(a.story, &a.path)?;
+        para.insert_text(b.off, "\u{3000}", &props)?;
+        para.insert_text(a.off, "\u{3000}", &props)?;
+        b.off = b.off.saturating_add(2 * '\u{3000}'.len_utf8());
+        s.sel.anchor = a.clone();
+        s.sel.focus = b.clone();
+    }
+    let id = block_id(&a);
+    s.doc.format_range(&a, &b, &|c| c.fit_text = Some(FitText { width, id }))?;
+    sel_result(s)
 }
 
 /// Apply a change to the selection (or the pending caret formatting).
@@ -715,6 +843,9 @@ pub fn state(s: &Session) -> Value {
         "caps": all.iter().all(|r| r.caps),
         "hidden": all.iter().all(|r| r.hidden),
         "spacing": same(&|r| json!(r.spacing)),
+        "emphasisMark": same(&|r| json!(r.em.ooxml())),
+        "fitText": same(&|r| json!(r.fit_text.map(|f| f.width))),
+        "eastAsianLayout": same(&|r| json!(r.east_asian_layout)),
         "color": same(&|r| json!(match r.color { TextColor::Auto => "auto".to_string(), TextColor::Rgb(c) => c.hex() })),
         "highlight": same(&|r| json!(r.highlight.map(|c| c.hex()))),
         "style": style,

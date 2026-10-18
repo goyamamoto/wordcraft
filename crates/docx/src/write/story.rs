@@ -326,6 +326,25 @@ impl Writer<'_> {
                     self.object(w, o, props, rels, depth);
                     i += 1;
                 }
+                // Combine Characters (組み文字): the block's text pieces become Word's EQ field.
+                Piece::Text(_) if props.east_asian_layout.is_some_and(|l| l.combine_chars) => {
+                    let id = props.east_asian_layout.map(|l| l.id);
+                    let mut j = i;
+                    let mut text = String::new();
+                    while let Some((Piece::Text(t), pr)) = pieces.get(j) {
+                        if pr.east_asian_layout.map(|l| (l.combine_chars, l.id)) != Some((true, id.unwrap_or(0))) {
+                            break;
+                        }
+                        text.push_str(t);
+                        j += 1;
+                    }
+                    let moves = self.moves_of(props);
+                    self.move_ranges(w, &moves);
+                    self.rev_open(w, props);
+                    self.combine_chars(w, &text, props);
+                    self.rev_close(w, props);
+                    i = j.max(i + 1);
+                }
                 _ => {
                     // Gather simple pieces sharing these props into one run.
                     let mut j = i;
@@ -891,6 +910,46 @@ impl Writer<'_> {
         run(w, &txt, &|w| w.leaf(tag, &[("xml:space", "preserve")], text));
         run(w, props, &|w| w.leaf(tag, &[("xml:space", "preserve")], ")"));
         run(w, props, &|w| w.empty("w:fldChar", &[("w:fldCharType", "end")]));
+    }
+
+    /// Combine Characters (組み文字) as Word writes it: `eq \o(\s\up 5(株式),\s\do 2(会社))`
+    /// with the two pieces in half-size runs (scaled to 66% or 50% for three or four per line),
+    /// no result. Word takes six characters at most; any more follow as plain text.
+    fn combine_chars(&mut self, w: &mut W, text: &str, props: &CharProps) {
+        let max = wordcraft_doc::props::EastAsianLayout::COMBINE_CHARS_MAX;
+        let cut = text.char_indices().nth(max).map(|(i, _)| i).unwrap_or(text.len());
+        let (block, rest) = text.split_at(cut);
+        let del = self.is_del(props);
+        let tag = if del { "w:delInstrText" } else { "w:instrText" };
+        let rc = self.doc.styles.resolve_char(None, props);
+        let base = props.size.unwrap_or(rc.size).clamp(1.0, 1638.0);
+        let mut plain = props.clone();
+        plain.east_asian_layout = None;
+        let mut half = plain.clone();
+        half.size = Some(crate::combine_chars::half_size(base));
+        half.scale = crate::combine_chars::scale(block);
+        if let Some(ea) = rc.font_ea.as_deref().filter(|f| !f.is_empty()) {
+            half.font = Some(ea.to_string());
+            half.font_ea = Some(ea.to_string());
+        }
+        let (up, down) = crate::combine_chars::split(block);
+        let run = |w: &mut W, p: &CharProps, f: &dyn Fn(&mut W)| {
+            w.open("w:r", &[]);
+            rpr(w, p);
+            f(w);
+            w.close("w:r");
+        };
+        run(w, &plain, &|w| w.empty("w:fldChar", &[("w:fldCharType", "begin")]));
+        let head = format!("eq \\o(\\s\\up {}(", crate::combine_chars::raise(base));
+        run(w, &plain, &|w| w.leaf(tag, &[("xml:space", "preserve")], &head));
+        run(w, &half, &|w| w.leaf(tag, &[("xml:space", "preserve")], &up));
+        run(w, &plain, &|w| w.leaf(tag, &[("xml:space", "preserve")], "),\\s\\do 2("));
+        run(w, &half, &|w| w.leaf(tag, &[("xml:space", "preserve")], &down));
+        run(w, &plain, &|w| w.leaf(tag, &[("xml:space", "preserve")], "))"));
+        run(w, &plain, &|w| w.empty("w:fldChar", &[("w:fldCharType", "end")]));
+        if !rest.is_empty() {
+            run(w, &plain, &|w| w.leaf(if del { "w:delText" } else { "w:t" }, &[("xml:space", "preserve")], rest));
+        }
     }
 
     /// A field's begin, instruction and separate runs.

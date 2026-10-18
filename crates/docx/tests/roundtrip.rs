@@ -5,8 +5,8 @@ use std::sync::Arc;
 use wordcraft_doc::numbering::ListKind;
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{
-    Align, Border, BorderStyle, Borders, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, Rgb, RowProps, TabAlign, TabLeader,
-    TabStop, TableLook, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
+    Align, Border, BorderStyle, Borders, CharProps, CombineBrackets, EastAsianLayout, EmphasisMark, FitText, HeightRule, Highlight, LineSpacing,
+    NumRef, ParaProps, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableLook, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::{Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, NumFormat, PageVAlign, SectionProps, SectionStart};
 use wordcraft_doc::styles::{Style, StyleKind};
@@ -100,6 +100,16 @@ fn every_char_prop_round_trips() {
             glow: Some(wordcraft_doc::effects::Glow { color: Rgb(0x0F, 0x9E, 0xD5), size: 5.0, transparency: 40.0 }),
             reflection: Some(wordcraft_doc::wordart::Reflection::default()),
         })),
+        em: Some(EmphasisMark::Comma),
+        fit_text: Some(FitText { width: 100.0, id: 7 }),
+        east_asian_layout: Some(EastAsianLayout {
+            id: 8,
+            vert: false,
+            vert_compress: false,
+            combine: true,
+            combine_brackets: CombineBrackets::Round,
+            combine_chars: false,
+        }),
         lang: Some("fr-FR".into()),
         no_proof: Some(true),
         rtl: Some(false),
@@ -2306,6 +2316,55 @@ fn wrap_polygons_round_trip() {
 /// Enclosed characters (#297) are written as Word stores them — an `eq \o\ac(○,字)` field with no
 /// result, the symbol and the text in runs of their own sizes — and read back with their style,
 /// whether the field's size is set on the run or comes from the styles.
+#[test]
+fn combine_characters_round_trip_in_words_eq_field() {
+    // 組み文字: Word keeps it as an EQ field with half-size code runs (observed in Word for Mac);
+    // WordCraft keeps the text with the layout flag and writes Word's structure back.
+    let layout = EastAsianLayout { id: 5, combine_chars: true, ..Default::default() };
+    let cc = CharProps { east_asian_layout: Some(layout), size: Some(10.5), ..Default::default() };
+    let d = doc_with(vec![para_runs(&[("組四：", CharProps::default()), ("株式会社", cc.clone()), ("テスト。", CharProps::default())])]);
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let xml = document_xml(&bytes);
+    assert!(xml.contains(r"eq \o(\s\up 5("), "{xml}");
+    assert!(xml.contains(r"),\s\do 2("), "{xml}");
+    assert!(xml.contains(r#"<w:sz w:val="10"/>"#), "{xml}");
+    assert!(xml.contains("<w:instrText xml:space=\"preserve\">株式</w:instrText>"), "{xml}");
+    assert!(xml.contains("<w:instrText xml:space=\"preserve\">会社</w:instrText>"), "{xml}");
+    assert!(!xml.contains("w:eastAsianLayout"), "{xml}");
+    assert!(!xml.contains("<w:t xml:space=\"preserve\">株式会社</w:t>"), "the text is in the field, not a run: {xml}");
+    let r = wordcraft_docx::read(&bytes).unwrap();
+    let got = paras(&r)[0];
+    assert_eq!(got.plain_text(), "組四：株式会社テスト。");
+    let (a, b) = (got.text.find('株').unwrap(), got.text.find('テ').unwrap());
+    assert!(got.props_of_char(a).east_asian_layout.is_some_and(|l| l.combine_chars && l.id != 0));
+    assert_eq!(got.props_of_char(a).size, Some(10.5), "the base size; the half size stays in the file's code runs");
+    assert_eq!(got.props_of_char(b).east_asian_layout, None);
+    assert_eq!(got.props_of_char(0).east_asian_layout, None);
+    // Two characters are padded with ideographic spaces; six take 66% scale; seven: six in the
+    // field and the seventh as plain text; 12 pt raises by 6 with 6 pt pieces.
+    let two = doc_with(vec![para_runs(&[("平成", cc.clone())])]);
+    let xml = document_xml(&wordcraft_docx::write(&two).unwrap());
+    assert!(xml.contains("<w:instrText xml:space=\"preserve\">平\u{3000}</w:instrText>"), "{xml}");
+    assert!(xml.contains("<w:instrText xml:space=\"preserve\">\u{3000}成</w:instrText>"), "{xml}");
+    assert_eq!(paras(&rt(&two))[0].plain_text(), "平成");
+    let six = doc_with(vec![para_runs(&[("東京都千代田", cc.clone())])]);
+    let xml = document_xml(&wordcraft_docx::write(&six).unwrap());
+    assert!(xml.contains(r#"<w:w w:val="66"/>"#), "{xml}");
+    assert!(xml.contains(">東京都</w:instrText>") && xml.contains(">千代田</w:instrText>"), "{xml}");
+    let seven = doc_with(vec![para_runs(&[("東京都千代田区", cc.clone())])]);
+    let xml = document_xml(&wordcraft_docx::write(&seven).unwrap());
+    assert!(xml.contains(">東京都</w:instrText>") && xml.contains(">千代田</w:instrText>"), "{xml}");
+    assert!(xml.contains("<w:t xml:space=\"preserve\">区</w:t>"), "{xml}");
+    assert_eq!(paras(&rt(&seven))[0].plain_text(), "東京都千代田区");
+    let twelve = doc_with(vec![para_runs(&[("株式会社", CharProps { size: Some(12.0), ..cc.clone() })])]);
+    let xml = document_xml(&wordcraft_docx::write(&twelve).unwrap());
+    assert!(xml.contains(r"eq \o(\s\up 6("), "{xml}");
+    assert!(xml.contains(r#"<w:sz w:val="12"/>"#), "{xml}");
+    let got = rt(&twelve);
+    assert_eq!(paras(&got)[0].props_of_char(0).size, Some(12.0));
+    assert!(paras(&got)[0].props_of_char(0).east_asian_layout.is_some_and(|l| l.combine_chars));
+}
+
 #[test]
 fn enclosed_characters_round_trip_in_words_structure() {
     use wordcraft_doc::eq::{EncloseShape, EncloseStyle, Enclosure};
