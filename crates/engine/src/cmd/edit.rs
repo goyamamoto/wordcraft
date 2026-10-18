@@ -94,7 +94,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("edit.find", "Find", "Home › Editing", find)
             .key("Mod+F")
-            .params(r#"{"text": string, "matchCase"?: bool, "wholeWord"?: bool, "matchPrefix"?: bool, "matchSuffix"?: bool, "ignorePunct"?: bool, "ignoreSpace"?: bool, "wildcards"?: bool, "special"?: bool (^p ^t ^# … codes, default true), "regex"?: bool}"#)
+            .params(r#"{"text": string, "matchCase"?: bool, "wholeWord"?: bool, "matchPrefix"?: bool, "matchSuffix"?: bool, "ignorePunct"?: bool, "ignoreSpace"?: bool, "matchByte"?: bool (Word's Match half/full-width forms: ａ is not a, ｶ is not カ; off by default), "fuzzy"?: bool (あいまい検索: kana of either kind or size, old kana, dashes and repeat marks alike; on by default when the document's East Asian language is Japanese), "wildcards"?: bool, "special"?: bool (^p ^t ^# … codes, default true), "regex"?: bool}"#)
             .pure(),
         CommandSpec::new("edit.advancedFind", "Advanced Find", "Home › Editing › Find", advanced_find)
             .params(r#"{"text"?: string, …options of edit.find, "in"?: "main|selection", "highlight"?: bool}"#)
@@ -374,7 +374,8 @@ pub(crate) fn search(s: &Session, story: StoryRef) -> Result<Vec<(Pos, Pos)>, Cm
     Ok(search_full(s, story, false)?.into_iter().map(|f| (f.a, f.b)).collect())
 }
 
-fn find_opts(f: &crate::session::FindState) -> find_pattern::Opts {
+fn find_opts(s: &Session) -> find_pattern::Opts {
+    let f = &s.find;
     find_pattern::Opts {
         match_case: f.match_case,
         whole_word: f.whole_word,
@@ -385,7 +386,15 @@ fn find_opts(f: &crate::session::FindState) -> find_pattern::Opts {
         wildcards: f.wildcards,
         regex: f.regex,
         literal: f.literal,
+        match_byte: f.match_byte,
+        fuzzy: f.fuzzy.unwrap_or_else(|| fuzzy_default(s)),
     }
+}
+
+/// Word's あいまい検索 is on by default when Japanese is the East Asian editing language; here,
+/// when the document's East Asian language is Japanese.
+pub fn fuzzy_default(s: &Session) -> bool {
+    s.doc.styles.default_chr.lang_ea.as_deref().is_some_and(|l| l.len() >= 2 && l.get(..2).is_some_and(|p| p.eq_ignore_ascii_case("ja")))
 }
 
 /// [`search`], with the Replace with text of each match when `with_rep` (special codes, `^&`,
@@ -397,7 +406,7 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
     if f.query.is_empty() {
         return Ok(Vec::new());
     }
-    let opts = find_opts(f);
+    let opts = find_opts(s);
     let c = find_pattern::compile(&f.query, &opts).map_err(CmdError::Params)?;
     let re = meta::Regex::builder()
         .syntax(syntax::Config::new().case_insensitive(c.case_insensitive))
@@ -536,6 +545,12 @@ fn read_opts(s: &mut Session, v: &Value) {
     }
     if let Some(b) = p::bool(v, "ignoreSpace") {
         s.find.ignore_space = b;
+    }
+    if let Some(b) = p::bool(v, "matchByte") {
+        s.find.match_byte = b;
+    }
+    if let Some(b) = p::bool(v, "fuzzy") {
+        s.find.fuzzy = Some(b);
     }
     if let Some(t) = p::str(v, "with") {
         s.find.replace = t.to_string();

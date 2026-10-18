@@ -754,6 +754,72 @@ fn find_replace_wildcards() {
     assert_eq!(run(&mut s, "edit.find", json!({"text": "eg", "matchSuffix": false, "ignorePunct": true}))["count"], 2);
 }
 
+/// Word for Mac's Japanese find (observed 2026-10-18): half- and full-width forms match each
+/// other unless Match half/full-width forms is on; あいまい検索 (on by default with Japanese
+/// text) matches kana of either kind or size, old kana, the dashes and the repeat marks, and
+/// ヴァ as バ; Match half/full-width forms turns both off.
+#[test]
+fn japanese_find_folds_width_and_fuzzy_as_word() {
+    let mut s = s();
+    let found = |s: &mut Session, text: &str, extra: serde_json::Value| -> Vec<String> {
+        let mut v = json!({"text": text});
+        for (k, x) in extra.as_object().into_iter().flatten() {
+            v[k] = x.clone();
+        }
+        let r = run(s, "edit.find", v);
+        r["matches"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|m| {
+                let a = wordcraft_doc::Pos {
+                    story: StoryRef::Body,
+                    path: wordcraft_doc::Path::top(0),
+                    off: m["start"]["off"].as_u64().unwrap_or(0) as usize,
+                };
+                let b = wordcraft_doc::Pos { off: m["end"]["off"].as_u64().unwrap_or(0) as usize, ..a.clone() };
+                s.doc.copy_range(&a, &b).plain_text()
+            })
+            .collect()
+    };
+    let sample = "ワープロ ワ－プロ ﾜｰﾌﾟﾛ わーぷろ ｱｲｳ アイウ あいう ＡＢＣ abc ABC １２３ 123 ヴァイオリン バイオリン ゐゑ いえ 、，。．";
+    run(&mut s, "document.setText", json!({"text": sample}));
+    // An English document: no あいまい検索 by default, widths still alike (Word's match byte off).
+    let f = |s: &mut Session, t: &str| found(s, t, json!({}));
+    assert_eq!(f(&mut s, "ワープロ"), ["ワープロ", "ﾜｰﾌﾟﾛ"]);
+    assert_eq!(f(&mut s, "abc"), ["ＡＢＣ", "abc", "ABC"]);
+    assert_eq!(f(&mut s, "123"), ["１２３", "123"]);
+    assert_eq!(f(&mut s, "バイオリン"), ["バイオリン"]);
+    assert_eq!(f(&mut s, "、"), ["、"]);
+    assert_eq!(f(&mut s, "."), ["．"]);
+    // あいまい検索.
+    let fz = |s: &mut Session, t: &str| found(s, t, json!({"fuzzy": true}));
+    assert_eq!(fz(&mut s, "ワープロ"), ["ワープロ", "ワ－プロ", "ﾜｰﾌﾟﾛ", "わーぷろ"]);
+    assert_eq!(fz(&mut s, "アイウ"), ["ｱｲｳ", "アイウ", "あいう"]);
+    assert_eq!(fz(&mut s, "バイオリン"), ["ヴァイオリン", "バイオリン"]);
+    assert_eq!(fz(&mut s, "ヴァイオリン"), ["ヴァイオリン", "バイオリン"]);
+    assert_eq!(fz(&mut s, "いえ"), ["ゐゑ", "いえ"]);
+    assert_eq!(fz(&mut s, "ｶﾞ"), Vec::<String>::new());
+    // Match half/full-width forms: every character to itself, あいまい検索 off.
+    let mb = |s: &mut Session, t: &str| found(s, t, json!({"matchByte": true, "fuzzy": true}));
+    assert_eq!(mb(&mut s, "abc"), ["abc", "ABC"]);
+    assert_eq!(mb(&mut s, "ワープロ"), ["ワープロ"]);
+    assert_eq!(mb(&mut s, "ﾜｰﾌﾟﾛ"), ["ﾜｰﾌﾟﾛ"]);
+    run(&mut s, "edit.find", json!({"text": "x", "matchByte": false, "fuzzy": false}));
+    // A Japanese document has あいまい検索 on by default, as Word does with Japanese editing.
+    let mut j = Session::new(wordcraft_doc::Document::new());
+    crate::session::japanese_normal(&mut j.doc);
+    run(&mut j, "document.setText", json!({"text": sample}));
+    assert!(super::cmd::edit::fuzzy_default(&j));
+    assert_eq!(found(&mut j, "いえ", json!({})), ["ゐゑ", "いえ"]);
+    assert_eq!(found(&mut j, "いえ", json!({"fuzzy": false})), ["いえ"]);
+    // Replace works through the same folding: every form of ワープロ becomes one word.
+    run(&mut j, "edit.find", json!({"text": "ワープロ", "fuzzy": true}));
+    let r = run(&mut j, "edit.replaceAll", json!({"text": "ワープロ", "with": "WP", "fuzzy": true}));
+    assert_eq!(r["replaced"], 4);
+    assert!(text(&j).starts_with("WP WP WP WP "), "{}", text(&j));
+}
+
 #[test]
 fn hostile_find_patterns_are_bounded() {
     let mut s = s();
