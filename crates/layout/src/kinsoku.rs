@@ -51,10 +51,21 @@ pub fn is_east_asian(c: char) -> bool {
 
 /// Adjust the break opportunities `opps` (byte offsets into `text`: a line may start there) for
 /// the paragraph's kinsoku and word-wrap settings. The result is sorted and has no duplicates.
-pub fn apply(text: &str, opps: &mut Vec<usize>, kinsoku: bool, word_wrap: bool) {
+/// `custom` is the document's own kinsoku lists (characters a line may not start with, may not
+/// end with: `w:noLineBreaksBefore`/`After`), which replace the standard ones when present: a
+/// line may then break between any two East Asian characters not in them, as Word for Mac does
+/// (with `noLineBreaksBefore="あ"` a 。 starts a line and あ no longer does).
+pub fn apply(text: &str, opps: &mut Vec<usize>, kinsoku: bool, word_wrap: bool, custom: Option<(&str, &str)>) {
     let next_char = |i: usize| text.get(i..).and_then(|t| t.chars().next());
     let prev_char = |i: usize| text.get(..i).and_then(|t| t.chars().next_back());
-    if kinsoku {
+    if let (true, Some((no_start, no_end))) = (kinsoku, custom) {
+        for (i, c) in text.char_indices().skip(1) {
+            if is_east_asian(c) && prev_char(i).is_some_and(is_east_asian) {
+                opps.push(i);
+            }
+        }
+        opps.retain(|&i| !next_char(i).is_some_and(|c| no_start.contains(c)) && !prev_char(i).is_some_and(|c| no_end.contains(c)));
+    } else if kinsoku {
         opps.retain(|&i| !next_char(i).is_some_and(|c| NO_START.contains(c)) && !prev_char(i).is_some_and(|c| NO_END.contains(c)));
         // Before a small kana or ー after an East Asian letter (not after opening punctuation).
         for (i, c) in text.char_indices().skip(1) {
@@ -93,7 +104,7 @@ mod tests {
     /// Where a line may start, as the text from there to the next opportunity.
     fn breaks(text: &str, kinsoku: bool, word_wrap: bool) -> Vec<String> {
         let mut opps: Vec<usize> = unicode_linebreak::linebreaks(text).map(|(i, _)| i).filter(|&i| i < text.len()).collect();
-        apply(text, &mut opps, kinsoku, word_wrap);
+        apply(text, &mut opps, kinsoku, word_wrap, None);
         opps.iter().map(|&i| text.get(i..).and_then(|t| t.chars().next()).map(String::from).unwrap_or_default()).collect()
     }
 
@@ -121,5 +132,21 @@ mod tests {
         assert_eq!(breaks(en, true, true), ["w", "(", "5"]);
         let any = breaks("Hello café", true, false);
         assert_eq!(any, ["e", "l", "l", "o", "c", "a", "f", "é"]);
+    }
+
+    /// Custom lists replace the standard ones (Word for Mac, measured with
+    /// `noLineBreaksBefore="あ"`, `noLineBreaksAfter="「"`): 。 may start a line, あ may not, 「 may
+    /// still not end one, and lines break between any other two East Asian characters.
+    #[test]
+    fn custom_kinsoku_lists_replace_the_standard_ones() {
+        let text = "いあい。い「い";
+        let mut opps: Vec<usize> = unicode_linebreak::linebreaks(text).map(|(i, _)| i).filter(|&i| i < text.len()).collect();
+        apply(text, &mut opps, true, true, Some(("あ", "「")));
+        let starts: Vec<char> = opps.iter().filter_map(|&i| text.get(i..).and_then(|t| t.chars().next())).collect();
+        assert_eq!(starts, vec!['い', '。', 'い', '「'], "{opps:?}");
+        // Kinsoku off ignores the lists too.
+        let mut all: Vec<usize> = Vec::new();
+        apply(text, &mut all, false, true, Some(("あ", "「")));
+        assert_eq!(all.len(), text.chars().count() - 1);
     }
 }

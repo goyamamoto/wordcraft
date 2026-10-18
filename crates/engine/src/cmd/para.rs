@@ -80,10 +80,14 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("para.spacing", "Paragraph Spacing", "Layout › Paragraph", |s, v| {
             let (b, a) = (p::f32(v, "before"), p::f32(v, "after"));
             let (b_auto, a_auto) = (p::bool(v, "beforeAuto"), p::bool(v, "afterAuto"));
+            let (b_lines, a_lines) = (p::f32(v, "beforeLines"), p::f32(v, "afterLines"));
             // A number replaces automatic spacing, as typing one in Word's Paragraph dialog does.
             let rp = cur(s);
             let b_auto = b_auto.or((b.is_some() && rp.before_auto).then_some(false));
             let a_auto = a_auto.or((a.is_some() && rp.after_auto).then_some(false));
+            // Points typed replace lines (0 lines: the points count), lines replace points.
+            let b_lines = b_lines.or((b.is_some() && rp.space_before_lines.is_some()).then_some(0.0));
+            let a_lines = a_lines.or((a.is_some() && rp.space_after_lines.is_some()).then_some(0.0));
             fmt(s, &|p| {
                 if let Some(x) = b {
                     p.space_before = Some(x.clamp(0.0, 1584.0));
@@ -97,9 +101,15 @@ pub fn specs() -> Vec<CommandSpec> {
                 if let Some(on) = a_auto {
                     p.space_after_auto = Some(on);
                 }
+                if let Some(l) = b_lines {
+                    p.space_before_lines = Some(if l.is_finite() { l.clamp(0.0, 1000.0) } else { 0.0 });
+                }
+                if let Some(l) = a_lines {
+                    p.space_after_lines = Some(if l.is_finite() { l.clamp(0.0, 1000.0) } else { 0.0 });
+                }
             })
         })
-        .params(r#"{"before"?: pt, "after"?: pt, "beforeAuto"?: bool, "afterAuto"?: bool (automatic, HTML-style spacing: 14 pt)}"#),
+        .params(r#"{"before"?: pt, "after"?: pt, "beforeAuto"?: bool, "afterAuto"?: bool (automatic, HTML-style spacing: 14 pt), "beforeLines"?: lines, "afterLines"?: lines (Word's 行 units: a line is the document grid's pitch, or the Normal font size without a grid; they win over points, 0 gives the points back)}"#),
         CommandSpec::new("para.addSpaceBefore", "Add Space Before Paragraph", "Home › Paragraph › Line Spacing", |s, _| {
             let rp = cur(s);
             let has = rp.space_before > 0.0;
@@ -177,6 +187,9 @@ pub fn specs() -> Vec<CommandSpec> {
             tog(s, v, |p| p.widow_control, |p, b| p.widow_control = Some(b))
         })
         .params(r#"{"value"?: bool}"#),
+        CommandSpec::new("tools.kinsokuCharacters", "Kinsoku Characters", "Home › Paragraph › Asian Typography", kinsoku_characters).params(
+            r#"{"lang"?: "ja-JP" (default: the document's East Asian language, else the first list), "noStart"?: str (characters a line may not start with), "noEnd"?: str (may not end with), "standard"?: true (drop the custom lists for the language)} — custom lists replace Word's standard kinsoku for the whole document; returns the lists"#,
+        ),
         CommandSpec::new("para.asianTypography", "Asian Typography", "Home › Paragraph › Asian Typography", asian_typography).params(
             r#"{"kinsoku"?: bool (East Asian line-breaking rules), "wordWrap"?: bool (false: Latin words may break at any character), "overflowPunct"?: bool (hanging punctuation), "topLinePunct"?: bool (compress punctuation at the start of a line), "autoSpaceDE"?: bool (space between Asian and Latin text), "autoSpaceDN"?: bool (space between Asian text and numbers)} — flags left out stay as they are; returns the flags at the caret"#,
         ),
@@ -1257,4 +1270,44 @@ pub fn list_buttons(doc: &wordcraft_doc::Document, numbering: Option<NumRef>) ->
     };
     let multilevel = (0..9u8).any(joined);
     ListButtons { bullets, numbering: !bullets, multilevel }
+}
+
+/// Custom kinsoku characters (`w:noLineBreaksBefore`/`After` in the settings): set, drop or
+/// report the document's lists.
+fn kinsoku_characters(s: &mut Session, v: &Value) -> Result<Value, CmdError> {
+    use wordcraft_doc::east_asian::{KinsokuChars, MAX_KINSOKU_CHARS};
+    let lang = p::str(v, "lang")
+        .map(|l| l.trim().to_string())
+        .or_else(|| s.doc.styles.default_chr.lang_ea.clone())
+        .or_else(|| s.doc.settings.kinsoku_chars.first().map(|k| k.lang.clone()))
+        .unwrap_or_else(|| "ja-JP".into());
+    let take = |k: &str| -> Option<String> { p::str(v, k).map(|t| t.chars().filter(|c| !c.is_control()).take(MAX_KINSOKU_CHARS).collect()) };
+    let (no_start, no_end, standard) = (take("noStart"), take("noEnd"), p::bool(v, "standard") == Some(true));
+    if standard || no_start.is_some() || no_end.is_some() {
+        let lists = &mut s.doc.settings.kinsoku_chars;
+        if standard {
+            lists.retain(|k| !k.lang.eq_ignore_ascii_case(&lang));
+        } else {
+            let i = match lists.iter().position(|k| k.lang.eq_ignore_ascii_case(&lang)) {
+                Some(i) => i,
+                None => {
+                    if lists.len() >= 64 {
+                        return Err(CmdError::Params("too many kinsoku lists".into()));
+                    }
+                    lists.push(KinsokuChars { lang: lang.clone(), ..Default::default() });
+                    lists.len() - 1
+                }
+            };
+            if let Some(k) = lists.get_mut(i) {
+                if let Some(t) = no_start {
+                    k.no_start = t;
+                }
+                if let Some(t) = no_end {
+                    k.no_end = t;
+                }
+            }
+        }
+    }
+    let lists: Vec<Value> = s.doc.settings.kinsoku_chars.iter().map(|k| json!({"lang": k.lang, "noStart": k.no_start, "noEnd": k.no_end})).collect();
+    Ok(json!({"kinsokuCharacters": lists}))
 }

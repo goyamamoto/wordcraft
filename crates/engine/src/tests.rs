@@ -4618,6 +4618,44 @@ fn asian_typography_sets_flags_on_selected_paragraphs_and_undoes() {
     assert_eq!(r["asianTypography"]["kinsoku"], true);
 }
 
+/// Word's 行 units for paragraph spacing: lines win over points, points typed replace lines.
+#[test]
+fn paragraph_spacing_in_lines() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "行"}));
+    run(&mut s, "para.spacing", json!({"before": 18.0, "beforeLines": 1.0, "afterLines": 0.5}));
+    let p = s.doc.body[0].as_para().unwrap();
+    assert_eq!((p.props.space_before, p.props.space_before_lines, p.props.space_after_lines), (Some(18.0), Some(1.0), Some(0.5)));
+    run(&mut s, "para.spacing", json!({"before": 6.0}));
+    let p = s.doc.body[0].as_para().unwrap();
+    assert_eq!((p.props.space_before, p.props.space_before_lines), (Some(6.0), Some(0.0)), "points typed replace the lines");
+    run(&mut s, "para.spacing", json!({"beforeLines": f64::NAN, "afterLines": -5.0}));
+    let p = s.doc.body[0].as_para().unwrap();
+    assert_eq!((p.props.space_before_lines, p.props.space_after_lines), (Some(0.0), Some(0.0)));
+    let bytes = crate::io::save_bytes("x.docx", &s.doc).unwrap();
+    assert!(!bytes.is_empty());
+}
+
+/// Custom kinsoku lists: set per language, reported, dropped, undone.
+#[test]
+fn kinsoku_characters_set_report_drop_and_undo() {
+    let mut s = s();
+    let r = run(&mut s, "tools.kinsokuCharacters", json!({}));
+    assert_eq!(r["kinsokuCharacters"], json!([]));
+    run(&mut s, "tools.kinsokuCharacters", json!({"lang": "ja-JP", "noStart": "あ", "noEnd": "「"}));
+    let r = run(&mut s, "tools.kinsokuCharacters", json!({"noEnd": "「（"}));
+    assert_eq!(r["kinsokuCharacters"], json!([{"lang": "ja-JP", "noStart": "あ", "noEnd": "「（"}]), "the only list is the default language");
+    assert!(s.dirty);
+    run(&mut s, "tools.kinsokuCharacters", json!({"lang": "zh-CN", "noStart": "，"}));
+    assert_eq!(s.doc.settings.kinsoku_chars.len(), 2);
+    run(&mut s, "tools.kinsokuCharacters", json!({"lang": "zh-cn", "standard": true}));
+    assert_eq!(s.doc.settings.kinsoku_chars.len(), 1);
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.settings.kinsoku_chars.len(), 2);
+    run(&mut s, "tools.kinsokuCharacters", json!({"noStart": "x".repeat(10000)}));
+    assert_eq!(s.doc.settings.kinsoku_chars[0].no_start.chars().count(), wordcraft_doc::east_asian::MAX_KINSOKU_CHARS);
+}
+
 #[test]
 fn manage_styles_lists_paragraph_character_linked_and_table_styles() {
     let mut s = s();

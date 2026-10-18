@@ -1543,6 +1543,23 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     }
     let para_style = p.props.style.as_deref();
     let table_chr = env.table.map(|t| &t.chr);
+    // Spacing in lines (`w:beforeLines`/`w:afterLines`): a line is the section grid's pitch, or
+    // the Normal style's size without one (Word for Mac, measured with 18 and 24 pt grids and
+    // with Normal at 12 pt; the paragraph's own 20 pt made no difference). It wins over points.
+    if rp.space_before_lines.is_some() || rp.space_after_lines.is_some() {
+        let unit = env.grid.line.unwrap_or_else(|| {
+            let size = doc.styles.resolve_char(Some("Normal"), &CharProps::default()).size;
+            if size.is_finite() { size.clamp(1.0, 1584.0) } else { 12.0 }
+        });
+        if let Some(l) = rp.space_before_lines {
+            rp.space_before = (l * unit).clamp(0.0, 1584.0);
+            rp.before_auto = false;
+        }
+        if let Some(l) = rp.space_after_lines {
+            rp.space_after = (l * unit).clamp(0.0, 1584.0);
+            rp.after_auto = false;
+        }
+    }
     // Indents in characters are measured in the paragraph mark's font size.
     if rp.indent_chars.iter().any(|c| *c != 0.0) {
         rp.set_char_unit(doc.styles.resolve_char_in(para_style, table_chr, &p.mark).size);
@@ -1889,7 +1906,17 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         found.dedup();
     }
     // Asian typography: kinsoku and breaking Latin words anywhere.
-    crate::kinsoku::apply(&text, &mut found, rp.kinsoku, rp.word_wrap);
+    // Custom kinsoku lists (the settings' `w:noLineBreaksBefore`/`After`): the text's East Asian
+    // language's, else the first.
+    let custom = {
+        let lists = &env.doc.settings.kinsoku_chars;
+        let lang = doc.styles.resolve_char_in(para_style, table_chr, &p.mark).lang_ea;
+        lang.as_deref()
+            .and_then(|l| lists.iter().find(|k| k.lang.eq_ignore_ascii_case(l)))
+            .or_else(|| lists.first())
+            .map(|k| (k.no_start.as_str(), k.no_end.as_str()))
+    };
+    crate::kinsoku::apply(&text, &mut found, rp.kinsoku, rp.word_wrap, custom);
     let opps: std::collections::HashSet<usize> = found.into_iter().filter_map(to_para).collect();
     for c in &mut b.clusters {
         c.break_after = opps.contains(&c.end) || matches!(c.kind, ClKind::Object(_) | ClKind::Tab);

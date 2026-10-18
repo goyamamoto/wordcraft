@@ -193,3 +193,53 @@ fn word_asian_layout_runs_read_as_word_writes_them() {
     let kern = xml[..fit].rfind("<w:kern").unwrap();
     assert!(kern < fit, "kern before fitText as in the schema");
 }
+
+/// Custom kinsoku lists (`w:noLineBreaksBefore`/`After`, per language) and spacing in lines
+/// (`w:beforeLines`/`w:afterLines`, hundredths of a line) are written as Word writes them and
+/// read back.
+#[test]
+fn custom_kinsoku_lists_and_spacing_in_lines_round_trip() {
+    use wordcraft_doc::east_asian::KinsokuChars;
+    let mut d = Document::new();
+    d.settings.kinsoku_chars = vec![
+        KinsokuChars { lang: "ja-JP".into(), no_start: "あ、".into(), no_end: "「".into() },
+        KinsokuChars { lang: "zh-CN".into(), no_start: "，".into(), no_end: String::new() },
+    ];
+    let mut p = Paragraph::with_text("行", CharProps::default());
+    p.props.space_before = Some(18.0);
+    p.props.space_before_lines = Some(1.0);
+    p.props.space_after_lines = Some(0.5);
+    d.body = vec![para_block(p)];
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let settings = part(&bytes, "word/settings.xml");
+    assert!(
+        settings.contains(r#"<w:noLineBreaksAfter w:lang="ja-JP" w:val="「"/><w:noLineBreaksBefore w:lang="ja-JP" w:val="あ、"/>"#),
+        "{settings}"
+    );
+    assert!(settings.contains(r#"<w:noLineBreaksBefore w:lang="zh-CN" w:val="，"/>"#), "{settings}");
+    assert!(!settings.contains(r#"<w:noLineBreaksAfter w:lang="zh-CN""#), "an empty list is not written: {settings}");
+    let document = part(&bytes, "word/document.xml");
+    assert!(document.contains(r#"<w:spacing w:before="360" w:beforeLines="100" w:afterLines="50"/>"#), "{document}");
+    let r = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(r.settings.kinsoku_chars, d.settings.kinsoku_chars);
+    let p = r.body[0].as_para().unwrap();
+    assert_eq!((p.props.space_before, p.props.space_before_lines, p.props.space_after_lines), (Some(18.0), Some(1.0), Some(0.5)));
+    // Read straight from Word's markup, lists for one language split over the two elements.
+    let bytes = wordcraft_docx::write(&Document::new()).unwrap();
+    let settings = part(&bytes, "word/settings.xml").replace(
+        "</w:settings>",
+        r#"<w:noLineBreaksAfter w:lang="ja-JP" w:val="$（"/><w:noLineBreaksBefore w:lang="ja-JP" w:val="!%)"/></w:settings>"#,
+    );
+    let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    for i in 0..z.len() {
+        let mut f = z.by_index(i).unwrap();
+        let mut data = Vec::new();
+        f.read_to_end(&mut data).unwrap();
+        let name = f.name().to_string();
+        entries.push((name.clone(), if name == "word/settings.xml" { settings.clone().into_bytes() } else { data }));
+    }
+    let refs: Vec<(&str, &[u8])> = entries.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
+    let r = wordcraft_docx::read(&zip(&refs)).unwrap();
+    assert_eq!(r.settings.kinsoku_chars, vec![KinsokuChars { lang: "ja-JP".into(), no_start: "!%)".into(), no_end: "$（".into() }]);
+}

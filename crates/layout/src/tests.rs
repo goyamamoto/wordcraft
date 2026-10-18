@@ -7468,6 +7468,69 @@ fn top_line_punct_on_a_character_grid_hangs_half_the_pitch() {
     assert!((on[1].1 - (on[1].0 - 6.6)).abs() < 0.05 && (on[1].2 - on[1].0 - 6.6).abs() < 0.05, "{on:?}");
 }
 
+/// Spacing in lines (`w:beforeLines`/`w:afterLines`), read back from Word for Mac: 100 is one
+/// line of the section grid's pitch (18 on an 18 pt grid, 24 on a 24 pt one, 50 → 9) and, with
+/// no grid, the Normal style's size (12 pt, even for a 20 pt paragraph); it wins over points.
+#[test]
+fn spacing_in_lines_is_the_grid_pitch_or_the_normal_size() {
+    use wordcraft_doc::section::{DocGrid, DocGridType};
+    let spaces = |grid: Option<f32>, before_lines: Option<f32>, before: Option<f32>, size: f32| {
+        let mut d = Document::from_text("");
+        let chr = wordcraft_doc::CharProps { size: Some(size), ..Default::default() };
+        let mut p = wordcraft_doc::Paragraph::with_text("二行目", chr.clone());
+        p.props.space_before_lines = before_lines;
+        p.props.space_before = before;
+        p.props.space_after_lines = before_lines;
+        d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("一行目", chr)), wordcraft_doc::para_block(p)];
+        if let Some(pitch) = grid {
+            d.last_section.doc_grid = Some(DocGrid { kind: DocGridType::Lines, line_pitch: pitch, char_space: 0 });
+        }
+        let l = lay(&d);
+        l.pages[0]
+            .items
+            .iter()
+            .filter_map(|it| if let Placed::Lines { para, path, .. } = it { Some((path.clone(), para)) } else { None })
+            .find(|(path, _)| path.0.first() == Some(&1))
+            .map(|(_, para)| (para.rp.space_before, para.rp.space_after))
+            .expect("the second paragraph")
+    };
+    assert_eq!(spaces(Some(18.0), Some(1.0), None, 12.0), (18.0, 18.0));
+    assert_eq!(spaces(Some(18.0), Some(0.5), None, 12.0), (9.0, 9.0));
+    assert_eq!(spaces(Some(24.0), Some(1.0), None, 12.0), (24.0, 24.0));
+    assert_eq!(spaces(None, Some(1.0), None, 12.0), (12.0, 12.0), "no grid: the Normal size");
+    assert_eq!(spaces(None, Some(1.0), None, 20.0), (12.0, 12.0), "not the paragraph's own size");
+    assert_eq!(spaces(None, Some(0.5), None, 12.0), (6.0, 6.0));
+    assert_eq!(spaces(None, Some(1.0), Some(18.0), 12.0), (12.0, 12.0), "lines win over points");
+    assert_eq!(spaces(None, Some(0.0), Some(18.0), 12.0).0, 18.0, "zero lines: the points count");
+    assert_eq!(spaces(None, None, Some(18.0), 12.0).0, 18.0);
+}
+
+/// Custom kinsoku lists in the settings replace Word's standard ones (Word for Mac, measured on
+/// 39-character lines with `noLineBreaksBefore="あ"`, `noLineBreaksAfter="「"`): い×39 then あ
+/// wraps as 38 / いあ…, and い×39 then 。 as 39 / 。い… (the standard lists push い。 together).
+#[test]
+fn custom_kinsoku_lists_replace_the_standard_ones_in_layout() {
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+    let lines_of = |text: &str, custom: bool| {
+        let mut d = Document::from_text("");
+        if custom {
+            d.settings.kinsoku_chars =
+                vec![wordcraft_doc::east_asian::KinsokuChars { lang: "ja-JP".into(), no_start: "あ".into(), no_end: "「".into() }];
+        }
+        d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, chr.clone()))];
+        let l = lay(&d);
+        first_para(&l).lines.iter().map(|ln| ln.c1 - ln.c0).collect::<Vec<_>>()
+    };
+    let a = format!("{}あ{}", "い".repeat(39), "い".repeat(10));
+    let stop = format!("{}。{}", "い".repeat(39), "い".repeat(10));
+    let open = format!("{}「{}", "い".repeat(38), "い".repeat(10));
+    assert_eq!(lines_of(&a, false), vec![39, 11]);
+    assert_eq!(lines_of(&a, true), vec![38, 12], "あ may not start a line");
+    assert_eq!(lines_of(&stop, false), vec![38, 12], "the standard lists push い。 over");
+    assert_eq!(lines_of(&stop, true), vec![39, 11], "。 may start a line");
+    assert_eq!(lines_of(&open, true), vec![38, 11], "「 may still not end a line");
+}
+
 #[test]
 fn east_asian_text_takes_the_theme_script_font_for_its_language() {
     // Word draws Japanese in an Aptos paragraph with the theme's Jpan minor font (游明朝) and
