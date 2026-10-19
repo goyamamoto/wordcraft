@@ -2280,3 +2280,16 @@
 	Use default pitch	使用預設間距
 direction	Horizontal	橫書
 direction	Vertical	直書
+	Page Number Format	頁碼格式
+	Number format:	數字格式：
+	Include chapter number	包含章節編號
+	Chapter starts with style:	章節起始樣式：
+	Use separator:	使用分隔符號：
+	Examples:	範例：
+	Page numbering	頁碼編號
+	Continue from previous section	接續前一節
+	- (hyphen)	- (連字號)
+	. (period)	. (句點)
+	: (colon)	: (冒號)
+	— (em dash)	— (長破折號)
+	– (en dash)	– (短破折號)

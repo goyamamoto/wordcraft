@@ -70,17 +70,9 @@ pub fn specs() -> Vec<CommandSpec> {
             s.doc.settings.even_odd_headers = p::bool(v, "value").unwrap_or(!s.doc.settings.even_odd_headers);
             sel_result(s)
         }),
-        CommandSpec::new("layout.pageNumberFormat", "Format Page Numbers", "Insert › Header & Footer › Page Number", |s, v| {
-            let fmt = p::str(v, "format").map(wordcraft_doc::section::NumFormat::from_ooxml);
-            let start = p::u64(v, "start").map(|x| x.min(100_000) as u32);
-            with_sect(s, |x| {
-                if let Some(f) = fmt {
-                    x.page_num_format = f;
-                }
-                x.page_num_start = start;
-            })
-        })
-        .params(r#"{"format"?: "decimal|lowerRoman|upperRoman|lowerLetter|upperLetter", "start"?: n}"#),
+        CommandSpec::new("layout.pageNumberFormat", "Format Page Numbers", "Insert › Header & Footer › Page Number", page_number_format).params(
+            r#"{"format"?: "decimal|numberInDash|lowerLetter|upperLetter|lowerRoman|upperRoman" or Word's Japanese "decimalFullWidth|decimalEnclosedCircle|ideographDigital|japaneseCounting|japaneseLegal" (any ST_NumberFormat), "start"?: n (left out: continue from the previous section), "chapter"?: bool (include chapter numbers: a PAGE field shows the latest heading's number, the separator and the page number, `1-1`; false removes them), "chapterStyle"?: 1-9 (the heading level, Heading 1…9; default 1), "chapterSep"?: "hyphen|period|colon|emDash|enDash" (default hyphen)}"#,
+        ),
         CommandSpec::new("layout.documentGrid", "Document Grid", "Layout › Page Setup › Document Grid", document_grid).params(
             r#"{"type"?: "none|lines|linesAndChars|snapToChars", "linesPerPage"?: n (sets the line pitch from the text height), "charsPerLine"?: n (sets the character pitch from the text width), "linePitch"?: pt, "charSpace"?: n (4096ths of a point added to the default font size: the character pitch)} — left out stays as it is; returns the grid with its lines per page and characters per line"#,
         ),
@@ -89,6 +81,33 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .pure(),
     ]
+}
+
+/// Format Page Numbers as Word's dialog sets them: the number format, a start number (or none:
+/// continuing from the previous section) and chapter numbers — the level's heading number, the
+/// separator and the page number, as Word for Mac shows them (`1-1`, `１.2`; see
+/// `wordcraft_layout::styleref::StyleIndex::chapters`). `chapter: false` removes them;
+/// `chapterStyle` or `chapterSep` alone turns them on with the other part kept (or Word's default:
+/// Heading 1, a hyphen).
+fn page_number_format(s: &mut Session, v: &Value) -> CmdResult {
+    use wordcraft_doc::section::{ChapterNumbers, ChapterSep, NumFormat};
+    let fmt = p::str(v, "format").map(NumFormat::from_ooxml);
+    let start = p::u64(v, "start").map(|x| x.min(100_000) as u32);
+    let chapter = p::bool(v, "chapter");
+    let level = p::u64(v, "chapterStyle").map(|l| l.clamp(1, 9) as u8);
+    let sep = p::str(v, "chapterSep").and_then(ChapterSep::from_ooxml);
+    with_sect(s, |x| {
+        if let Some(f) = fmt {
+            x.page_num_format = f;
+        }
+        x.page_num_start = start;
+        if chapter == Some(false) {
+            x.page_num_chapter = None;
+        } else if chapter == Some(true) || level.is_some() || sep.is_some() {
+            let was = x.page_num_chapter.unwrap_or_default();
+            x.page_num_chapter = Some(ChapterNumbers { level: level.unwrap_or(was.level), sep: sep.unwrap_or(was.sep) });
+        }
+    })
 }
 
 /// Line Numbers: on with a restart mode (`value`), or off (`none`). `start`, `countBy` and
@@ -437,6 +456,9 @@ fn validate_section(x: &mut SectionProps) -> Result<(), CmdError> {
         g.char_space = g.char_space.clamp(-MAX_CHAR_SPACE, MAX_CHAR_SPACE);
     }
     x.page_num_start = x.page_num_start.map(|n| n.min(100_000));
+    if let Some(c) = &mut x.page_num_chapter {
+        c.level = c.level.clamp(1, 9);
+    }
     for n in [&mut x.footnote_pr, &mut x.endnote_pr] {
         n.num_start = n.num_start.map(|v| v.clamp(1, MAX_NOTE_START));
     }
@@ -691,6 +713,35 @@ mod tests {
         let mut v = serde_json::to_value(SectionProps::default()).unwrap();
         f(&mut v);
         json!({"section": v})
+    }
+
+    /// Format Page Numbers as Word's dialog sets it: the format (Word's Japanese formats too),
+    /// a start number or continuing from the previous section, and chapter numbers (the heading
+    /// level and separator) that `chapter: false` removes; Page Setup clamps a hostile level.
+    #[test]
+    fn page_number_format_sets_the_format_start_and_chapter_numbers() {
+        use wordcraft_doc::section::{ChapterNumbers, ChapterSep, NumFormat};
+        let mut s = doc();
+        s.run(
+            "layout.pageNumberFormat",
+            &json!({"format": "japaneseCounting", "start": 3, "chapter": true, "chapterStyle": 2, "chapterSep": "period"}),
+        )
+        .unwrap();
+        let x = sect(&s);
+        assert_eq!((x.page_num_format, x.page_num_start), (NumFormat::JapaneseCounting, Some(3)));
+        assert_eq!(x.page_num_chapter, Some(ChapterNumbers { level: 2, sep: ChapterSep::Period }));
+        // No start: continue from the previous section; the separator alone changes.
+        s.run("layout.pageNumberFormat", &json!({"format": "decimalEnclosedCircle", "chapterSep": "emDash"})).unwrap();
+        let x = sect(&s);
+        assert_eq!((x.page_num_format, x.page_num_start), (NumFormat::DecimalEnclosedCircle, None));
+        assert_eq!(x.page_num_chapter, Some(ChapterNumbers { level: 2, sep: ChapterSep::EmDash }));
+        // A level alone turns chapter numbers on with Word's hyphen; a hostile level is clamped.
+        s.run("layout.pageNumberFormat", &json!({"chapter": false})).unwrap();
+        assert_eq!(sect(&s).page_num_chapter, None);
+        s.run("layout.pageNumberFormat", &json!({"chapterStyle": 40})).unwrap();
+        assert_eq!(sect(&s).page_num_chapter, Some(ChapterNumbers { level: 9, sep: ChapterSep::Hyphen }));
+        s.run("layout.pageSetup", &with_section(|v| v["pageNumChapter"] = json!({"level": 200, "sep": "colon"}))).unwrap();
+        assert_eq!(sect(&s).page_num_chapter, Some(ChapterNumbers { level: 9, sep: ChapterSep::Colon }));
     }
 
     /// `layout.pageSetup {section}` checks the values like the dedicated commands do.

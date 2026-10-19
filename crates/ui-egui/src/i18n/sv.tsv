@@ -2690,3 +2690,16 @@ preview	Title	Titel
 	Text snaps to character grid	Fäst text mot teckenrutnätet
 	Pitch:	Delning:
 	Use default pitch	Använd standarddelning
+	Page Number Format	Sidnummerformat
+	Number format:	Talformat:
+	Include chapter number	Inkludera kapitelnummer
+	Chapter starts with style:	Kapitel börjar med formatmall:
+	Use separator:	Avgränsare:
+	Examples:	Exempel:
+	Page numbering	Sidnumrering
+	Continue from previous section	Fortsätt från föregående avsnitt
+	- (hyphen)	- (bindestreck)
+	. (period)	. (punkt)
+	: (colon)	: (kolon)
+	— (em dash)	— (långt tankstreck)
+	– (en dash)	– (tankstreck)

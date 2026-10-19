@@ -2667,3 +2667,16 @@ preview	Title	Ukázka
 	Text snaps to character grid	Text přichytávat k mřížce znaků
 	Pitch:	Rozteč:
 	Use default pitch	Použít výchozí rozteč
+	Page Number Format	Formát čísla stránky
+	Number format:	Formát čísel:
+	Include chapter number	Zahrnout číslo kapitoly
+	Chapter starts with style:	Kapitola začíná stylem:
+	Use separator:	Oddělovač:
+	Examples:	Příklady:
+	Page numbering	Číslování stránek
+	Continue from previous section	Pokračovat z předchozího oddílu
+	- (hyphen)	- (spojovník)
+	. (period)	. (tečka)
+	: (colon)	: (dvojtečka)
+	— (em dash)	— (dlouhá pomlčka)
+	– (en dash)	– (pomlčka)

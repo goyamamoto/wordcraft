@@ -2289,3 +2289,16 @@
 	Text snaps to character grid	文字对齐字符网格
 	Pitch:	跨度：
 	Use default pitch	使用默认跨度
+	Page Number Format	页码格式
+	Number format:	编号格式：
+	Include chapter number	包含章节号
+	Chapter starts with style:	章节起始样式：
+	Use separator:	使用分隔符：
+	Examples:	示例：
+	Page numbering	页码编号
+	Continue from previous section	续前节
+	- (hyphen)	- (连字符)
+	. (period)	. (句点)
+	: (colon)	: (冒号)
+	— (em dash)	— (长划线)
+	– (en dash)	– (短划线)

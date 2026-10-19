@@ -2280,3 +2280,16 @@
 direction	Horizontal	横書き
 direction	Vertical	縦書き
 lines	Pitch:	行送り:
+	Page Number Format	ページ番号の書式
+	Number format:	番号書式:
+	Include chapter number	章番号を含める
+	Chapter starts with style:	章タイトルのスタイル:
+	Use separator:	区切り文字:
+	Examples:	例:
+	Page numbering	連続番号
+	Continue from previous section	前のセクションから継続
+	- (hyphen)	- (ハイフン)
+	. (period)	. (ピリオド)
+	: (colon)	: (コロン)
+	— (em dash)	— (全角ダッシュ)
+	– (en dash)	– (半角ダッシュ)

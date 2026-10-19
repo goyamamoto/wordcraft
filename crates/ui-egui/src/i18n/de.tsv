@@ -2276,3 +2276,16 @@
 	Text snaps to character grid	Text am Zeichenraster ausrichten
 	Pitch:	Abstand:
 	Use default pitch	Standardabstand verwenden
+	Page Number Format	Seitenzahlenformat
+	Number format:	Zahlenformat:
+	Include chapter number	Kapitelnummer einbeziehen
+	Chapter starts with style:	Kapitel beginnt mit Formatvorlage:
+	Use separator:	Trennzeichen:
+	Examples:	Beispiele:
+	Page numbering	Seitennummerierung
+	Continue from previous section	Fortsetzen vom vorherigen Abschnitt
+	- (hyphen)	- (Bindestrich)
+	. (period)	. (Punkt)
+	: (colon)	: (Doppelpunkt)
+	— (em dash)	— (Geviertstrich)
+	– (en dash)	– (Halbgeviertstrich)

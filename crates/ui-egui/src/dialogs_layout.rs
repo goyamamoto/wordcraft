@@ -8,7 +8,8 @@
 //! [`crate::dialogs::Dialog::Layout`]. Word's Asian Layout dialogs (Home › Paragraph › Asian
 //! Layout: Horizontal in Vertical, Combine Characters, Two Lines in One, Adjust Width) live here
 //! too and run `format.horizontalInVertical`, `format.combineCharacters`, `format.twoLinesInOne`
-//! and `format.fitText`.
+//! and `format.fitText`. Format Page Numbers (Insert › Page Number › Format Page Numbers…, Word's
+//! ページ番号の書式 with Japanese editing) runs `layout.pageNumberFormat`.
 
 use egui::{Ui, vec2};
 use serde::Serialize;
@@ -36,6 +37,7 @@ pub enum LayoutDialog {
     CombineCharacters(CombineCharactersForm),
     TwoLinesInOne(TwoLinesInOneForm),
     AdjustWidth(AdjustWidthForm),
+    PageNumberFormat(PageNumberFormatForm),
 }
 
 impl LayoutDialog {
@@ -53,6 +55,7 @@ impl LayoutDialog {
             LayoutDialog::CombineCharacters(_) => "combineCharacters",
             LayoutDialog::TwoLinesInOne(_) => "twoLinesInOne",
             LayoutDialog::AdjustWidth(_) => "adjustWidth",
+            LayoutDialog::PageNumberFormat(_) => "pageNumberFormat",
         }
     }
 
@@ -71,6 +74,7 @@ impl LayoutDialog {
             LayoutDialog::CombineCharacters(_) => "Combine Characters",
             LayoutDialog::TwoLinesInOne(_) => "Two Lines in One",
             LayoutDialog::AdjustWidth(_) => "Adjust Width",
+            LayoutDialog::PageNumberFormat(_) => "Page Number Format",
         }
     }
 }
@@ -90,6 +94,7 @@ pub fn open(name: &str, app: &mut WordApp) -> Option<LayoutDialog> {
         "combineCharacters" => LayoutDialog::CombineCharacters(CombineCharactersForm::read(app)),
         "twoLinesInOne" => LayoutDialog::TwoLinesInOne(TwoLinesInOneForm::read(app)),
         "adjustWidth" => LayoutDialog::AdjustWidth(AdjustWidthForm::read(app)),
+        "pageNumberFormat" => LayoutDialog::PageNumberFormat(PageNumberFormatForm::read(app)),
         _ => return None,
     })
 }
@@ -109,6 +114,7 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, d: &mut LayoutDialog) -> bool {
         LayoutDialog::CombineCharacters(f) => combine_characters_ui(app, ui, f),
         LayoutDialog::TwoLinesInOne(f) => two_lines_in_one_ui(app, ui, f),
         LayoutDialog::AdjustWidth(f) => adjust_width_ui(app, ui, f),
+        LayoutDialog::PageNumberFormat(f) => page_number_format_ui(app, ui, f),
     }
 }
 
@@ -445,6 +451,149 @@ fn line_numbers_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LineNumbersForm) -> b
     let (ok, cancel) = buttons(ui, "OK", true);
     if ok {
         return run(app, "layout.lineNumbers", f.params());
+    }
+    cancel
+}
+
+// ---------------------------------------------------------------------------------------------
+// Format Page Numbers
+
+/// The Page Number Format dialog's fields, as Word's dialog has them: the number format, chapter
+/// numbers (the heading level and the separator) and where numbering starts.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageNumberFormatForm {
+    /// The OOXML number format (`decimal`, `lowerRoman`, `decimalFullWidth`…).
+    pub format: String,
+    /// Include chapter number.
+    pub chapter: bool,
+    /// Chapter starts with style: Heading 1–9.
+    pub chapter_style: u8,
+    /// The separator's OOXML name (`hyphen`, `period`, `colon`, `emDash`, `enDash`).
+    pub chapter_sep: String,
+    /// Continue from previous section (else start at `start`).
+    pub continue_numbering: bool,
+    pub start: u32,
+    /// Japanese editing (a Japanese region or document, as the list galleries decide): Word's
+    /// Japanese formats are offered.
+    pub japanese: bool,
+}
+
+impl PageNumberFormatForm {
+    pub fn read(app: &WordApp) -> PageNumberFormatForm {
+        let sp = wordcraft_engine::cmd::page::sect(&app.session);
+        let c = sp.page_num_chapter.unwrap_or_default();
+        PageNumberFormatForm {
+            format: sp.page_num_format.ooxml().to_string(),
+            chapter: sp.page_num_chapter.is_some(),
+            chapter_style: c.level.clamp(1, 9),
+            chapter_sep: c.sep.ooxml().to_string(),
+            continue_numbering: sp.page_num_start.is_none(),
+            start: sp.page_num_start.unwrap_or(1),
+            japanese: wordcraft_engine::cmd::para::japanese_lists(&app.session),
+        }
+    }
+
+    /// Word's Number format list — (OOXML format, the sample Word shows): the Latin formats,
+    /// and with Japanese editing Word's Japanese ones in its order (full-width digits after
+    /// `- 1 -`, then ①, 一二三, 一十百 and 壱弐参 after the Roman numerals); a format the
+    /// section has that the list lacks is added with its own first three numbers.
+    pub fn formats(&self) -> Vec<(&'static str, String)> {
+        let mut v = vec![("decimal", "1, 2, 3, ..."), ("numberInDash", "- 1 -, - 2 -, - 3 -, ...")];
+        if self.japanese {
+            v.push(("decimalFullWidth", "１, ２, ３ ..."));
+        }
+        v.extend([
+            ("lowerLetter", "a, b, c, ..."),
+            ("upperLetter", "A, B, C, ..."),
+            ("lowerRoman", "i, ii, iii, ..."),
+            ("upperRoman", "I, II, III, ..."),
+        ]);
+        if self.japanese {
+            v.extend([
+                ("decimalEnclosedCircle", "①, ②, ③ ..."),
+                ("ideographDigital", "一, 二, 三 ..."),
+                ("japaneseCounting", "一, 十, 百 ..."),
+                ("japaneseLegal", "壱, 弐, 参 ..."),
+            ]);
+        }
+        let mut out: Vec<(&'static str, String)> = v.into_iter().map(|(id, s)| (id, s.to_string())).collect();
+        if !out.iter().any(|(id, _)| *id == self.format) {
+            let f = wordcraft_doc::section::NumFormat::from_ooxml(&self.format);
+            out.push((f.ooxml(), format!("{}, {}, {} ...", f.format(1), f.format(2), f.format(3))));
+        }
+        out
+    }
+
+    /// `layout.pageNumberFormat` parameters.
+    pub fn params(&self) -> Value {
+        let mut v = json!({"format": self.format, "chapter": self.chapter});
+        if !self.continue_numbering {
+            v["start"] = json!(self.start);
+        }
+        if self.chapter {
+            v["chapterStyle"] = json!(self.chapter_style);
+            v["chapterSep"] = json!(self.chapter_sep);
+        }
+        v
+    }
+}
+
+/// A separator's label in Word's dialog, by its OOXML name.
+fn chapter_sep_label(ooxml: &str) -> &'static str {
+    match ooxml {
+        "period" => ". (period)",
+        "colon" => ": (colon)",
+        "emDash" => "— (em dash)",
+        "enDash" => "– (en dash)",
+        _ => "- (hyphen)",
+    }
+}
+
+fn page_number_format_ui(app: &mut WordApp, ui: &mut Ui, f: &mut PageNumberFormatForm) -> bool {
+    use wordcraft_doc::section::ChapterSep;
+    egui::Grid::new("pnf").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+        ui.label(tl!("Number format:"));
+        let formats = f.formats();
+        let current = formats.iter().find(|(id, _)| *id == f.format).map(|(_, s)| s.clone()).unwrap_or_default();
+        egui::ComboBox::from_id_salt("pnf_format").selected_text(current).width(220.0).show_ui(ui, |ui| {
+            for (id, label) in &formats {
+                ui.selectable_value(&mut f.format, (*id).to_string(), label);
+            }
+        });
+        ui.end_row();
+    });
+    ui.checkbox(&mut f.chapter, tl!("Include chapter number"));
+    ui.add_enabled_ui(f.chapter, |ui| {
+        egui::Grid::new("pnf_chapter").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+            ui.label(tl!("Chapter starts with style:"));
+            let style_name = |n: u8| crate::i18n::builtin_style_name(&format!("Heading {n}"));
+            egui::ComboBox::from_id_salt("pnf_style").selected_text(style_name(f.chapter_style)).width(160.0).show_ui(ui, |ui| {
+                for n in 1..=9u8 {
+                    ui.selectable_value(&mut f.chapter_style, n, style_name(n));
+                }
+            });
+            ui.end_row();
+            ui.label(tl!("Use separator:"));
+            egui::ComboBox::from_id_salt("pnf_sep").selected_text(tl!(chapter_sep_label(&f.chapter_sep))).width(160.0).show_ui(ui, |ui| {
+                for s in ChapterSep::ALL {
+                    ui.selectable_value(&mut f.chapter_sep, s.ooxml().to_string(), tl!(chapter_sep_label(s.ooxml())));
+                }
+            });
+            ui.end_row();
+        });
+        let sep = ChapterSep::from_ooxml(&f.chapter_sep).unwrap_or_default().text();
+        ui.label(format!("{} 1{sep}1, 1{sep}A", tl!("Examples:")));
+    });
+    heading(ui, "Page numbering");
+    ui.radio_value(&mut f.continue_numbering, true, tl!("Continue from previous section"));
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut f.continue_numbering, false, tl!("Start at:"));
+        ui.add_enabled(!f.continue_numbering, egui::DragValue::new(&mut f.start).range(0..=32_767));
+    });
+    let (ok, cancel) = buttons(ui, "OK", true);
+    if ok {
+        return run(app, "layout.pageNumberFormat", f.params());
     }
     cancel
 }
@@ -1092,6 +1241,74 @@ mod tests {
         let s = &a.session.doc.settings;
         assert!(s.auto_hyphenation && !s.hyphenate_caps && s.consecutive_hyphen_limit == 2);
         assert!((s.hyphenation_zone - 18.0).abs() < 0.01, "zone untouched: {}", s.hyphenation_zone);
+    }
+
+    /// Format Page Numbers as Word for Mac's dialog: it opens with the section's format,
+    /// chapter numbers and start, the Latin formats only without Japanese editing and Word's
+    /// Japanese formats in Word's order with it, a format the list lacks shown with its own
+    /// numbers; OK runs `layout.pageNumberFormat`, and the dialog reads the result back.
+    #[test]
+    fn page_number_format_dialog_reads_and_applies_the_sections_page_numbers() {
+        use wordcraft_doc::section::{ChapterNumbers, ChapterSep, NumFormat};
+        let mut a = app();
+        a.run("ui.dialog", json!({"name": "pageNumberFormat"})).unwrap();
+        let LayoutDialog::PageNumberFormat(mut f) = form(&mut a) else { panic!("page number format") };
+        assert_eq!(
+            (f.format.as_str(), f.chapter, f.chapter_style, f.chapter_sep.as_str(), f.continue_numbering, f.start),
+            ("decimal", false, 1, "hyphen", true, 1)
+        );
+        assert!(!f.japanese);
+        let ids: Vec<&str> = f.formats().iter().map(|(id, _)| *id).collect();
+        assert_eq!(ids, ["decimal", "numberInDash", "lowerLetter", "upperLetter", "lowerRoman", "upperRoman"]);
+        assert_eq!(f.params(), json!({"format": "decimal", "chapter": false}));
+        f.format = "lowerRoman".into();
+        f.chapter = true;
+        f.chapter_style = 2;
+        f.chapter_sep = "period".into();
+        f.continue_numbering = false;
+        f.start = 5;
+        assert_eq!(f.params(), json!({"format": "lowerRoman", "chapter": true, "chapterStyle": 2, "chapterSep": "period", "start": 5}));
+        a.run("layout.pageNumberFormat", f.params()).unwrap();
+        let sp = a.session.doc.last_section.clone();
+        assert_eq!((sp.page_num_format, sp.page_num_start), (NumFormat::LowerRoman, Some(5)));
+        assert_eq!(sp.page_num_chapter, Some(ChapterNumbers { level: 2, sep: ChapterSep::Period }));
+        a.run("ui.dialog", json!({"name": "pageNumberFormat"})).unwrap();
+        let LayoutDialog::PageNumberFormat(f) = form(&mut a) else { panic!("page number format") };
+        assert_eq!(
+            (f.format.as_str(), f.chapter, f.chapter_style, f.chapter_sep.as_str(), f.continue_numbering, f.start),
+            ("lowerRoman", true, 2, "period", false, 5)
+        );
+
+        // Japanese editing: Word's eleven formats in its order; a section format the list
+        // lacks (iroha) is listed with its own numbers.
+        a.session.doc.styles.default_chr.lang_ea = Some("ja-JP".into());
+        a.run("layout.pageNumberFormat", json!({"format": "iroha", "chapter": false})).unwrap();
+        a.run("ui.dialog", json!({"name": "pageNumberFormat"})).unwrap();
+        let LayoutDialog::PageNumberFormat(f) = form(&mut a) else { panic!("page number format") };
+        assert!(f.japanese && !f.chapter && f.continue_numbering, "no start: continuing");
+        let formats = f.formats();
+        let ids: Vec<&str> = formats.iter().map(|(id, _)| *id).collect();
+        assert_eq!(
+            ids,
+            [
+                "decimal",
+                "numberInDash",
+                "decimalFullWidth",
+                "lowerLetter",
+                "upperLetter",
+                "lowerRoman",
+                "upperRoman",
+                "decimalEnclosedCircle",
+                "ideographDigital",
+                "japaneseCounting",
+                "japaneseLegal",
+                "iroha"
+            ]
+        );
+        let samples: Vec<&str> = formats.iter().map(|(_, s)| s.as_str()).collect();
+        assert_eq!(samples[2], "１, ２, ３ ...");
+        assert_eq!(&samples[7..], ["①, ②, ③ ...", "一, 二, 三 ...", "一, 十, 百 ...", "壱, 弐, 参 ...", "ｲ, ﾛ, ﾊ ..."]);
+        assert_eq!(chapter_sep_label("emDash"), "— (em dash)");
     }
 
     /// #755: the Line Numbers "From text" distance and the Hyphenation zone follow the

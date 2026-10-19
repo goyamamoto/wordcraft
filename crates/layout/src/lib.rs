@@ -653,6 +653,10 @@ struct Ctx<'a> {
     uses_totals: bool,
     /// Whether to note `uses_totals` now (off while laying out headers and footers).
     track_totals: bool,
+    /// For sections whose page numbers include chapter numbers: the style index (taken from the
+    /// cache once per layout) and the chapter numbers at each body paragraph by heading level
+    /// ([`styleref::StyleIndex::chapters`]).
+    chapters: Option<(Arc<styleref::StyleIndex>, Vec<(u8, Arc<Vec<Option<Arc<str>>>>)>)>,
     /// The width a top-level table's percentage width is a share of, when it isn't the box's:
     /// an inherited header or footer's tables follow the section that defines it.
     pct_base: Option<f32>,
@@ -730,6 +734,32 @@ impl Ctx<'_> {
             .filter(|n| n.num != 0)
             .is_some_and(|n| self.doc.numbering.shows_label(n.num, n.level))
     }
+    /// The style index and the chapter number table for heading level `level` (each built once
+    /// per layout).
+    fn chapter_table(&mut self, level: u8) -> (Arc<styleref::StyleIndex>, Arc<Vec<Option<Arc<str>>>>) {
+        let ix = match &self.chapters {
+            Some((ix, _)) => ix.clone(),
+            None => self.cache.style_index(self.doc),
+        };
+        let (_, tables) = self.chapters.get_or_insert_with(|| (ix.clone(), Vec::new()));
+        if let Some((_, t)) = tables.iter().find(|(l, _)| *l == level) {
+            return (ix, t.clone());
+        }
+        let t = Arc::new(ix.chapters(level));
+        tables.push((level, t.clone()));
+        (ix, t)
+    }
+
+    /// What PAGE fields of the body paragraph at `path` show before the page number: the
+    /// chapter number and separator when `sect` includes chapter numbers, else nothing.
+    fn body_chapter(&mut self, sect: &SectionProps, path: &Path) -> Option<Arc<str>> {
+        let c = sect.page_num_chapter?;
+        let (ix, table) = self.chapter_table(c.level);
+        let i = ix.index_of(path)?;
+        let n = styleref::StyleIndex::chapter_at(&table, styleref::At::Body(i))?;
+        Some(Arc::from(format!("{n}{}", c.sep.text())))
+    }
+
     fn next_label(&mut self, p: &Paragraph) -> Option<(String, Level)> {
         let n = p.props.numbering.or_else(|| self.doc.styles.resolve_para(&p.props).numbering).filter(|n| n.num != 0)?;
         self.counters.next_label(&self.doc.numbering, n.num, n.level)
@@ -2026,6 +2056,7 @@ fn layout_pass(
         vertical: false,
         uses_totals: false,
         track_totals: true,
+        chapters: None,
         pct_base: None,
         quiet_marks: Vec::new(),
         mirror: false,
@@ -2179,6 +2210,10 @@ fn layout_pass(
             with_pct_base(&mut ctx, fb(feet.first), |c| foot_top_for(c, sect, feet.first))
         };
         ctx.grid = para::Grid::of(doc, sect);
+        // The body's PAGE fields show the section's number format (`iii`) and, before the
+        // first heading of a section with chapter numbers, nothing yet (set per paragraph).
+        ctx.fields.page_format = sect.page_num_format;
+        ctx.fields.chapter = None;
         let restart = sect.page_num_start;
         if sect.line_numbers.as_ref().is_some_and(|l| l.restart == wordcraft_doc::section::LineNumberRestart::Section) {
             pb.line_no = 0;
@@ -3104,6 +3139,9 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     let excl_mark = pb.excl.len();
     let guess = pb.y + space_before;
     let label = ctx.next_label(p);
+    if pb.sect.page_num_chapter.is_some() {
+        ctx.fields.chapter = ctx.body_chapter(pb.sect, &Path::top(block));
+    }
     // The pages this paragraph's fields are on after its first (`FieldCtx::page_from`), kept here
     // and lent to the field context only while this paragraph itself is laid out, so footnotes,
     // text boxes and headers laid out in between never see it (#1352).
@@ -4018,7 +4056,8 @@ fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &Secti
         *per_section.entry(p.section).or_default() += 1;
     }
     let even_odd = ctx.doc.settings.even_odd_headers;
-    let styles = styleref::headers_use_styleref(ctx.doc).then(|| ctx.cache.style_index(ctx.doc));
+    let chapters = sections.iter().any(|(_, s)| s.page_num_chapter.is_some());
+    let styles = (chapters || styleref::headers_use_styleref(ctx.doc)).then(|| ctx.cache.style_index(ctx.doc));
     let mut first_of_section: HashSet<usize> = HashSet::new();
     let mut seen = HashSet::new();
     for (i, p) in pages.iter().enumerate() {
@@ -4050,6 +4089,19 @@ fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &Secti
         };
         ctx.fields.page = page.number;
         ctx.fields.page_format = sect.page_num_format;
+        // Chapter numbers in the page number: the last heading on the page.
+        ctx.fields.chapter = None;
+        if let Some(c) = sect.page_num_chapter
+            && let Some(ix) = &styles
+        {
+            let paths = page.items.iter().filter_map(|it| match it {
+                Placed::Lines { story: StoryRef::Body, path, .. } => Some(path),
+                _ => None,
+            });
+            let at = ix.page_at(paths, page.first_block);
+            let (_, table) = ctx.chapter_table(c.level);
+            ctx.fields.chapter = styleref::StyleIndex::chapter_at(&table, at).map(|n| Arc::from(format!("{n}{}", c.sep.text())));
+        }
         ctx.fields.pages = total;
         ctx.fields.section_pages = per_section.get(&page.section).copied().unwrap_or(1);
         ctx.fields.section = page.section as u32 + 1;
@@ -4093,6 +4145,7 @@ fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &Secti
         }
     }
     ctx.fields.styleref = None;
+    ctx.fields.chapter = None;
 }
 
 /// Mirrored margins: even pages have the inside margin (and gutter) on the right, so their
