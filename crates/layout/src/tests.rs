@@ -7952,6 +7952,129 @@ fn top_line_punct_hangs_an_opening_bracket_half_an_em_into_the_margin() {
     assert!((comma[1].1 - comma[1].0).abs() < 0.01, "{comma:?}");
 }
 
+/// Closing marks at the end of a justified line, as Word for Mac ends it (`hp1`–`hp7` probes
+/// with Japanese editing, 10.5 pt 游明朝, 44 あ a 468-pt line with 6 pt to spare): 。、，．」』）］｝】
+/// that don't fit stay at half their width when the half fits — the 。 starts half an em before
+/// the edge, its glyph whole, and the 44 あ are spread by the 0.75 pt left — else hang whole past
+/// the edge (句読点のぶら下げ): on a 12-pt line 39 あ fill exactly and the 。 sits at the edge; at
+/// 12.5 pt (37 あ, 5.5 pt spare, less than half) the 。 hangs at the edge and the あ are spread.
+/// Only one hangs: 。。 keeps the first at half and hangs the second; 。」） moves on with the あ
+/// before them, as 。 does on a left-, centre- or right-aligned line and as ！ always does. With
+/// `w:overflowPunct` off the 。 stays at its full width where the half would fit, the line not
+/// spread, and moves on otherwise; 〕〉》 do the same with the option on. Kinsoku off changes
+/// nothing without a character grid. A paragraph's last line ending so is spread too.
+#[test]
+fn closing_marks_end_a_justified_line_as_word_for_mac_ends_it() {
+    let lines_of = |text: &str, size: f32, align: Align, overflow: Option<bool>, kinsoku: Option<bool>| {
+        let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(size), ..Default::default() };
+        let mut d = Document::from_text("");
+        let mut p = wordcraft_doc::Paragraph::with_text(text, chr);
+        p.props.align = Some(align);
+        p.props.overflow_punct = overflow;
+        p.props.kinsoku = kinsoku;
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = lay(&d);
+        let pl = first_para(&l);
+        // Per line: the clusters on it, and (x, advance) of its last three clusters.
+        pl.lines
+            .iter()
+            .map(|ln| {
+                let tail: Vec<(f32, f32)> = (ln.c0..ln.c1)
+                    .rev()
+                    .take(3)
+                    .map(|k| (ln.xs[k - ln.c0] - ln.left, pl.clusters[k].adv))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                (ln.c1 - ln.c0, ln.right - ln.left, tail)
+            })
+            .collect::<Vec<_>>()
+    };
+    let near = |a: f32, b: f32| (a - b).abs() < 0.05;
+    let a44 = "あ".repeat(44);
+    // 。 at half its width, the あ spread by the leftover: the 44th ends where the 。 starts.
+    let l = lines_of(&format!("{a44}。いろは"), 10.5, Align::Justify, None, None);
+    assert_eq!(l.iter().map(|x| x.0).collect::<Vec<_>>(), vec![45, 3], "{l:?}");
+    let (w, tail) = (l[0].1, &l[0].2);
+    assert!(near(w, 468.0), "{w}");
+    assert!(near(tail[2].0, w - 5.25) && near(tail[2].1, 5.25), "{tail:?}");
+    assert!(near(tail[1].0 + 10.5, tail[2].0) && near(tail[1].1, 10.5), "{tail:?}");
+    assert!(near(tail[1].0, 43.0 * 10.5 + 0.75 * 43.0 / 44.0) || near(tail[1].0, 43.0 * 10.5 + 0.75), "spread: {tail:?}");
+    // Distributed: the same.
+    let l = lines_of(&format!("{a44}。いろは"), 10.5, Align::Distribute, None, None);
+    assert_eq!(l[0].0, 45, "{l:?}");
+    assert!(near(l[0].2[2].0, 468.0 - 5.25), "{l:?}");
+    // The paragraph's last line.
+    let l = lines_of(&format!("{a44}。"), 10.5, Align::Justify, None, None);
+    assert_eq!(l.len(), 1, "{l:?}");
+    assert!(near(l[0].2[2].0, 468.0 - 5.25) && near(l[0].2[1].0 + 10.5, 468.0 - 5.25), "{l:?}");
+    // 。。: the first at half, the second hung whole at the edge.
+    let l = lines_of(&format!("{a44}。。いろは"), 10.5, Align::Justify, None, None);
+    assert_eq!(l.iter().map(|x| x.0).collect::<Vec<_>>(), vec![46, 3], "{l:?}");
+    assert!(near(l[0].2[1].0, 468.0 - 5.25) && near(l[0].2[1].1, 5.25), "{l:?}");
+    assert!(near(l[0].2[2].0, 468.0) && near(l[0].2[2].1, 10.5), "{l:?}");
+    // 、。 and 。」: the first compressed before the second (as anywhere), the second hung.
+    for t in ["、。", "。」"] {
+        let l = lines_of(&format!("{a44}{t}いろは"), 10.5, Align::Justify, None, None);
+        assert_eq!(l[0].0, 46, "{t} {l:?}");
+        assert!(near(l[0].2[2].0, 468.0), "{t} {l:?}");
+    }
+    // 。」）: a third mark can't follow a hung one — all move on with the あ before them, which
+    // takes back its full width.
+    let l = lines_of(&format!("{a44}。」）いろは"), 10.5, Align::Justify, None, None);
+    assert_eq!(l.iter().map(|x| x.0).collect::<Vec<_>>(), vec![43, 7], "{l:?}");
+    assert!(near(l[1].2[0].1, 10.5) && near(l[1].2[1].1, 10.5), "{l:?}");
+    // A line its characters fill exactly: the 。 hangs at the edge, nothing spread.
+    let l = lines_of(&format!("{}。いろは", "あ".repeat(39)), 12.0, Align::Justify, None, None);
+    assert_eq!(l.iter().map(|x| x.0).collect::<Vec<_>>(), vec![40, 3], "{l:?}");
+    assert!(near(l[0].2[2].0, 468.0) && near(l[0].2[1].0, 456.0), "{l:?}");
+    // Less than half an em to spare: the 。 hangs at the edge and the あ are spread to it.
+    let l = lines_of(&format!("{}。いろは", "あ".repeat(37)), 12.5, Align::Justify, None, None);
+    assert_eq!(l.iter().map(|x| x.0).collect::<Vec<_>>(), vec![38, 3], "{l:?}");
+    assert!(near(l[0].2[2].0, 468.0) && near(l[0].2[1].0, 468.0 - 12.5), "{l:?}");
+    // Left, centre, right: the 。 moves on with the あ before it.
+    for align in [Align::Left, Align::Center, Align::Right] {
+        let l = lines_of(&format!("{a44}。いろは"), 10.5, align, None, None);
+        assert_eq!(l.iter().map(|x| x.0).collect::<Vec<_>>(), vec![43, 5], "{align:?} {l:?}");
+    }
+    // ！ never stays; 〉 stays at its full width, the line not spread.
+    let l = lines_of(&format!("{a44}！いろは"), 10.5, Align::Justify, None, None);
+    assert_eq!(l.iter().map(|x| x.0).collect::<Vec<_>>(), vec![43, 5], "{l:?}");
+    let l = lines_of(&format!("{a44}〉いろは"), 10.5, Align::Justify, None, None);
+    assert_eq!(l.iter().map(|x| x.0).collect::<Vec<_>>(), vec![45, 3], "{l:?}");
+    assert!(near(l[0].2[2].0, 462.0) && near(l[0].2[2].1, 10.5) && near(l[0].2[1].0, 451.5), "{l:?}");
+    // Hanging off: at its full width where the half fits, unspread; else it moves on.
+    let l = lines_of(&format!("{a44}。いろは"), 10.5, Align::Justify, Some(false), None);
+    assert_eq!(l.iter().map(|x| x.0).collect::<Vec<_>>(), vec![45, 3], "{l:?}");
+    assert!(near(l[0].2[2].0, 462.0) && near(l[0].2[2].1, 10.5) && near(l[0].2[1].0, 451.5), "{l:?}");
+    let l = lines_of(&format!("{}。いろは", "あ".repeat(37)), 12.5, Align::Justify, Some(false), None);
+    assert_eq!(l.iter().map(|x| x.0).collect::<Vec<_>>(), vec![36, 5], "{l:?}");
+    // Kinsoku off without a grid: as with it on.
+    let l = lines_of(&format!("{a44}。いろは"), 10.5, Align::Justify, None, Some(false));
+    assert_eq!(l.iter().map(|x| x.0).collect::<Vec<_>>(), vec![45, 3], "{l:?}");
+    assert!(near(l[0].2[2].0, 468.0 - 5.25), "{l:?}");
+    // 縦書き: a column moves the 。 on with the あ before it (Word for Mac, `hp8`: 44 あ then
+    // あ。いろは in a 468-pt column, justified or not, hanging on or off).
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(10.5), ..Default::default() };
+    let mut d = Document::from_text("");
+    let mut p = wordcraft_doc::Paragraph::with_text(&format!("{a44}。いろは"), chr);
+    p.props.align = Some(Align::Justify);
+    d.body = vec![wordcraft_doc::para_block(p)];
+    d.last_section.page_w = 792.0;
+    d.last_section.page_h = 612.0;
+    d.last_section.text_direction = TextDirection::Down;
+    let l = lay(&d);
+    let pl = first_para(&l);
+    assert!(pl.vertical);
+    assert_eq!(
+        pl.lines.iter().map(|ln| ln.c1 - ln.c0).collect::<Vec<_>>(),
+        vec![43, 5],
+        "{:?}",
+        pl.lines.iter().map(|ln| (ln.c0, ln.c1)).collect::<Vec<_>>()
+    );
+}
+
 /// On a character grid (Word for Mac, a 40-character grid: 「 at 66.15, 括 at 77.85 with the left
 /// edge at 72 and an 11.7 pt pitch) the bracket starting a line hangs half the pitch and the
 /// characters after it sit half a cell off the grid, so the line holds as many either way.
