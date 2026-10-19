@@ -6480,6 +6480,134 @@ fn index_sorts_polish_entries_and_headings() {
     assert!(pos("Kraków") < pos("Łódź") && pos("Łódź") < pos("Zakopane"), "{lines:?}");
 }
 
+/// A Japanese index as Word for Mac builds it with Japanese editing (`ix1`–`ix4` probes,
+/// 2026-10-19): digits, Latin, kana, then kanji in JIS order (塩 横 沖 学 漢 京 銀 札 山 大 東 福 名 和,
+/// where a table sort takes them by code point); headings are the full-width digit or capital,
+/// the hiragana with its voicing dropped (が, ｶﾀｶﾅ under か; ヴ under ゔ), and 漢字 for every kanji
+/// — shown only where a heading sorts after the last one shown (an index starting with 々印 has
+/// the 漢字 heading alone); `\f` types keep their entries apart; the field's old result goes.
+#[test]
+fn japanese_index_sorts_and_heads_its_entries_as_word_does() {
+    let words = [
+        "塩",
+        "横浜",
+        "沖縄",
+        "学校",
+        "漢字",
+        "京都",
+        "銀行",
+        "札幌",
+        "山",
+        "大阪",
+        "東京",
+        "福岡",
+        "名古屋",
+        "和歌山",
+        "アメリカ",
+        "apple",
+        "Zebra",
+        "ひらがな",
+        "１２３",
+        "123",
+        "が",
+        "カード",
+        "データ",
+        "ばら",
+        "ハワイ",
+        "パン",
+        "ヴァイオリン",
+        "んご",
+    ];
+    let mut s = Session::new(wordcraft_doc::Document::from_text(&words.join(" ")));
+    s.set_editing_language(Some("ja-JP"));
+    for w in words {
+        run(&mut s, "select.text", json!({"text": w}));
+        run(&mut s, "references.markEntry", json!({}));
+    }
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "references.index", json!({}));
+    let lines = |s: &Session| -> Vec<String> {
+        s.doc.body.iter().filter_map(|b| b.as_para()).filter(|p| p.props.style.as_deref() == Some("ListEntry")).map(|p| p.plain_text()).collect()
+    };
+    let want = [
+        "１",
+        "123, 1",
+        "１２３, 1",
+        "Ａ",
+        "apple, 1",
+        "Ｚ",
+        "Zebra, 1",
+        "あ",
+        "アメリカ, 1",
+        "ゔ",
+        "ヴァイオリン, 1",
+        "か",
+        "が, 1",
+        "カード, 1",
+        "て",
+        "データ, 1",
+        "は",
+        "ばら, 1",
+        "ハワイ, 1",
+        "パン, 1",
+        "ひ",
+        "ひらがな, 1",
+        "ん",
+        "んご, 1",
+        "漢字",
+        "塩, 1",
+        "横浜, 1",
+        "沖縄, 1",
+        "学校, 1",
+        "漢字, 1",
+        "京都, 1",
+        "銀行, 1",
+        "札幌, 1",
+        "山, 1",
+        "大阪, 1",
+        "東京, 1",
+        "福岡, 1",
+        "名古屋, 1",
+        "和歌山, 1",
+    ];
+    assert_eq!(lines(&s), want, "{:?}", lines(&s));
+
+    // An index whose first entry is 々印 shows the 漢字 heading and no other; its type keeps
+    // other types' entries out, and an index without a type takes only untyped entries.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("々印 123 apple あい 漢字 beta"));
+    s.set_editing_language(Some("ja-JP"));
+    for w in ["々印", "123", "apple", "あい", "漢字"] {
+        run(&mut s, "select.text", json!({"text": w}));
+        run(&mut s, "references.markEntry", json!({}));
+    }
+    run(&mut s, "select.text", json!({"text": "beta"}));
+    run(&mut s, "insert.field", json!({"instr": "XE \"beta\" \\f \"t\""}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "references.index", json!({}));
+    assert_eq!(lines(&s), ["漢字", "々印, 1", "123, 1", "apple, 1", "あい, 1", "漢字, 1"], "{:?}", lines(&s));
+    let mut t = Session::new(wordcraft_doc::Document::from_text("alpha beta"));
+    t.set_editing_language(Some("ja-JP"));
+    run(&mut t, "select.text", json!({"text": "alpha"}));
+    run(&mut t, "references.markEntry", json!({}));
+    run(&mut t, "select.text", json!({"text": "beta"}));
+    run(&mut t, "insert.field", json!({"instr": "XE \"beta\" \\f \"t\""}));
+    run(&mut t, "caret.docEnd", json!({}));
+    run(&mut t, "text.newParagraph", json!({}));
+    run(&mut t, "insert.field", json!({"instr": "INDEX \\f \"t\" \\h \"A\"", "result": "x"}));
+    run(&mut t, "references.updateFields", json!({}));
+    assert_eq!(lines(&t), ["Ｂ", "beta, 1"], "{:?}", lines(&t));
+    let field_para = t
+        .doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .find(|p| p.objects.iter().any(|o| matches!(o, wordcraft_doc::para::InlineObject::Field { instr, .. } if instr.starts_with("INDEX"))))
+        .unwrap();
+    assert!(!field_para.plain_text().contains('x'), "the old result is gone: {:?}", field_para.plain_text());
+}
+
 /// Review of #844: a numbered column (`1.`, `2.`, `10.`) sorts as numbers; text with no language
 /// at all follows the editing language (a Polish interface reads `3,50` as 3.5).
 #[test]

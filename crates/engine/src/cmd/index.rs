@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
-use wordcraft_doc::collate::{SortKey, heading_letter, sort_key};
+use wordcraft_doc::collate::{SortKey, heading_letter, index_sort_key, ja_heading};
 use wordcraft_doc::para::InlineObject;
 use wordcraft_doc::props::{CharProps, TabAlign, TabLeader, TabStop};
 use wordcraft_doc::section::SectionStart;
@@ -175,15 +175,17 @@ struct Node {
 }
 
 /// Every XE entry in the body with its page (or page range), grouped by entry and sorted in the
-/// order of language `lang` (Polish files `Łódź` between `L` and `M`).
-fn collect(s: &mut Session, lang: Option<&str>) -> BTreeMap<Vec<SortKey>, Node> {
+/// order of language `lang` (Polish files `Łódź` between `L` and `M`). `kind`: the index's `\f`
+/// type — only the XE entries of that type belong to it, and only entries with no type to an
+/// index without one (Word for Mac, `ix4` probe, 2026-10-19).
+fn collect(s: &mut Session, lang: Option<&str>, kind: Option<&str>) -> BTreeMap<Vec<SortKey>, Node> {
     let mut marks: Vec<(FieldCode, Pos)> = Vec::new();
     for path in s.doc.para_paths(StoryRef::Body) {
         let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
         for off in p.object_offsets() {
             if let Some(InlineObject::Field { instr, .. }) = p.object_at(off) {
                 let f = FieldCode::parse(instr);
-                if f.name == "XE" {
+                if f.name == "XE" && f.arg('f').map(str::trim).filter(|t| !t.is_empty()) == kind {
                     marks.push((f, Pos { story: StoryRef::Body, path: path.clone(), off }));
                 }
             }
@@ -209,10 +211,11 @@ fn collect(s: &mut Session, lang: Option<&str>) -> BTreeMap<Vec<SortKey>, Node> 
         // Every level above gets a line of its own, even without pages.
         for k in 1..levels.len() {
             let head: Vec<String> = levels.iter().take(k).cloned().collect();
-            tree.entry(head.iter().map(|x| sort_key(x, lang)).collect()).or_insert_with(|| Node { levels: head, ..Default::default() });
+            tree.entry(head.iter().map(|x| index_sort_key(x, lang)).collect()).or_insert_with(|| Node { levels: head, ..Default::default() });
         }
-        let node =
-            tree.entry(levels.iter().map(|x| sort_key(x, lang)).collect()).or_insert_with(|| Node { levels: levels.clone(), ..Default::default() });
+        let node = tree
+            .entry(levels.iter().map(|x| index_sort_key(x, lang)).collect())
+            .or_insert_with(|| Node { levels: levels.clone(), ..Default::default() });
         if let Some(see) = f.arg('t') {
             if !node.see.iter().any(|x| x == see) {
                 node.see.push(see.to_string());
@@ -234,6 +237,23 @@ fn collect(s: &mut Session, lang: Option<&str>) -> BTreeMap<Vec<SortKey>, Node> 
         }
     }
     tree
+}
+
+/// Whether any XE entry of type `kind` holds East Asian text (such an index is Japanese).
+fn east_asian_entries(s: &Session, kind: Option<&str>) -> bool {
+    s.doc.para_paths(StoryRef::Body).into_iter().any(|path| {
+        s.doc.para(StoryRef::Body, &path).is_some_and(|p| {
+            p.objects.iter().any(|o| match o {
+                InlineObject::Field { instr, .. } => {
+                    let f = FieldCode::parse(instr);
+                    f.name == "XE"
+                        && f.arg('f').map(str::trim).filter(|t| !t.is_empty()) == kind
+                        && f.args.first().is_some_and(|a| wordcraft_doc::count_east_asian(a) > 0)
+                }
+                _ => false,
+            })
+        })
+    })
 }
 
 /// Text runs of one index line.
@@ -280,22 +300,50 @@ pub fn rebuild(s: &mut Session, i: usize, leader: Option<TabLeader>) -> Result<(
     let sep = f.arg('e').map(str::to_string).unwrap_or_else(|| ", ".into());
     let run_in = f.has('r');
     let headings = f.switches.iter().find(|(c, _)| *c == 'h').map(|(_, a)| a.clone().unwrap_or_default());
+    let kind = f.arg('f').map(str::trim).filter(|t| !t.is_empty()).map(str::to_string);
+    // The field's old result goes: the entries that follow are the index.
+    if let Ok(p) = s.doc.para_mut(StoryRef::Body, &Path::top(i)) {
+        for o in &mut p.objects {
+            if let InlineObject::Field { instr, result, .. } = o
+                && FieldCode::parse(instr.as_str()).name == "INDEX"
+            {
+                result.clear();
+            }
+        }
+    }
     // Entries sort in the language of the index's paragraph (else the document's).
     let lang = s.doc.body.get(i).and_then(|b| b.as_para()).and_then(|p| super::para_lang(&s.doc, p)).or_else(|| super::default_lang(s));
-    let tree = collect(s, lang.as_deref());
+    // A Japanese index (Japanese editing, a Japanese paragraph, or East Asian entries) sorts
+    // every entry in Word's Japanese order and takes Word for Mac's headings — full-width
+    // digits and capitals, hiragana, 漢字 for the kanji — shown only where a heading sorts after
+    // the last one shown (`ix1`–`ix4` probes, 2026-10-19: an index whose first entry is 々印
+    // heads it 漢字 and shows no other heading; ・ ！ （ ＃ ％ 〒 ゝ １ あ 漢字 all appear in that order).
+    let is_ja = |l: Option<&str>| wordcraft_doc::collate::language(l) == "ja";
+    let japanese = is_ja(lang.as_deref())
+        || is_ja(s.editing_lang.as_deref())
+        || is_ja(s.doc.body.get(i).and_then(|b| b.as_para()).and_then(|p| super::para_lang_ea(&s.doc, p)).as_deref())
+        || east_asian_entries(s, kind.as_deref());
+    let tree = collect(s, if japanese { Some("ja") } else { lang.as_deref() }, kind.as_deref());
     let mut lines: Vec<(usize, Line)> = Vec::new();
     let mut letter: Option<String> = None;
+    let mut shown: Option<String> = None;
     let mut keys = tree.keys().peekable();
     while let Some(key) = keys.next() {
         let Some(node) = tree.get(key) else { continue };
         let Some(main) = node.levels.first() else { continue };
         if let Some(h) = &headings {
-            let first = heading_letter(main, lang.as_deref());
-            if first != letter {
+            let first = if japanese { ja_heading(main) } else { heading_letter(main, lang.as_deref()) };
+            let after_shown = !japanese
+                || match (&first, &shown) {
+                    (Some(f), Some(last)) => index_sort_key(f, Some("ja")) > index_sort_key(last, Some("ja")),
+                    _ => true,
+                };
+            if first != letter && after_shown {
                 if letter.is_some() || !h.is_empty() {
                     lines.push((0, vec![(if h.is_empty() { String::new() } else { first.clone().unwrap_or_default() }, CharProps::default())]));
                 }
-                letter = first;
+                letter = first.clone();
+                shown = first;
             }
         }
         if run_in {

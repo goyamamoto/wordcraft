@@ -460,6 +460,12 @@ pub fn para_lang(doc: &wordcraft_doc::Document, p: &wordcraft_doc::Paragraph) ->
     doc.styles.resolve_char(p.props.style.as_deref(), run).lang
 }
 
+/// The East Asian language (`w:lang/@w:eastAsia`) of a paragraph's first run (else its mark).
+pub fn para_lang_ea(doc: &wordcraft_doc::Document, p: &wordcraft_doc::Paragraph) -> Option<String> {
+    let run = p.runs.iter().find(|r| r.len > 0).map(|r| &r.props).unwrap_or(&p.mark);
+    doc.styles.resolve_char(p.props.style.as_deref(), run).lang_ea
+}
+
 /// The document's default text language (`w:docDefaults`, the Normal style).
 pub fn doc_lang(doc: &wordcraft_doc::Document) -> Option<String> {
     doc.styles.resolve_char(None, &wordcraft_doc::CharProps::default()).lang
