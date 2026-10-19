@@ -37,7 +37,8 @@ pub struct ArtLayer {
 pub fn glyph_path(face: &FaceRef, size: f32, glyphs: &[(u32, f32, f32)], synth_italic: bool) -> BezPath {
     let db = wordcraft_fonts::FontDb::global();
     let k = f64::from(size) / face.upem.max(1.0);
-    let skew = if synth_italic { Affine::new([1.0, 0.0, -0.21, 1.0, 0.0, 0.0]) } else { Affine::IDENTITY };
+    let skew =
+        if synth_italic { Affine::new([1.0, 0.0, -f64::from(wordcraft_fonts::SYNTHETIC_ITALIC_SLANT), 1.0, 0.0, 0.0]) } else { Affine::IDENTITY };
     let mut out = BezPath::new();
     for &(gid, x, y) in glyphs {
         if !(x.is_finite() && y.is_finite()) {
