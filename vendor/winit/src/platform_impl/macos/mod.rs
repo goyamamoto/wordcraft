@@ -30,7 +30,7 @@ use crate::event::DeviceId as RootDeviceId;
 pub(crate) use self::cursor::CustomCursor as PlatformCustomCursor;
 pub(crate) use self::window::Window;
 // WordCraft patch (vendor/patches/winit/01-macos-ime-surrounding-text.md).
-pub use self::view::{set_ime_surrounding_text, take_ime_replacement_range, ImeSurroundingText};
+pub use self::view::{ime_surrounding_text, set_ime_surrounding_text, take_ime_replacement_range, ImeMarked, ImeSurroundingText};
 pub(crate) use crate::cursor::OnlyCursorImageSource as PlatformCustomCursorSource;
 pub(crate) use crate::icon::NoIcon as PlatformIcon;
 pub(crate) use crate::platform_impl::Fullscreen;
