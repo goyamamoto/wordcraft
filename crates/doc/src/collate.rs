@@ -343,10 +343,13 @@ const COMPOSE: &[(char, char, char)] = &[
 // ---------------------------------------------------------------------------------------------
 // Japanese: Word for Mac's order
 
-/// The symbols Word for Mac sorts before digits, in its order (`so2` probe): spaces, then marks,
-/// the iteration marks and ー, then currency. A half-width and a full-width form are the same
-/// symbol (`,` = `，`, `~` = `～`); a symbol not here sorts after these by code point.
-const JA_SYMBOLS: &str = " _-\u{2010}\u{2013}\u{2014}\u{301C}・,、;:!?.…。'\"()[]{}「」『』@*/\\&#%※`^+<=>|~〒々ゝゞーヽヾ$￥";
+/// The symbols Word for Mac sorts before digits, in its order (`so2` probe; the index of `ix5`,
+/// 2026-10-19, placed 〝〟㈱ before 「, 〔〕§¶ after 』, †〃 after %, °℃←→ after ^, ±÷× after +, ≠
+/// after =, ∞○★♪ after ~, 〓〠 after 〒 and ①② after ￥): spaces, then marks, the iteration
+/// marks and ー, then currency and circled digits. A half-width and a full-width form are the
+/// same symbol (`,` = `，`, `~` = `～`); a symbol not here sorts after these by code point.
+const JA_SYMBOLS: &str =
+    " _-\u{2010}\u{2013}\u{2014}\u{301C}・,、;:!?.…。'\"()[]{}〝〟㈱「」『』〔〕§¶@*/\\&#%†〃※`^°℃←→+±÷×<=≠>|~∞○★♪〒〓〠々ゝゞーヽヾ$￥①②";
 
 /// Half-width katakana (U+FF66…U+FF9D) as full-width katakana, in code-point order.
 const HALF_KATAKANA: &str = "ヲァィゥェォャュョッーアイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワン";
@@ -405,8 +408,31 @@ fn kana_base(c: char) -> Option<(char, u16)> {
     Some((char::from_u32(base)?, sec))
 }
 
+/// An ideograph's place in Word for Mac's index order: its Shift-JIS code (JIS X 0208 row and
+/// cell: 亜 889F, 一 88EA, 京 8B9E, 大 91E5, 東 938C, 龠 EAA4), else — a kanji the code page lacks —
+/// after them all by code point. (Word sorts by JIS X 0213, which puts the few kanji outside
+/// JIS X 0208 — 𠮷, 﨑, 髙 — among the rest; they come after here.)
+fn ideograph_rank(c: char) -> u32 {
+    let mut buf = [0u8; 4];
+    let (bytes, _, unmappable) = encoding_rs::SHIFT_JIS.encode(c.encode_utf8(&mut buf));
+    match (unmappable, bytes.first(), bytes.get(1)) {
+        (false, Some(b1), Some(b2)) if bytes.len() == 2 => (u32::from(*b1) << 8) | u32::from(*b2),
+        _ => 0x1_0000 + (c as u32),
+    }
+}
+
+/// A letter of the Latin script (after width folding and decomposition): Word's Japanese index
+/// files it among the Latin letters; Greek, Cyrillic, Hangul and other letters go after the kanji.
+fn is_latin_letter(c: char) -> bool {
+    c.is_alphabetic() && matches!(c as u32, 0..=0x24F | 0x1E00..=0x1EFF | 0x2160..=0x2188)
+}
+
 /// The next collation element of `rest` (lowercase) in Word's Japanese order, and its length.
-fn next_ja_elem(rest: &str) -> Option<(Elem<'_>, usize)> {
+/// `index`: the order of Word for Mac's index (`ix1`–`ix4` probes, 2026-10-19), where kanji
+/// follow their JIS code — 塩 横 沖 学 漢 京 銀 札 山 大 東 福 名 和 — and Greek, Cyrillic and Hangul
+/// letters come after every kanji (α Ωmega Я 한국 after 𠮷野家), where a table sort takes kanji
+/// and other letters by code point (`so1`/`so2`).
+fn next_ja_elem(rest: &str, index: bool) -> Option<(Elem<'_>, usize)> {
     let c0 = rest.chars().next()?;
     let n = c0.len_utf8();
     let text = rest.get(..n)?;
@@ -438,11 +464,74 @@ fn next_ja_elem(rest: &str) -> Option<(Elem<'_>, usize)> {
     if let Some((_, base, mark)) = DECOMP.iter().find(|(x, _, _)| *x == c) {
         return Some((elem(base.chars().map(|b| JA_LETTER + weight(b, 0)).collect(), *mark), n));
     }
+    if index && is_ideograph(c) {
+        return Some((elem(vec![JA_OTHER + ideograph_rank(c)], 0), n));
+    }
     if is_ideograph(c) || !c.is_alphabetic() && !c.is_numeric() {
         let class = if is_ideograph(c) || c.is_alphanumeric() { JA_OTHER } else { JA_SYMBOL + 0x1000 };
         return Some((elem(vec![class + weight(c, 0)], 0), n));
     }
+    if index && c.is_alphabetic() && !is_latin_letter(c) {
+        return Some((elem(vec![JA_OTHER + 0x8_0000 + weight(c, 0)], 0), n));
+    }
     Some((elem(vec![if c.is_alphabetic() { JA_LETTER } else { JA_OTHER } + weight(c, 0)], 0), n))
+}
+
+/// The heading an entry files under in Word for Mac's Japanese index (`INDEX \h "A"` with
+/// Japanese editing; `ix1`–`ix4` probes, 2026-10-19), from its first character: a digit's
+/// full-width form (123 and １２３ under １, 7up under ７); a Latin letter's full-width capital
+/// (apple, Ａｂｅ under Ａ; éclair under Ｅ); a kana's hiragana, voicing dropped, small kana kept
+/// (アメリカ under あ, が and ｶﾀｶﾅ under か, ﾊﾟﾝ under は, ゞ under ゝ, ｧ under ぁ, ャ under ゃ; ゔ
+/// and ヴ under ゔ, ヶ under ヶ, ゐ ヲ ん ー 〆 under themselves); a kanji, 々, or any other
+/// letter (Greek, Cyrillic, Hangul) under 漢字; a numeral under itself (①, Ⅰ); a symbol under
+/// its full-width form (!bang under ！, (paren) under （, #hash under ＃, ・ 〒 〃 」 as they are).
+/// `None` for an empty entry.
+pub fn ja_heading(s: &str) -> Option<String> {
+    let c0 = s.trim_start().chars().next()?;
+    let c = fold_width(c0);
+    let one = |c: char| Some(c.to_string());
+    if let Some(d) = c.to_digit(10) {
+        return char::from_u32(0xFF10 + d).and_then(one);
+    }
+    let latin = |c: char| c.is_ascii_alphabetic().then(|| char::from_u32(0xFF21 + (c.to_ascii_uppercase() as u32 - u32::from(b'A')))).flatten();
+    if let Some(h) = latin(c) {
+        return one(h);
+    }
+    if let Some(h) =
+        DECOMP.iter().find(|(x, _, _)| *x == c.to_lowercase().next().unwrap_or(c)).and_then(|(_, base, _)| base.chars().next()).and_then(latin)
+    {
+        return one(h);
+    }
+    let cp = c as u32;
+    let hira = match cp {
+        0x3041..=0x3096 | 0x309D..=0x309F | 0x3006 => Some(cp),
+        0x30A1..=0x30F4 => Some(cp - 0x60),
+        0x30F5..=0x30FA | 0x30FC..=0x30FF => Some(cp),
+        _ => None,
+    }
+    .and_then(char::from_u32);
+    if let Some(h) = hira {
+        let shown = match h {
+            'ゞ' => 'ゝ',
+            'ヾ' => 'ヽ',
+            'ゔ' | '〆' => h,
+            _ => match kana_base(h) {
+                Some((base, sec)) if sec > 0 => base,
+                _ => h,
+            },
+        };
+        return one(shown);
+    }
+    if c.is_numeric() {
+        return one(c);
+    }
+    if c.is_alphabetic() {
+        return Some("漢字".into());
+    }
+    match cp {
+        0x21..=0x7E => char::from_u32(cp + 0xFEE0).and_then(one),
+        _ => one(c),
+    }
 }
 
 /// `s` lowercased, with each letter + combining mark that has a single-letter form composed.
@@ -507,13 +596,23 @@ pub struct SortKey {
 /// order (see the module notes); its keys tell strings apart by their letters, voicing and
 /// diacritics only, so a stable sort keeps `ab`, `ＡＢ` and `ｱ`, `あ` as they were, as Word does.
 pub fn sort_key(s: &str, lang: Option<&str>) -> SortKey {
+    sort_key_in(s, lang, false)
+}
+
+/// The sort key of an index entry: Word for Mac's index order, which differs from its table
+/// sort for Japanese text (see [`next_ja_elem`]).
+pub fn index_sort_key(s: &str, lang: Option<&str>) -> SortKey {
+    sort_key_in(s, lang, true)
+}
+
+fn sort_key_in(s: &str, lang: Option<&str>, index: bool) -> SortKey {
     let text = lower_composed(s);
     let ja = language(lang) == "ja" || has_east_asian(&text);
     let rules = tailoring(lang);
     let mut key = SortKey::default();
     let mut i = 0;
     while let Some(rest) = text.get(i..).filter(|r| !r.is_empty()) {
-        let Some((e, n)) = (if ja { next_ja_elem(rest) } else { next_elem(rest, rules) }) else { break };
+        let Some((e, n)) = (if ja { next_ja_elem(rest, index) } else { next_elem(rest, rules) }) else { break };
         i += n.max(1);
         if e.primary.is_empty() {
             if let Some(last) = key.secondary.last_mut() {
@@ -526,7 +625,8 @@ pub fn sort_key(s: &str, lang: Option<&str>) -> SortKey {
             key.secondary.push(if k == 0 { e.sec } else { 0 });
         }
     }
-    if !ja {
+    // An index keeps 123 and １２３, が and ガ as entries of their own, in that order (`ix1`).
+    if !ja || index {
         key.text = text;
     }
     key
@@ -631,6 +731,114 @@ mod tests {
     /// strings (kana in every form, punctuation and its full-width forms, digits, Latin with
     /// accents and widths, kanji) sorted by Word (`so1`/`so2` probes, 2026-10-19) come out in
     /// Word's order from a stable sort by `sort_key`, ties included.
+    /// Word for Mac's index (`ix1`–`ix4` probes, 2026-10-19): kanji in JIS order, other
+    /// scripts' letters after them, and the headings entries file under.
+    #[test]
+    fn japanese_index_order_and_headings_follow_word_for_mac() {
+        let mut v = vec![
+            "京都",
+            "名古屋",
+            "和歌山",
+            "塩",
+            "大阪",
+            "学校",
+            "山",
+            "札幌",
+            "東京",
+            "横浜",
+            "沖縄",
+            "漢字",
+            "福岡",
+            "銀行",
+            "α",
+            "Ωmega",
+            "Я",
+            "한국",
+            "apple",
+            "あ",
+            "123",
+            "Ⅰ",
+            "𠮷野家",
+        ];
+        v.sort_by_key(|a| index_sort_key(a, Some("ja")));
+        assert_eq!(
+            v,
+            [
+                "123",
+                "apple",
+                "Ⅰ",
+                "あ",
+                "塩",
+                "横浜",
+                "沖縄",
+                "学校",
+                "漢字",
+                "京都",
+                "銀行",
+                "札幌",
+                "山",
+                "大阪",
+                "東京",
+                "福岡",
+                "名古屋",
+                "和歌山",
+                "𠮷野家",
+                "α",
+                "Ωmega",
+                "Я",
+                "한국"
+            ]
+        );
+        // A table sort keeps its code-point order.
+        assert_eq!(sorted(&["塩", "東京", "京都"], "ja-JP"), ["京都", "塩", "東京"]);
+        for (entry, heading) in [
+            ("123", "１"),
+            ("１２３", "１"),
+            ("7up", "７"),
+            ("apple", "Ａ"),
+            ("Ａｂｅ", "Ａ"),
+            ("ｂanana", "Ｂ"),
+            ("éclair", "Ｅ"),
+            ("アメリカ", "あ"),
+            ("が", "か"),
+            ("ｶﾀｶﾅ", "か"),
+            ("ﾊﾟﾝ", "は"),
+            ("ぱ", "は"),
+            ("ジ", "し"),
+            ("ヂ", "ち"),
+            ("づ", "つ"),
+            ("ゞ", "ゝ"),
+            ("ｧ", "ぁ"),
+            ("ャ", "ゃ"),
+            ("ゔ", "ゔ"),
+            ("ヴぇ", "ゔ"),
+            ("ヶ", "ヶ"),
+            ("ゐ", "ゐ"),
+            ("ヲ", "を"),
+            ("ん", "ん"),
+            ("ー音", "ー"),
+            ("〆", "〆"),
+            ("漢字", "漢字"),
+            ("々印", "漢字"),
+            ("Ωmega", "漢字"),
+            ("Я", "漢字"),
+            ("한국", "漢字"),
+            ("①丸", "①"),
+            ("Ⅰ", "Ⅰ"),
+            ("!bang", "！"),
+            ("(paren)", "（"),
+            ("#hash", "＃"),
+            ("%pct", "％"),
+            ("・中点", "・"),
+            ("〒郵便", "〒"),
+            ("〃", "〃"),
+            ("」閉", "」"),
+        ] {
+            assert_eq!(ja_heading(entry).as_deref(), Some(heading), "{entry}");
+        }
+        assert_eq!(ja_heading(""), None);
+    }
+
     #[test]
     fn japanese_text_sorts_as_word_for_mac_does() {
         for (input, word) in [(SO1_IN, SO1_WORD), (SO2_IN, SO2_WORD)] {
