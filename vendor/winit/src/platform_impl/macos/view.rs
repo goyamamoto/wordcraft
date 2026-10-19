@@ -286,6 +286,23 @@ fn get_left_modifier_code(key: &Key) -> KeyCode {
     }
 }
 
+/// WordCraft patch: a record of what the input method asks of the view, written when
+/// `WORDCRAFT_IME_TRACE` names a file (each call, its text and ranges, the IME state) — to see an
+/// input method's real calls, which can't be reproduced without typing.
+fn ime_trace(line: impl FnOnce() -> String) {
+    use std::io::Write;
+    static FILE: std::sync::OnceLock<Option<Mutex<std::fs::File>>> = std::sync::OnceLock::new();
+    let file = FILE.get_or_init(|| {
+        let path = std::env::var_os("WORDCRAFT_IME_TRACE")?;
+        std::fs::OpenOptions::new().create(true).append(true).open(path).ok().map(Mutex::new)
+    });
+    if let Some(f) = file {
+        if let Ok(mut f) = f.lock() {
+            let _ = writeln!(f, "{}", line());
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ViewState {
     /// Strong reference to the global application state.
@@ -319,6 +336,9 @@ pub struct ViewState {
     /// WordCraft patch: a key event is being interpreted (`interpretKeyEvents`): an
     /// `insertText:` then is the key's own text, which the key event reports.
     in_key_event: Cell<bool>,
+    /// WordCraft patch: the characters of the key event being interpreted. An `insertText:`
+    /// within it of other text is the input method's (see `insertText:`).
+    key_text: RefCell<String>,
     accepts_first_mouse: bool,
 
     // Weak reference because the window keeps a strong reference to the view
@@ -480,6 +500,20 @@ declare_class!(
             replacement_range: NSRange,
         ) {
             trace_scope!("setMarkedText:selectedRange:replacementRange:");
+            ime_trace(|| {
+                let text = if string.is_kind_of::<NSAttributedString>() {
+                    let s: *const NSAttributedString = (string as *const NSObject).cast();
+                    unsafe { &*s }.string().to_string()
+                } else {
+                    let s: *const NSString = (string as *const NSObject).cast();
+                    unsafe { &*s }.to_string()
+                };
+                format!(
+                    "setMarkedText {text:?} selected {}+{} replacement {}+{} hadMarked {} state {:?} inKey {}",
+                    selected_range.location, selected_range.length, replacement_range.location as isize, replacement_range.length,
+                    unsafe { self.hasMarkedText() }, self.ivars().ime_state.get(), self.ivars().in_key_event.get()
+                )
+            });
 
             // WordCraft patch: where the marked text goes. A replacement range names committed
             // text to replace (reconversion); otherwise it replaces the marked text, or the
@@ -567,6 +601,7 @@ declare_class!(
         #[method(unmarkText)]
         fn unmark_text(&self) {
             trace_scope!("unmarkText");
+            ime_trace(|| format!("unmarkText marked {:?} state {:?}", self.ivars().marked_text.borrow().string().to_string(), self.ivars().ime_state.get()));
             // WordCraft patch: `unmarkText` commits the marked text as it stands (the
             // `NSTextInputClient` contract, what `NSTextView` and Word do); winit dropped it.
             let committed = self.ivars().marked_text.borrow().string().to_string();
@@ -669,6 +704,13 @@ declare_class!(
             };
 
             let is_control = string.chars().next().is_some_and(|c| c.is_control());
+            ime_trace(|| {
+                format!(
+                    "insertText {string:?} replacement {}+{} hasMarked {} state {:?} inKey {} key {:?}",
+                    replacement_range.location as isize, replacement_range.length, unsafe { self.hasMarkedText() },
+                    self.ivars().ime_state.get(), self.ivars().in_key_event.get(), self.ivars().key_text.borrow()
+                )
+            });
 
             // Commit only if we have marked text.
             if unsafe { self.hasMarkedText() } && self.is_ime_enabled() && !is_control {
@@ -688,6 +730,22 @@ declare_class!(
                 let range = self.ime_edit_range(replacement_range);
                 self.ime_update_surrounding(range, &string, None);
                 self.queue_event(WindowEvent::Ime(Ime::Commit(string)));
+            } else if self.ivars().in_key_event.get()
+                && self.is_ime_enabled()
+                && !is_control
+                && !string.is_empty()
+                && string != *self.ivars().key_text.borrow()
+            {
+                // WordCraft patch: within a key event, text other than the key's own characters is
+                // the input method's — the rest of a conversion committed after its first clause,
+                // whose marking this view no longer holds, or a character the input method makes
+                // of the key (the full-width space): a commit, and the key itself isn't reported
+                // (`Committed`). Before, it was taken for the key's text and dropped, and the
+                // key (Return) went to the application instead.
+                let range = self.ime_edit_range(replacement_range);
+                self.ime_update_surrounding(range, &string, None);
+                self.queue_event(WindowEvent::Ime(Ime::Commit(string)));
+                self.ivars().ime_state.set(ImeState::Committed);
             }
         }
 
@@ -696,6 +754,7 @@ declare_class!(
         #[method(doCommandBySelector:)]
         fn do_command_by_selector(&self, _command: Sel) {
             trace_scope!("doCommandBySelector:");
+            ime_trace(|| format!("doCommandBySelector {} state {:?}", _command.name(), self.ivars().ime_state.get()));
             // We shouldn't forward any character from just committed text, since we'll end up sending
             // it twice with some IMEs like Korean one. We'll also always send `Enter` in that case,
             // which is not desired given it was used to confirm IME input.
@@ -743,6 +802,8 @@ declare_class!(
             if self.ivars().ime_allowed.get() {
                 let events_for_nsview = NSArray::from_slice(&[&*event]);
                 // WordCraft patch: `insertText:` within is the key's own text (see `insertText:`).
+                *self.ivars().key_text.borrow_mut() = unsafe { event.characters() }.map(|s| s.to_string()).unwrap_or_default();
+                ime_trace(|| format!("keyDown {:?} state {:?} marked {:?}", self.ivars().key_text.borrow(), self.ivars().ime_state.get(), self.ivars().marked_text.borrow().string().to_string()));
                 self.ivars().in_key_event.set(true);
                 unsafe { self.interpretKeyEvents(&events_for_nsview) };
                 self.ivars().in_key_event.set(false);
@@ -767,6 +828,7 @@ declare_class!(
                 _ => old_ime_state != self.ivars().ime_state.get(),
             };
 
+            ime_trace(|| format!("  keyDown done state {:?} forward {}", self.ivars().ime_state.get(), !had_ime_input || self.ivars().forward_key_to_app.get()));
             if !had_ime_input || self.ivars().forward_key_to_app.get() {
                 let key_event = create_key_event(&event, true, unsafe { event.isARepeat() });
                 self.queue_event(WindowEvent::KeyboardInput {
@@ -1088,6 +1150,7 @@ impl WinitView {
             marked_selected: Cell::new(NSRange::new(0, 0)),
             marked_replaced: RefCell::new(String::new()),
             in_key_event: Cell::new(false),
+            key_text: RefCell::new(String::new()),
             accepts_first_mouse,
             _ns_window: WeakId::new(&window.retain()),
             option_as_alt: Cell::new(option_as_alt),
@@ -1166,10 +1229,25 @@ impl WinitView {
             return;
         }
         self.ivars().ime_allowed.set(ime_allowed);
+        ime_trace(|| format!("setImeAllowed {ime_allowed} marked {:?}", self.ivars().marked_text.borrow().string().to_string()));
         if self.ivars().ime_allowed.get() {
             return;
         }
 
+        // WordCraft patch: marked text the application stops taking input for is committed, as
+        // `unmarkText` commits it, and the input method is told it's gone; it was dropped on this
+        // side only, so the input method's later commit of it found no marked text here and was
+        // lost.
+        let committed = self.ivars().marked_text.borrow().string().to_string();
+        if !committed.is_empty() {
+            let range = self.ime_edit_range(NSRange::new(NSNotFound as NSUInteger, 0));
+            self.ime_update_surrounding(range, &committed, None);
+            if let Some(input_context) = self.inputContext() {
+                input_context.discardMarkedText();
+            }
+            self.queue_event(WindowEvent::Ime(Ime::Preedit(String::new(), None)));
+            self.queue_event(WindowEvent::Ime(Ime::Commit(committed)));
+        }
         // Clear markedText
         *self.ivars().marked_text.borrow_mut() = NSMutableAttributedString::new();
 
