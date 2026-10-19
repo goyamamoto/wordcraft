@@ -1031,6 +1031,20 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 draw(ctx, doc, it, view * m, &local, opts);
             }
         }
+        Draw::Scaled { x, sx, items } => {
+            // Stretched along the text about x: a degenerate scale draws the items as they are.
+            let Some([a, b, c, d, e, f]) = Draw::scale_matrix(*x, *sx) else {
+                for it in items {
+                    draw(ctx, doc, it, view, visible, opts);
+                }
+                return;
+            };
+            let m = Affine::new([a, b, c, d, e, f].map(f64::from));
+            let local = m.inverse().transform_rect_bbox(*visible);
+            for it in items {
+                draw(ctx, doc, it, view * m, &local, opts);
+            }
+        }
     }
 }
 
@@ -1336,6 +1350,31 @@ mod tests {
     /// Ink in a raster: the sum of how far each pixel is from white.
     fn ink(img: &Rendered) -> u64 {
         img.pixels.as_chunks::<4>().0.iter().map(|p| 255 - p[0] as u64).sum()
+    }
+
+    /// Character scaling (`w:w`) stretches the glyph shapes, not only the advances (Word for
+    /// Mac, `hw1`, 2026-10-19): a row of W's at 50 % covers half the width it does at 100 %, at
+    /// 200 % twice, starting where it did.
+    #[test]
+    fn character_scaling_stretches_the_glyphs() {
+        let ink_span = |scale: Option<f32>| {
+            let chr = wordcraft_doc::CharProps { size: Some(24.0), scale, ..Default::default() };
+            let mut d = Document::from_text("");
+            d.body.clear();
+            d.body.push(wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("WWWWWWWWWW", chr)));
+            let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+            let img = render_page(&d, &l.pages[0], 2.0, &RenderOptions::default());
+            let w = img.width as usize;
+            let cols: Vec<usize> = img.pixels.as_chunks::<4>().0.iter().enumerate().filter(|(_, p)| p[0] < 128).map(|(i, _)| i % w).collect();
+            (cols.iter().min().copied().unwrap_or(0) as f32, cols.iter().max().copied().unwrap_or(0) as f32)
+        };
+        let (l1, r1) = ink_span(None);
+        let (l2, r2) = ink_span(Some(50.0));
+        let (l3, r3) = ink_span(Some(200.0));
+        assert!((l1 - l2).abs() <= 2.0 && (l1 - l3).abs() <= 2.0, "the text starts where it did: {l1} {l2} {l3}");
+        let (w1, w2, w3) = (r1 - l1, r2 - l2, r3 - l3);
+        assert!(w1 > 100.0 && ((w2 / w1) - 0.5).abs() < 0.06, "50 %: {w2} of {w1}");
+        assert!(((w3 / w1) - 2.0).abs() < 0.12, "200 %: {w3} of {w1}");
     }
 
     #[test]

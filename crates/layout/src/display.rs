@@ -131,6 +131,14 @@ pub enum Draw {
     /// A rotated or flipped picture, shape, chart, group or Drawing Canvas: `items` drawn
     /// turned by `spin` about page point (`cx`, `cy`) (see [`Spin::matrix`]).
     Rotated { cx: f32, cy: f32, spin: Spin, items: Vec<Draw> },
+    /// Character scaling (`w:w`, Font › Advanced › Scale): `items` drawn stretched `sx` times
+    /// along the text (the frame's x) about the line x = `x`. Word scales the glyph shapes with
+    /// the advances (a 24-pt 日 at 50 % is drawn 11.88 pt wide and advances 12; at 200 %, 48 and
+    /// 48 — Word for Mac, `hw1`, 2026-10-19), and squashes a 縦書き column's upright characters
+    /// and lying Latin along the column the same way (`hw2`). The glyph runs inside hold their
+    /// unscaled positions (every advance as at 100 %), so the stretch lands each glyph where the
+    /// layout placed it.
+    Scaled { x: f32, sx: f32, items: Vec<Draw> },
     /// `items` clipped to `rect` (a Drawing Canvas's members to its frame). Inside a
     /// [`Draw::Rotated`], `rect` is in the turned frame's (unturned) coordinates.
     Clip { rect: Rect, items: Vec<Draw> },
@@ -146,6 +154,20 @@ pub enum Draw {
 impl Draw {
     /// The affine map (a, b, c, d, e, f: x' = a·x + c·y + e, y' = b·x + d·y + f) from a frame
     /// turned `turn` with its origin at page point (`x`, `y`) to the page.
+    /// The matrix of a [`Draw::Scaled`]: a stretch of `sx` along x about the line x = `x`;
+    /// `None` when there is nothing to do or the scale isn't a usable number (Word's scale runs
+    /// 1–600 %).
+    pub fn scale_matrix(x: f32, sx: f32) -> Option<[f32; 6]> {
+        (x.is_finite() && sx.is_finite() && (0.005..=10.0).contains(&sx) && (sx - 1.0).abs() > 1e-4).then_some([
+            sx,
+            0.0,
+            0.0,
+            1.0,
+            x * (1.0 - sx),
+            0.0,
+        ])
+    }
+
     pub fn turn_matrix(turn: TextDirection, x: f32, y: f32) -> [f32; 6] {
         match turn {
             TextDirection::Horizontal => [1.0, 0.0, 0.0, 1.0, x, y],
@@ -623,11 +645,16 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, alpha: f32, outer
             let mut items = Vec::new();
             lines(doc, *story, path, para, *l0, *l1, 0.0, 0.0, opts, alpha, &mut items);
             // Link areas are axis-aligned page rectangles: turned text gets none.
-            for d in &mut items {
-                if let Draw::Glyphs { link, .. } = d {
-                    *link = None;
+            fn unlink(items: &mut [Draw]) {
+                for d in items {
+                    match d {
+                        Draw::Glyphs { link, .. } => *link = None,
+                        Draw::Scaled { items, .. } => unlink(items),
+                        _ => {}
+                    }
                 }
             }
+            unlink(&mut items);
             if *turn == TextDirection::Down {
                 items = upright_east_asian(items);
             }
@@ -937,6 +964,15 @@ fn lines(
                 for g in &mut glyphs {
                     g.2 += lying;
                 }
+                // Character scaling stretches the glyphs about the run's first glyph: the run is
+                // drawn inside a `Draw::Scaled` from its unscaled positions.
+                let sx = rc.scale / 100.0;
+                let scaled = (sx.is_finite() && (sx - 1.0).abs() > 1e-4 && sx > 0.0).then(|| glyphs.first().map_or(x, |g| g.1));
+                if let Some(x0) = scaled {
+                    for g in &mut glyphs {
+                        g.1 = x0 + (g.1 - x0) / sx;
+                    }
+                }
                 let item = Draw::Glyphs {
                     face: st.face,
                     size: st.size,
@@ -950,10 +986,15 @@ fn lines(
                     ranges,
                     text_bg,
                 };
+                let mut items = Vec::new();
+                let sink = if scaled.is_some() { &mut items } else { &mut *out };
                 if pl.vertical {
-                    stand_up(item, Some(base - st.shift - dy - st.v_centre), st.named.map(|n| n.v_origin as f32), out);
+                    stand_up(item, Some(base - st.shift - dy - st.v_centre), st.named.map(|n| n.v_origin as f32), sink);
                 } else {
-                    out.push(item);
+                    sink.push(item);
+                }
+                if let Some(x0) = scaled {
+                    out.push(Draw::Scaled { x: x0, sx, items });
                 }
             }
             // 縦中横: the run's glyphs centred in the cluster's box, turned a quarter anticlockwise
@@ -1789,8 +1830,11 @@ fn canvas_background(rect: Rect, c: &wordcraft_doc::para::CanvasStyle) -> Draw {
 /// and the prolonged sound mark turn with the line, as their vertical forms do.
 /// Dashes and quotation marks (U+2010–U+2027) lie along a vertical column even when the font
 /// has vertical alternates for them.
+/// Characters that lie on their side in a vertical column whatever vertical alternate the font
+/// offers: the dashes and ellipses of General Punctuation, and the half-width katakana, which
+/// Word for Mac lays lying at half an em each (`hw2`, 2026-10-19).
 fn lies_in_vertical(c: char) -> bool {
-    matches!(c, '\u{2010}'..='\u{2027}')
+    matches!(c, '\u{2010}'..='\u{2027}' | '\u{FF61}'..='\u{FF9F}')
 }
 
 /// Does character `c`, shaped as glyph `gid` of `face`, stand upright in a vertical column?
@@ -2092,7 +2136,10 @@ fn strike_draws(double: bool, x0: f32, x1: f32, geo: &DecoGeo, color: Rgb, alpha
 fn upright_east_asian(items: Vec<Draw>) -> Vec<Draw> {
     let mut out = Vec::with_capacity(items.len());
     for d in items {
-        stand_up(d, None, None, &mut out);
+        match d {
+            Draw::Scaled { x, sx, items } => out.push(Draw::Scaled { x, sx, items: upright_east_asian(items) }),
+            d => stand_up(d, None, None, &mut out),
+        }
     }
     out
 }
