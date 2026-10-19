@@ -4120,6 +4120,26 @@ fn table_style_parts_format_every_table_using_the_style() {
     assert_eq!(s.doc.styles.get("Parts").unwrap().table_part(TablePart::LastCol).chr.font, None);
 }
 
+/// Crop marks (Word › Preferences › View): shown at the corners of the text area in the Japan
+/// region by default — Word for Mac with Japanese editing shows them (2026-10-19) — and off
+/// elsewhere; `view.cropMarks` chooses for good, touching neither the document nor the undo stack.
+#[test]
+fn crop_marks_follow_the_region_until_chosen() {
+    use wordcraft_geom::Region;
+    let mut t = s();
+    t.system_region = Region::from_tag("ja-JP");
+    assert!(t.crop_marks());
+    t.system_region = Region::from_tag("en-US");
+    assert!(!t.crop_marks());
+    let undo = t.undo_labels();
+    assert_eq!(run(&mut t, "view.cropMarks", json!({}))["value"], true);
+    assert!(t.crop_marks());
+    t.system_region = Region::from_tag("ja-JP");
+    assert_eq!(run(&mut t, "view.cropMarks", json!({"value": false}))["value"], false);
+    assert!(!t.crop_marks(), "the choice holds whatever the region");
+    assert_eq!(t.undo_labels(), undo);
+}
+
 #[test]
 fn page_and_table_gridlines_toggle_independently() {
     // #69: View › Gridlines (the page drawing grid) and Table Layout › View Gridlines (table cell

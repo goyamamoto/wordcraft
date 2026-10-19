@@ -254,6 +254,10 @@ fn display(app: &mut WordApp, ui: &mut Ui) {
     if ui.checkbox(&mut ruler, tl!("Show rulers")).changed() {
         let _ = app.run("view.ruler", json!({"value": ruler}));
     }
+    let mut crop = app.session.crop_marks();
+    if ui.checkbox(&mut crop, tl!("Crop marks")).changed() {
+        let _ = app.run("view.cropMarks", json!({"value": crop}));
+    }
     numeral_picker(app, ui);
     ui.add_space(8.0);
     section(ui, "Printing");
