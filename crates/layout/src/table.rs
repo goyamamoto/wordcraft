@@ -44,9 +44,6 @@ pub struct TableLayout {
 
 const DEFAULT_MARGINS: [f32; 4] = [0.0, 5.4, 0.0, 5.4];
 
-/// The longest line turned text gets when its row height isn't exact (a Letter page's body
-/// height): longer text wraps.
-const TURNED_MAX: f32 = 648.0;
 /// The longest line turned text ever gets (Word's largest page, 22 inches).
 const TURNED_LIMIT: f32 = 1584.0;
 
@@ -56,6 +53,9 @@ struct Turned {
     /// Line length it was laid out with, and how far its lines reach across the cell.
     len: f32,
     across: f32,
+    /// The cell's top and bottom margins and border bands: the row's height less these is the
+    /// length of its lines.
+    insets: f32,
     /// List counters and equation count before the cell, to lay it out again the same way.
     snap: (Counters, u32),
     /// Its table style parts and cell index in the row.
@@ -63,34 +63,6 @@ struct Turned {
     ci: usize,
     /// Top margin plus top border band.
     top: f32,
-}
-
-/// How long the lines laid out in `items` are without the room they didn't use: the length
-/// turned text needs so that nothing wraps.
-fn natural_length(items: &[Placed]) -> f32 {
-    let mut len = 0.0f32;
-    for it in items {
-        let Placed::Lines { para, l0, l1, x, .. } = it else { continue };
-        let indents = para.rp.indent_left.max(0.0) + para.rp.indent_right.max(0.0) + para.rp.indent_first.max(0.0);
-        for l in para.lines.get(*l0..*l1).unwrap_or(&[]) {
-            let (mut lo, mut hi) = (f32::MAX, f32::MIN);
-            for v in &l.vis {
-                lo = lo.min(v.x);
-                hi = hi.max(v.x + v.w);
-            }
-            if l.vis.is_empty()
-                && let (Some(a), Some(b)) = (l.xs.first(), l.xs.last())
-            {
-                (lo, hi) = (*a, *b);
-            }
-            let hy = l.hyphen.map_or(0.0, |h| h.2);
-            if hi >= lo {
-                len = len.max(x.max(0.0) + hi - lo + hy + indents);
-            }
-        }
-    }
-    // A little slack, so laying the text out again at this length doesn't wrap it.
-    len + 0.5
 }
 
 /// The table's style with its based-on chain merged.
@@ -543,23 +515,35 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 (Vec::new(), 0.0)
             } else if turn.is_turned() {
                 collapsed = false;
-                // Turned text: its lines run along the cell's height. An exact row height sets
-                // their length; otherwise they get the length the text needs unwrapped and the row
-                // grows to fit (the second pass lays them out again if the row ends up taller).
+                // Turned text never grows its row (Word for Mac, `tv1`–`tv3` probes, 2026-10-19):
+                // the cell asks for the height of one empty line — its end-of-cell mark's, on the
+                // line grid when there is one, whatever size the text is — and its lines run the
+                // row's final height, however the other cells and the row's height rule set it,
+                // wrapping into as many columns as the text needs; the columns that don't fit
+                // across the cell are cut off at its edge. The second pass lays the text out
+                // again at the row's final height.
                 let snap = (ctx.counters.clone(), ctx.eq_count);
-                let len = match (row.props.height, row.props.height_rule) {
-                    (Some(h), HeightRule::Exact) if h > 0.0 => (h + row_bottom - insets).clamp(4.0, TURNED_LIMIT),
-                    _ => {
-                        let probe = layout_box(ctx, story, &cell.blocks, &cpath, TURNED_MAX, BoxContext::Cell(text), depth, None).items;
-                        (ctx.counters, ctx.eq_count) = (snap.0.clone(), snap.1);
-                        natural_length(&probe).clamp(4.0, TURNED_MAX)
-                    }
+                let mark = cell.blocks.last().and_then(|b| b.as_para()).map_or_else(Paragraph::new, |p| {
+                    let mut e = Paragraph::new();
+                    e.props = p.props.clone();
+                    e.mark = p.mark.clone();
+                    e
+                });
+                let empty = vec![wordcraft_doc::para_block(mark)];
+                let one_line = layout_box(ctx, story, &empty, &cpath, cw, BoxContext::Cell(text), depth, None).height.max(0.0);
+                (ctx.counters, ctx.eq_count) = (snap.0.clone(), snap.1);
+                // The row's likely height: its rule's, else the empty line's.
+                let guess = match (row.props.height, row.props.height_rule) {
+                    (Some(h), HeightRule::Exact) if h > 0.0 => h + row_bottom,
+                    (Some(h), _) if h > 0.0 => (h + insets).max(one_line + insets),
+                    _ => one_line + insets,
                 };
+                let len = (guess - insets).clamp(4.0, TURNED_LIMIT);
                 let BoxLayout { items, height, floats_bottom, .. } =
                     layout_box(ctx, story, &cell.blocks, &cpath, len, BoxContext::Cell(text), depth, None);
                 let across = height.max(floats_bottom);
-                turned = Some(Turned { turn, len, across, snap, region, ci, top: margins[0] + band_t });
-                (items, len)
+                turned = Some(Turned { turn, len, across, insets, snap, region, ci, top: margins[0] + band_t });
+                (items, one_line)
             } else {
                 let BoxLayout { mut items, mut height, floats_bottom, last_top } =
                     layout_box(ctx, story, &cell.blocks, &cpath, cw, BoxContext::Cell(text), depth, None);
@@ -679,11 +663,15 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             };
             let end = (c.vmerge != VMerge::Continue && c.turned.is_none()).then_some(c.end + dy);
             let mut cell_items = c.items;
+            // Turned columns that don't fit across the cell are cut off at its edge (as Word for
+            // Mac shows them; its PDFs run them on over the neighbouring cells and off the page).
+            let mut cut_off = false;
             if let Some(tn) = c.turned {
                 dy = 0.0;
                 let m = c.margins;
-                // The lines run the cell's whole height (laid out again if the row grew).
-                let len = (span_h - (c.h - tn.len)).clamp(4.0, TURNED_LIMIT);
+                // The lines run the cell's whole height (laid out again if the row's height
+                // isn't what the first pass guessed).
+                let len = (span_h - tn.insets).clamp(4.0, TURNED_LIMIT);
                 let mut across = tn.across;
                 if (len - tn.len).abs() > 0.01
                     && let Some(cell) = t.rows.get(ri).and_then(|r| r.cells.get(tn.ci))
@@ -700,6 +688,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 // Lines stack across the cell from its start edge (right for top-to-bottom text,
                 // left for bottom-to-top); the vertical alignment moves them across it.
                 let cw = (c.w - m[1] - m[3]).max(0.0);
+                cut_off = across > cw + 0.01;
                 let off = match c.valign {
                     VAlign::Top => 0.0,
                     VAlign::Center => ((cw - across) / 2.0).max(0.0),
@@ -744,7 +733,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 row: ri,
                 cell: ci,
                 story,
-                clip: exact && c.h > span_h + 0.01,
+                clip: (exact && c.h > span_h + 0.01) || cut_off,
             });
             parts.push(CellPart { items: first..items.len(), end });
         }
