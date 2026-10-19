@@ -8013,6 +8013,7 @@ fn spaces_beside_east_asian_text_take_half_their_size() {
     let advs = |text: &str| {
         let mut d = Document::from_text("");
         d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, chr.clone()))];
+        d.settings.balance_single_byte_double_byte_width = true;
         cluster_advances(&d)
     };
     let half = size / 2.0;
@@ -8052,6 +8053,7 @@ fn lines_and_chars_grid_adds_the_gap_to_every_character_as_word_for_mac() {
         p.props.snap_to_grid = Some(true);
         d.body = vec![wordcraft_doc::para_block(p)];
         d.settings.punct_compression = wordcraft_doc::east_asian::PunctCompression::CompressPunctuation;
+        d.settings.balance_single_byte_double_byte_width = true;
         d.last_section.doc_grid = Some(DocGrid { kind, line_pitch: 18.0, char_space: DocGrid::char_space_for(size + 2.0, size) });
         cluster_advances(&d)
     };
@@ -8101,6 +8103,7 @@ fn snap_to_chars_fits_cells_and_spreads_every_line_as_word_for_mac() {
     d.body.push(wordcraft_doc::para_block(big));
     d.body.extend(["あ。、。あ|", "ＡＢＣabc|", "한글abc|", "quick brown fox. ", full.as_str()].iter().map(|t| wordcraft_doc::para_block(para(t))));
     d.settings.punct_compression = wordcraft_doc::east_asian::PunctCompression::CompressPunctuation;
+    d.settings.balance_single_byte_double_byte_width = true;
     // A 13 pt pitch: the 468 pt line holds 36 cells of exactly 13 pt.
     d.last_section.doc_grid = Some(DocGrid { kind: DocGridType::SnapToChars, line_pitch: 18.0, char_space: DocGrid::char_space_for(13.0, size) });
     let lines = first_lines(&d);
@@ -8385,6 +8388,8 @@ fn ja_doc(pieces: &[(&str, wordcraft_doc::CharProps)]) -> Option<Document> {
         p.runs.push(wordcraft_doc::Run { len: t.len(), props });
     }
     let mut d = Document::from_text("");
+    // As Word's Japanese Normal: spaces beside East Asian text take the East Asian width.
+    d.settings.balance_single_byte_double_byte_width = true;
     d.body = vec![wordcraft_doc::para_block(p)];
     Some(d)
 }
@@ -8496,6 +8501,49 @@ fn japanese_justified_lines_share_the_leftover_as_word_for_mac_does() {
     for (k, x) in xs.iter().take(35).enumerate() {
         assert!((x - (kept[k] + k as f32 * share)).abs() < 0.01, "{k}: {x} vs {}", kept[k]);
     }
+}
+
+/// Word's `w:balanceSingleByteDoubleByteWidth` (`cp6` probes, Word for Mac 2026-10-19, 10.5 pt
+/// Yu Mincho): with it — Word's Japanese template — a space beside East Asian text and every
+/// space of a run of two take the East Asian width (あ a: 5.25; ab␣␣cd: 5.24 each) and, on a
+/// lines-and-characters grid, single-byte characters gain half the gap (b after a by 5.63 on an
+/// 11.7 pt pitch, ｱ 5.85); without it every space keeps the Latin width (2.73) and single-byte
+/// characters gain the whole gap (6.23, 6.45). Full-width characters are the same either way.
+#[test]
+fn single_byte_widths_follow_words_balance_switch() {
+    use wordcraft_doc::section::{DocGrid, DocGridType};
+    let advs = |text: &str, balance: bool, grid: bool| -> Option<Vec<f32>> {
+        let mut d = ja_doc(&[(text, Default::default())])?;
+        d.settings.balance_single_byte_double_byte_width = balance;
+        if grid {
+            if let Some(Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+                p.props.snap_to_grid = Some(true);
+            }
+            d.last_section.doc_grid =
+                Some(DocGrid { kind: DocGridType::LinesAndChars, line_pitch: 18.0, char_space: DocGrid::char_space_for(11.7, 10.5) });
+        }
+        Some(cluster_advances(&d))
+    };
+    let Some(on) = advs("あ a", true, false) else { return };
+    let off = advs("あ a", false, false).unwrap();
+    assert!((on[1] - 5.25).abs() < 0.01, "an East Asian space: {on:?}");
+    assert!(off[1] < 3.5 && off[1] > 2.0, "the Latin space: {off:?}");
+    let on = advs("ab  cd", true, false).unwrap();
+    let off = advs("ab  cd", false, false).unwrap();
+    assert!((on[2] - 5.25).abs() < 0.01 && (on[3] - 5.25).abs() < 0.01, "{on:?}");
+    assert!(off[2] < 3.5 && (off[2] - off[3]).abs() < 0.01, "{off:?}");
+    // The grid: a 1.2 pt gap, half of it for single-byte characters with the switch.
+    for text in ["abc", "ｱｲｳ"] {
+        let plain = advs(text, false, false).unwrap();
+        let on = advs(text, true, true).unwrap();
+        let off = advs(text, false, true).unwrap();
+        for k in 0..3 {
+            assert!((on[k] - plain[k] - 0.6).abs() < 0.01, "{text} cluster {k} gains half the gap: {on:?} vs {plain:?}");
+            assert!((off[k] - plain[k] - 1.2).abs() < 0.01, "{text} cluster {k} gains the gap: {off:?} vs {plain:?}");
+        }
+    }
+    let (on, off) = (advs("漢字", true, true).unwrap(), advs("漢字", false, true).unwrap());
+    assert!((on[0] - 11.7).abs() < 0.01 && (off[0] - 11.7).abs() < 0.01, "漢 on the pitch: {on:?} {off:?}");
 }
 
 #[test]
