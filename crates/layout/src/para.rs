@@ -3518,9 +3518,16 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
             };
             // The last content cluster's width on the line, before the spread.
             let last_width = content.last().and_then(|&l| Some(content_end - xs.get(l - c0)?));
+            // A distributed line holding a single character has nothing to spread it between:
+            // Word for Mac centres it in the line (a, 一, １, 。, W alone, after an indent, and a
+            // paragraph's last line of one character, its PDFs read 2026-10-20).
+            let centred = if rp.align == Align::Distribute && content.len() == 1 { content.first().copied() } else { None };
             let mut add = 0.0;
             let mut ci = 0;
             for k in align_from..c1 {
+                if centred == Some(k) {
+                    add += slack / 2.0;
+                }
                 if let Some(v) = xs.get_mut(k - c0) {
                     *v += add;
                 }
