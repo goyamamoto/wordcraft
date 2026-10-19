@@ -89,6 +89,17 @@ pub struct FontFace {
     pub instance: Option<harfrust::ShaperInstance>,
     /// Basic Multilingual Plane coverage bitset, built on first use.
     bmp: std::sync::OnceLock<Box<[u64]>>,
+    /// Which kerning tables the face has (see [`FontFace::has_gpos`]), read on first use.
+    layout_tables: std::sync::OnceLock<LayoutTables>,
+}
+
+/// Where a face keeps its kerning: `GPOS` (with or without a `kern` feature) and the legacy
+/// `kern` table.
+#[derive(Clone, Copy, Default)]
+struct LayoutTables {
+    gpos: bool,
+    gpos_kern: bool,
+    kern_table: bool,
 }
 
 /// A cheap `Copy` handle to a face. Faces are never unloaded, so the handle lives for the rest of
@@ -158,6 +169,32 @@ impl FontFace {
     }
     pub fn hb(&self) -> Option<harfrust::FontRef<'_>> {
         harfrust::FontRef::from_index(self.data(), self.index).ok()
+    }
+    fn layout_tables(&self) -> LayoutTables {
+        *self.layout_tables.get_or_init(|| {
+            use skrifa::raw::TableProvider;
+            let Ok(font) = skrifa::raw::FontRef::from_index(self.data(), self.index) else { return LayoutTables::default() };
+            let kern_table = font.table_data(skrifa::raw::types::Tag::new(b"kern")).is_some();
+            let gpos = font.gpos().ok();
+            let gpos_kern = gpos.as_ref().and_then(|g| g.feature_list().ok()).is_some_and(|fl| {
+                let kern = skrifa::raw::types::Tag::new(b"kern");
+                fl.feature_records().iter().any(|r| r.feature_tag() == kern)
+            });
+            LayoutTables { gpos: gpos.is_some(), gpos_kern, kern_table }
+        })
+    }
+    /// Does the face have a `GPOS` table at all (OpenType layout, as against an AAT-only font
+    /// such as Helvetica Neue)?
+    pub fn has_gpos(&self) -> bool {
+        self.layout_tables().gpos
+    }
+    /// Does `GPOS` carry a `kern` feature (pair positioning)?
+    pub fn has_gpos_kern(&self) -> bool {
+        self.layout_tables().gpos_kern
+    }
+    /// Does the face have a legacy `kern` table?
+    pub fn has_kern_table(&self) -> bool {
+        self.layout_tables().kern_table
     }
     /// Where in the design space glyphs, metrics and outlines come from.
     pub fn location(&self) -> LocationRef<'_> {
@@ -913,6 +950,7 @@ fn make_face(bytes: FontBytes, index: u32, family: String, style: String, legacy
         bytes,
         index,
         bmp: std::sync::OnceLock::new(),
+        layout_tables: std::sync::OnceLock::new(),
     })
 }
 
@@ -1802,6 +1840,16 @@ mod tests_sysfonts;
 
 #[cfg(test)]
 mod tests {
+    /// Source Sans 3 keeps its kerning pairs in `GPOS` and has no legacy `kern` table: Word for
+    /// Mac's legacy text path (no OpenType feature asked for) leaves it unkerned.
+    #[test]
+    fn a_face_tells_where_its_kerning_lives() {
+        let face = crate::word::resolve("Source Sans 3", false, false).face;
+        assert!(face.has_gpos());
+        assert!(face.has_gpos_kern());
+        assert!(!face.has_kern_table());
+    }
+
     use super::*;
 
     /// Hebrew and Arabic in a font without them draw in one of the scripts' own families

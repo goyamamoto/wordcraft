@@ -6667,6 +6667,76 @@ fn space_before_at_the_top_of_a_page_like_word() {
     assert!(l.caret(&Pos::body(0, "first".len() + brk.len_utf8())).is_some(), "caret after the break");
 }
 
+/// Word for Mac shapes a run by two text paths, measured in its PDFs with 13 fonts (`kn1`–`kn5`
+/// probes, 2026-10-19): a run asking for no OpenType feature (`w14:ligatures` unset, the default
+/// of every document that never touched Font › Advanced) gets no ligatures and the kerning of the
+/// font's `kern` table only — 游明朝, Hiragino and Toppan Bunkyu, whose pairs are in `GPOS`,
+/// are unkerned however Kerning for fonts is set; Times New Roman, Arial, Calibri and Helvetica
+/// Neue kern — while a run asking for one gets GSUB ligatures of the kinds asked for and `GPOS`
+/// kerning. Source Sans 3 keeps its pairs in `GPOS` (no `kern` table), its ft in `liga` and its
+/// old-style figures in `onum`.
+#[test]
+fn ligatures_and_kerning_follow_word_for_macs_two_text_paths() {
+    use wordcraft_doc::props::{CharProps, Ligatures, NumForm};
+    let shape = |chr: CharProps, text: &str| -> (f32, Vec<u32>) {
+        let mut d = Document::new();
+        d.styles.default_chr.ligatures = None;
+        d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, chr))];
+        let l = lay(&d);
+        let end = d.para_at(&Pos::body(0, 0)).map_or(0, |p| p.len());
+        let width = l.caret(&Pos::body(0, end)).unwrap().x - l.caret(&Pos::body(0, 0)).unwrap().x;
+        let gids = l
+            .pages
+            .iter()
+            .flat_map(|p| p.items.iter())
+            .find_map(|it| match it {
+                Placed::Lines { story: StoryRef::Body, para, .. } => Some(para.glyphs.iter().map(|g| g.gid).collect::<Vec<_>>()),
+                _ => None,
+            })
+            .unwrap();
+        (width, gids)
+    };
+    let chr = |ligatures: Option<Ligatures>, kern: Option<f32>| CharProps {
+        font: Some("Source Sans 3".into()),
+        size: Some(12.0),
+        kern,
+        ligatures,
+        ..Default::default()
+    };
+    // Legacy path: no ligature, no kerning (Source Sans 3 has no `kern` table).
+    let (w_none, g_none) = shape(chr(None, Some(1.0)), "AVAVAV To Wo Ty Yo AWAY ft");
+    let (w_off, _) = shape(chr(None, Some(0.0)), "AVAVAV To Wo Ty Yo AWAY ft");
+    assert!((w_none - w_off).abs() < 0.01, "unkerned by the legacy path: {w_none} vs {w_off}");
+    let (_, g_fi_none) = shape(chr(None, Some(1.0)), "ft");
+    assert_eq!(g_fi_none.len(), 2, "no ligature without OpenType features: {g_fi_none:?}");
+    // OpenType path: `liga` and `GPOS` kerning.
+    let (w_std, g_std) = shape(chr(Some(Ligatures::StandardContextual), Some(1.0)), "AVAVAV To Wo Ty Yo AWAY ft");
+    assert!(w_std < w_none - 1.0, "kerned by OpenType: {w_std} vs {w_none}");
+    assert_eq!(g_std.len(), g_none.len() - 1, "ft is one glyph with standard ligatures: {g_std:?}");
+    // Contextual only: kerned (OpenType) but no standard ligature.
+    let (w_ctx, g_ctx) = shape(chr(Some(Ligatures::Contextual), Some(1.0)), "AVAVAV To Wo Ty Yo AWAY ft");
+    assert!((w_ctx - w_std).abs() < 0.01 || w_ctx < w_none - 1.0, "contextual ligatures still kern: {w_ctx} vs {w_none}");
+    assert_eq!(g_ctx.len(), g_none.len(), "contextual ligatures leave ft apart: {g_ctx:?}");
+    // Kerning for fonts off keeps the OpenType path unkerned.
+    let (w_std_off, g_std_off) = shape(chr(Some(Ligatures::Standard), Some(0.0)), "AVAVAV To Wo Ty Yo AWAY ft");
+    assert!((w_std_off - w_off).abs() > 0.0 || g_std_off.len() == g_std.len(), "ligated, unkerned");
+    assert!(w_std_off > w_std + 1.0, "Kerning for fonts off is unkerned on the OpenType path: {w_std_off} vs {w_std}");
+    // Number forms: old-style figures are other glyphs, and asking for them alone takes the OpenType path.
+    let (_, g_digits) = shape(chr(None, Some(1.0)), "1234");
+    let (_, g_old) = shape(CharProps { num_form: Some(NumForm::OldStyle), ..chr(None, Some(1.0)) }, "1234");
+    assert_eq!(g_old.len(), g_digits.len());
+    assert_ne!(g_old, g_digits, "old-style figures");
+    let (w_onum, _) = shape(CharProps { num_form: Some(NumForm::Lining), ..chr(None, Some(1.0)) }, "AVAVAV To Wo Ty Yo AWAY ft");
+    assert!(w_onum < w_none - 1.0, "a number form alone kerns by OpenType: {w_onum} vs {w_none}");
+    // A new document asks for standard and contextual ligatures, as Word's Normal does, so it kerns.
+    let mut d = Document::new();
+    d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("AVAVAV To Wo Ty Yo AWAY ft", chr(None, Some(1.0))))];
+    let l = lay(&d);
+    let end = d.para_at(&Pos::body(0, 0)).map_or(0, |p| p.len());
+    let w_new = l.caret(&Pos::body(0, end)).unwrap().x - l.caret(&Pos::body(0, 0)).unwrap().x;
+    assert!((w_new - w_std).abs() < 0.01, "new documents ligate and kern: {w_new} vs {w_std}");
+}
+
 /// Word kerns a run only when Kerning for fonts (`w:kern`) is set and the font is at least that
 /// size; WordCraft kerned everything, so its lines held more text than Word's (measured in Word for
 /// Windows with Calibri at 14 pt: no `w:kern`, `w:kern="0"` and a threshold above the size are
@@ -6676,7 +6746,9 @@ fn kerning_follows_kerning_for_fonts_like_word() {
     use wordcraft_doc::props::CharProps;
     let width = |kern: Option<f32>| {
         let mut d = Document::new();
-        let chr = CharProps { size: Some(14.0), kern, ..Default::default() };
+        // Source Sans 3: its pairs are in `GPOS`, which a new document's standard ligatures reach
+        // (the body font's stand-in on a Mac may be Helvetica Neue, an AAT font Word leaves unkerned).
+        let chr = CharProps { font: Some("Source Sans 3".into()), size: Some(14.0), kern, ..Default::default() };
         d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("AVAVAV To Wo Ty Yo AWAY", chr))];
         let l = lay(&d);
         let end = d.para_at(&Pos::body(0, 0)).map_or(0, |p| p.len());

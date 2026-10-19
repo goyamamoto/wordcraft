@@ -147,6 +147,26 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     if let Some(fx) = &c.text_effects {
         super::wordart::rpr_effects(w, fx);
     }
+    // OpenType features ([MS-DOCX] 2.3.1: after the text effects).
+    if let Some(l) = c.ligatures {
+        w.empty("w14:ligatures", &[("w14:val", l.ooxml())]);
+    }
+    if let Some(f) = c.num_form {
+        w.empty("w14:numForm", &[("w14:val", f.ooxml())]);
+    }
+    if let Some(sp) = c.num_spacing {
+        w.empty("w14:numSpacing", &[("w14:val", sp.ooxml())]);
+    }
+    if let Some(sets) = &c.stylistic_sets {
+        w.open("w14:stylisticSets", &[]);
+        for id in sets.iter().filter(|id| (1..=20).contains(*id)).take(20) {
+            w.empty("w14:styleSet", &[("w14:id", &id.to_string())]);
+        }
+        w.close("w14:stylisticSets");
+    }
+    if let Some(on) = c.cntxt_alts {
+        w.empty("w14:cntxtAlts", &[("w14:val", if on { "1" } else { "0" })]);
+    }
 }
 
 /// Does `c` produce any `w:rPr` content (besides a tracked change)?
