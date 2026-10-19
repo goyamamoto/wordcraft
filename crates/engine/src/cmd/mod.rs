@@ -8,6 +8,7 @@ pub mod citations;
 pub mod column;
 pub mod connectors;
 pub mod controls;
+pub mod dates;
 pub mod design;
 pub mod draw;
 pub mod edit;
