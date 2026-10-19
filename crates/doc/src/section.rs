@@ -928,6 +928,12 @@ pub struct SectionProps {
     /// The file states the horizontal direction (`lrTb`) outright; saving writes it back.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub text_direction_set: bool,
+    /// A top-to-bottom section stated as `tbRlV` — what Word for Mac's own 縦書き saves — whose
+    /// lines Word for Mac stacks from the left edge of the text area to the right, where `tbRl`
+    /// stacks them from the right (its PDFs and window, 2026-10-20); each line is laid out the
+    /// same either way (ruby and underlines on its right). Saving writes `tbRlV` back.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stack_left_to_right: bool,
     /// Tracked change of the section's properties (`w:sectPrChange`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fmt_change: Option<Box<crate::props::PropChange<SectionProps>>>,
@@ -970,6 +976,7 @@ impl Default for SectionProps {
             rtl: false,
             text_direction: crate::props::TextDirection::Horizontal,
             text_direction_set: false,
+            stack_left_to_right: false,
             fmt_change: None,
             doc_grid: None,
             footnote_pr: NoteProps::default(),

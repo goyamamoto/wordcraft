@@ -69,6 +69,44 @@ fn top_to_bottom_section_stacks_lines_from_the_right() {
 }
 
 #[test]
+fn a_tbrlv_section_stacks_its_lines_from_the_left_as_word_for_mac_does() {
+    // `tbRlV`, what Word for Mac's own 縦書き saves: Word for Mac stacks the lines from the left
+    // edge of the text area to the right (its PDFs, 2026-10-20: the first paragraph's line at the
+    // left margin, each next one 18 pt to its right), each laid out as in `tbRl`.
+    let mut d = vertical_doc(TextDirection::Down);
+    d.last_section.stack_left_to_right = true;
+    let l = lay(&d);
+    let page = &l.pages[0];
+    let c0 = l.caret(&Pos::body(0, 0)).unwrap();
+    let c1 = l.caret(&Pos::body(1, 0)).unwrap();
+    assert!(c1.x > c0.x, "second paragraph right of the first: {c1:?} vs {c0:?}");
+    assert!(c0.x - page.body.x < 20.0, "the first line at the left of the text area: {c0:?} {:?}", page.body);
+    assert!(body_lines(&l).iter().all(|(.., t)| *t == TextDirection::Down), "lines still run down");
+    // Within the first paragraph, line two is right of line one, characters still go down.
+    let wrap = l.index.get(&(StoryRef::Body, Path::top(0))).map(|v| v[0]).unwrap();
+    let Placed::Lines { para, .. } = &l.pages[wrap.0].items[wrap.1] else { panic!() };
+    let second = para.lines[1].start + 1;
+    let c_next = l.caret(&Pos::body(0, second)).unwrap();
+    assert!(c_next.x > c0.x + 1.0, "{c_next:?} vs {c0:?}");
+    let c2 = l.caret(&Pos::body(0, 2)).unwrap();
+    assert!(c2.top > c0.top && (c2.x - c0.x).abs() < 0.5);
+    // Each line sits where its `tbRl` twin's mirror image is: the same distance from the left
+    // edge as the twin from the right edge.
+    let mut r = d.clone();
+    r.last_section.stack_left_to_right = false;
+    let lr = lay(&r);
+    let t0 = lr.caret(&Pos::body(0, 0)).unwrap();
+    let rp = &lr.pages[0];
+    assert!(((c0.x - page.body.x) - (rp.body.right() - (t0.x + t0.width))).abs() < 0.5, "{c0:?} {t0:?}");
+    // Clicking a caret position finds it again.
+    for off in [0, 2, second] {
+        let c = l.caret(&Pos::body(0, off)).unwrap();
+        let hit = l.hit(c.page, c.x + c.width / 2.0, c.top + 0.2, StoryRef::Body).unwrap();
+        assert_eq!(hit.off, off);
+    }
+}
+
+#[test]
 fn bottom_to_top_section_stacks_lines_from_the_left() {
     let l = lay(&vertical_doc(TextDirection::Up));
     assert!(body_lines(&l).iter().all(|(.., t)| *t == TextDirection::Up));
