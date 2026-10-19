@@ -6040,6 +6040,58 @@ fn paragraph_slots_box_the_column_with_the_space_before_and_after() {
 }
 
 #[test]
+fn a_lone_character_on_a_distributed_line_is_centred_as_word_for_mac_centres_it() {
+    // Word for Mac (its PDFs read 2026-10-20, `ds1`–`ds5`): a distributed line holding one
+    // character — a, 一, １, 。, after an indent, or a paragraph's last line of one — has it
+    // centred in the line; two or more are spread to both edges.
+    let lay_one = |text: &str, indent_left: f32| {
+        let chr = wordcraft_doc::CharProps { size: Some(10.5), ..Default::default() };
+        let mut d = Document::from_text("");
+        let mut p = wordcraft_doc::Paragraph::with_text(text, chr);
+        p.props.align = Some(Align::Distribute);
+        p.props.indent_left = Some(indent_left);
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = lay(&d);
+        let pl = first_para(&l).clone();
+        pl.lines
+            .iter()
+            .map(|ln| {
+                let xs: Vec<(f32, f32)> = (ln.c0..ln.c1)
+                    .filter(|k| pl.clusters[*k].kind != crate::para::ClKind::Marker)
+                    .map(|k| (ln.xs[k - ln.c0], pl.clusters[k].adv))
+                    .filter(|(_, adv)| *adv > 0.0)
+                    .collect();
+                (ln.left, ln.right, xs)
+            })
+            .collect::<Vec<_>>()
+    };
+    let near = |a: f32, b: f32| (a - b).abs() < 0.05;
+    for (text, indent) in [("一", 0.0), ("a", 0.0), ("。", 0.0), ("一", 42.0)] {
+        let lines = lay_one(text, indent);
+        let (left, right, xs) = &lines[0];
+        let (x, adv) = xs[0];
+        assert!(near(x, left + (right - left - adv) / 2.0), "{text:?} after {indent}: {lines:?}");
+    }
+    // A trailing space doesn't count: 一 is still centred.
+    let lines = lay_one("一 ", 0.0);
+    let (left, right, xs) = &lines[0];
+    assert!(near(xs[0].0, left + (right - left - xs[0].1) / 2.0), "{lines:?}");
+    // Two characters go to the edges.
+    let lines = lay_one("一二", 0.0);
+    let (left, right, xs) = &lines[0];
+    assert!(near(xs[0].0, *left) && near(xs[1].0 + xs[1].1, *right), "{lines:?}");
+    // The last line of a paragraph, one character on it.
+    let full = "あ".repeat(80);
+    let lines = lay_one(&full, 0.0);
+    let per_line = lines[0].2.len();
+    let lines = lay_one(&"あ".repeat(per_line + 1), 0.0);
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    let (left, right, xs) = &lines[1];
+    assert_eq!(xs.len(), 1, "{lines:?}");
+    assert!(near(xs[0].0, left + (right - left - xs[0].1) / 2.0), "{lines:?}");
+}
+
+#[test]
 fn mirror_indents_swap_sides_on_even_pages() {
     // #512: with mirrored indents the left indent is the inside one, on the right of an even page.
     let mut d = Document::from_text("odd page\neven page");
