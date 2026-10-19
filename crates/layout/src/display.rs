@@ -1331,19 +1331,17 @@ fn lines(
                     ClKind::LineBreak if marks.paragraphs && opts.japanese_marks => out.push(line_break_mark(cx + 1.0, base, size)),
                     ClKind::LineBreak if marks.paragraphs => out.push(Draw::Mark { x: cx + 1.0, baseline: base, size, ch: '↵', color: None }),
                     ClKind::PageBreak | ClKind::ColumnBreak if marks.paragraphs => {
-                        let label = if c.kind == ClKind::PageBreak { '⤓' } else { '⇥' };
-                        out.push(Draw::Line {
-                            x0: cx + 2.0,
-                            y0: base - size * 0.3,
-                            x1: x + line.right,
-                            y1: base - size * 0.3,
-                            width: 0.5,
-                            color: Rgb(0x60, 0x60, 0x60),
-                            stroke: Stroke::Dotted,
-                            alpha,
-                            text_bg: None,
-                        });
-                        out.push(Draw::Mark { x: cx + 1.0, baseline: base, size, ch: label, color: None });
+                        // The paragraph mark after a page break shares the break's row: the
+                        // rule stops under it (Word for Mac: 2.75 pt into the mark's box).
+                        let mark_row = pl.lines.get(li + 1).filter(|m| m.beside && m.c0 == m.c1 && m.end == LineEnd::Para);
+                        let (x0, x1) = if line.rtl {
+                            (mark_row.map_or(x + line.left, |m| x + m.xs.first().copied().unwrap_or(line.left) - 2.75), cx - 1.0)
+                        } else {
+                            (cx + 1.0, mark_row.map_or(x + line.right, |m| x + m.xs.first().copied().unwrap_or(line.right) + 2.75))
+                        };
+                        let (rule, label) =
+                            if c.kind == ClKind::PageBreak { (BreakRule::Page, "Page Break") } else { (BreakRule::Column, "Column Break") };
+                        break_mark(rule, x0, x1, base, size, label, alpha, out);
                     }
                     _ => {}
                 }
@@ -1372,8 +1370,8 @@ fn lines(
                 });
                 // The last paragraph of a section ends in a section break instead of a plain ¶.
                 if let Some(start) = section_break_after(doc, story, path) {
-                    let (x0, x1) = if line.rtl { (x + line.left, ex - 2.0) } else { (ex + 2.0, x + line.right) };
-                    section_break_mark(start, x0, x1, base, size, alpha, out);
+                    let (x0, x1) = if line.rtl { (x + line.left, ex - 1.0) } else { (ex + 1.0, x + line.right) };
+                    break_mark(BreakRule::Section, x0, x1, base, size, section_break_label(start), alpha, out);
                 } else if opts.japanese_marks {
                     out.push(return_mark(mx, base, color));
                 } else {
@@ -1512,26 +1510,71 @@ pub fn mark_text_width(text: &str, size: f32) -> f32 {
     text.chars().map(|c| face.advance(face.glyph_for(c)) as f32 * k).sum()
 }
 
-/// A section break mark between `x0` and `x1`: a dotted double rule with the break's name centred
-/// in it (just the name when there is no room for the rule).
-fn section_break_mark(start: SectionStart, x0: f32, x1: f32, base: f32, size: f32, alpha: f32, out: &mut Vec<Draw>) {
-    let text = section_break_label(start);
+/// The rule of a page, column or section break mark, as Word for Mac draws them (`bk1`/`bk2`
+/// probes, 10.5-pt Yu Mincho, 2026-10-19): a page break's is a 2-pt band hanging from the
+/// baseline, a checkerboard of 1-pt cells, dark (#373737) and grey (#C7C7C7); a column break's
+/// two rows of 1-pt dark dots 4 pt apart, the lower row 2 pt behind the upper; a section
+/// break's the page break's band and, 2 pt below it, one more row of the checkerboard.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BreakRule {
+    Page,
+    Column,
+    Section,
+}
+
+const BREAK_DOT: Rgb = Rgb(0x37, 0x37, 0x37);
+const BREAK_CELL: Rgb = Rgb(0xC7, 0xC7, 0xC7);
+
+/// `rows` rows of Word's checkerboard from `top` down between `x0` and `x1`.
+fn checker_rows(x0: f32, x1: f32, top: f32, rows: usize, alpha: f32, out: &mut Vec<Draw>) {
+    if !(x0.is_finite() && x1.is_finite() && top.is_finite()) || x1 - x0 < 1.0 {
+        return;
+    }
+    out.push(Draw::Fill { rect: Rect::new(x0, top, x1 - x0, rows as f32), color: BREAK_CELL, alpha, text_bg: false });
+    for r in 0..rows {
+        let y = top + r as f32 + 0.5;
+        let sx = x0 + (r % 2) as f32;
+        let stroke = Stroke::Dashes { on: 1.0, off: 1.0, dots: 0 };
+        out.push(Draw::Line { x0: sx, y0: y, x1, y1: y, width: 1.0, color: BREAK_DOT, stroke, alpha, text_bg: None });
+    }
+}
+
+/// The rule of `rule` between `x0` and `x1`, hanging from `base`.
+fn break_rule(rule: BreakRule, x0: f32, x1: f32, base: f32, alpha: f32, out: &mut Vec<Draw>) {
+    match rule {
+        BreakRule::Page => checker_rows(x0, x1, base, 2, alpha, out),
+        BreakRule::Section => {
+            checker_rows(x0, x1, base, 2, alpha, out);
+            checker_rows(x0, x1, base + 4.0, 1, alpha, out);
+        }
+        BreakRule::Column => {
+            if !(x0.is_finite() && x1.is_finite() && base.is_finite()) || x1 - x0 < 1.0 {
+                return;
+            }
+            for (r, shift) in [(0.0, 0.0), (1.0, 2.0)] {
+                let y = base + r + 0.5;
+                let stroke = Stroke::Dashes { on: 1.0, off: 3.0, dots: 0 };
+                out.push(Draw::Line { x0: x0 + shift, y0: y, x1, y1: y, width: 1.0, color: BREAK_DOT, stroke, alpha, text_bg: None });
+            }
+        }
+    }
+}
+
+/// A break mark between `x0` and `x1`: its rule with the break's name centred in it on the
+/// baseline (just the name when there is no room for the rule).
+pub fn break_mark(rule: BreakRule, x0: f32, x1: f32, base: f32, size: f32, text: &str, alpha: f32, out: &mut Vec<Draw>) {
     let lsize = (size * 0.8).clamp(6.0, 11.0);
     let w = mark_text_width(text, lsize);
     let gap = lsize * 0.4;
-    let mid = base - size * 0.3;
-    let color = Rgb(0x60, 0x60, 0x60);
     if x1 - x0 <= w + 4.0 * gap {
         out.push(Draw::MarkText { x: x0, baseline: base, size: lsize, text: text.into() });
         return;
     }
     let tx = (x0 + x1 - w) / 2.0;
     for (a, b) in [(x0, tx - gap), (tx + w + gap, x1)] {
-        for y in [mid - 1.2, mid + 1.2] {
-            out.push(Draw::Line { x0: a, y0: y, x1: b, y1: y, width: 0.5, color, stroke: Stroke::Dotted, alpha, text_bg: None });
-        }
+        break_rule(rule, a, b, base, alpha, out);
     }
-    out.push(Draw::MarkText { x: tx, baseline: mid + lsize * 0.33, size: lsize, text: text.into() });
+    out.push(Draw::MarkText { x: tx, baseline: base, size: lsize, text: text.into() });
 }
 
 /// An equation's glyphs and rules with its origin at (`x`, `base`).
