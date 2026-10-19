@@ -1530,6 +1530,27 @@ struct PageBuilder<'a> {
     /// Top of the footer of the pages being started: a footer reaching above the bottom margin
     /// pushes the body up (`f32::MAX`: no footer).
     foot_top: f32,
+    /// Tables of top-to-bottom sections, drawn upright: placed on their pages once the pages
+    /// are turned (see [`place_upright_table`]).
+    upright: Vec<UprightTable>,
+}
+
+/// A table in a top-to-bottom section, as Word for Mac draws it: upright, at the real top of the
+/// text area, across the band of the unturned page where the lines after it would go.
+#[derive(Clone)]
+struct UprightTable {
+    /// Index of its page in `PageBuilder::pages`.
+    page: usize,
+    /// The unturned page's line start (the real top of the text area) and the band the table
+    /// covers across the lines: from `v`, `width` long.
+    u: f32,
+    v: f32,
+    width: f32,
+    /// The unturned text area's top and bottom when it was placed (a `tbRlV` page is mirrored
+    /// between them before it turns).
+    body: (f32, f32),
+    /// Its items, the table's top-left at the origin, as on a horizontal page.
+    items: Vec<Placed>,
 }
 
 /// Gap above the footnote separator and its length.
@@ -2198,6 +2219,7 @@ fn layout_pass(
         sect_beneath: false,
         beneath: false,
         foot_top: f32::MAX,
+        upright: Vec::new(),
     };
     // Endnotes in document order, with the section of their reference; placed at the end of a
     // section that keeps them there, else at the end of the document.
@@ -2375,12 +2397,25 @@ fn layout_pass(
         pb.flush_notes();
     }
     pb.carry.clear();
+    let upright = std::mem::take(&mut pb.upright);
     let mut pages = pb.pages;
     for p in &mut pages {
         if let Some((_, s)) = sections.get(p.section)
             && !web
         {
             vertical::turn_page(p, s.text_direction, s);
+        }
+    }
+    // Upright tables of top-to-bottom sections, onto their turned pages: their band across the
+    // lines lands at x = W − v (mirrored first on a `tbRlV` page), their top at the text area's.
+    for u in upright {
+        let Some(p) = pages.get_mut(u.page) else { continue };
+        let Some((_, s)) = sections.get(p.section) else { continue };
+        let v = if s.stack_left_to_right { u.body.0 + u.body.1 - u.v - u.width } else { u.v };
+        let (x0, y0) = (s.page_w - v - u.width, u.u);
+        for mut it in u.items {
+            it.translate(x0, y0);
+            p.items.push(it);
         }
     }
     if web && let Some(p) = pages.first_mut() {
@@ -3771,8 +3806,92 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize) -> f32
     }
 }
 
+/// A table in a top-to-bottom section, as Word for Mac lays it out (its PDFs, 2026-10-20): not
+/// turned — its rows and cell text horizontal, as on a horizontal page — at the real top of the
+/// text area, its start edge where the next line would go (the right edge in `tbRl`, the left in
+/// `tbRlV`), taking no room in the flow; every line whose column touches or crosses the table's
+/// width starts below it (the paragraph's line before it too, which touches it), the lines past
+/// it at the top again. In the unturned page the table is a band across the lines from `pb.y`:
+/// a wrap area at the lines' start, the text going on after it.
+fn place_upright_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, block: usize, body_top: f32) {
+    // The real text area's width is the unturned page's text height.
+    let s = pb.sect;
+    let real_w = (s.page_h - s.margin_top - s.margin_bottom).clamp(36.0, 31_680.0);
+    let was = ctx.vertical;
+    ctx.vertical = false;
+    let tl = table::layout_table(ctx, StoryRef::Body, t, &[block as u32], real_w, 1);
+    ctx.vertical = was;
+    let height: f32 = tl.rows.iter().map(|r| r.height.max(0.0)).sum();
+    let (left, right) = (tl.x.min(0.0), (tl.x + tl.width).max(0.0));
+    let width = (right - left).clamp(0.0, 31_680.0);
+    if pb.y + width > pb.bottom + 0.01 && !pb.at_top() {
+        pb.advance(block, body_top);
+    }
+    let (u, v) = (pb.col_x(), pb.y);
+    let mut items = Vec::new();
+    let mut y = 0.0;
+    for row in &tl.rows {
+        for it in &row.items {
+            let mut it = it.clone();
+            it.translate(tl.x - left, y);
+            items.push(it);
+        }
+        y += row.height.max(0.0);
+    }
+    // The line that ends where the table starts touches it: it starts below the table too, when
+    // it still fits its column there.
+    if let Some(pg) = pb.pages.last_mut() {
+        push_touching_line(pg, v, height);
+    }
+    // Touching counts: the band is widened by a hair so a line ending or starting at its edge
+    // still meets it.
+    const HAIR: f32 = 0.01;
+    pb.excl.push((Rect::new(u - 1.0, v - HAIR, height + 1.0, width + 2.0 * HAIR), false, None, WrapText::Right));
+    let page = pb.pages.len().saturating_sub(1);
+    let body = pb.pages.last().map_or((pb.top, pb.bottom), |p| (p.body.y, p.body.bottom()));
+    pb.upright.push(UprightTable { page, u, v, width, body, items });
+}
+
+/// Move the body line that ends at `v` on `page` (unturned) `by` points along its line, when it
+/// still fits its column: the line before an upright table, which touches it.
+fn push_touching_line(page: &mut Page, v: f32, by: f32) {
+    let Some(i) = page.items.iter().rposition(|it| {
+        matches!(it, Placed::Lines { story: StoryRef::Body, turn: TextDirection::Horizontal, .. })
+            && it_bottom(it).is_some_and(|b| (b - v).abs() < 0.05)
+    }) else {
+        return;
+    };
+    let Some(Placed::Lines { story, path, para, l0, l1, x, y, turn, slot }) = page.items.get(i).cloned() else { return };
+    let Some(k) = l1.checked_sub(1) else { return };
+    let (Some(first), Some(line)) = (para.lines.get(l0), para.lines.get(k)) else { return };
+    let end = line.xs.last().copied().unwrap_or(line.right);
+    if !(by.is_finite() && end + by <= line.right + 0.01) {
+        return;
+    }
+    let top = y + (line.top - first.top);
+    let last = Placed::Lines { story, path: path.clone(), para: para.clone(), l0: k, l1, x: x + by, y: top, turn, slot: slot.tail() };
+    if k > l0 {
+        if let Some(it) = page.items.get_mut(i) {
+            *it = Placed::Lines { story, path, para, l0, l1: k, x, y, turn, slot: slot.head() };
+        }
+        page.items.insert(i + 1, last);
+    } else if let Some(it) = page.items.get_mut(i) {
+        *it = last;
+    }
+}
+
+/// The bottom of a horizontal lines item on an unturned page.
+fn it_bottom(it: &Placed) -> Option<f32> {
+    let Placed::Lines { para, l0, l1, y, .. } = it else { return None };
+    item_bottom(*y, para, *l0, *l1)
+}
+
 fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, block: usize, body_top: f32) {
     pb.prev = None;
+    if !pb.web && pb.sect.text_direction == TextDirection::Down && t.props.float.is_none() {
+        place_upright_table(ctx, pb, t, block, body_top);
+        return;
+    }
     let width = pb.col_w();
     let mut tl = table::layout_table(ctx, StoryRef::Body, t, &[block as u32], width, 1);
     if let Some(f) = t.props.float.filter(|_| !pb.web) {
