@@ -1419,6 +1419,16 @@ pub fn japanese_normal(d: &mut Document) {
     d.settings.do_not_leave_backslash_alone = true;
     d.settings.adjust_line_height_in_table = true;
     d.settings.use_fe_layout = true;
+    // Its footnote and endnote text styles are the Normal style off the line grid (`fn1` probe,
+    // 2026-10-19: Word's Japanese Normal.dotm gives them `w:snapToGrid w:val="0"` and nothing
+    // else — 10.5 pt, where the English template's are 10 pt with single spacing and no space
+    // after); the reference styles are superscript in both.
+    for id in ["FootnoteText", "EndnoteText"] {
+        if let Some(style) = d.styles.get_mut(id) {
+            style.para = wordcraft_doc::props::ParaProps { snap_to_grid: Some(false), ..Default::default() };
+            style.chr = wordcraft_doc::props::CharProps::default();
+        }
+    }
     let sect = &mut d.last_section;
     sect.doc_grid = Some(wordcraft_doc::section::DocGrid { kind: wordcraft_doc::section::DocGridType::Lines, line_pitch: 18.0, char_space: 0 });
     sect.header = 851.0 / 20.0;

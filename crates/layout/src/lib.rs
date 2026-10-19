@@ -1532,9 +1532,17 @@ impl NoteSeps {
     }
 }
 
-/// A note separator or continuation notice story (`blocks`) laid out `width` wide.
+/// A note separator or continuation notice story (`blocks`) laid out `width` wide — off the
+/// line grid, as Word for Mac lays it out (`fn3`/`fn4` probes, 2026-10-19: on an 18 pt grid a
+/// Normal-styled separator paragraph of 10.5 pt Aptos is 12.8 pt tall, the font's ascent and
+/// descent, with the rule half way down it; the endnotes follow right below, and footnote lines
+/// of a style that snaps to the grid take whole pitches from there), where a gridded separator
+/// would push the endnotes a pitch less its height down (5.2 pt on an 18 pt grid, 11.2 on 24).
 fn sep_box(ctx: &mut Ctx, blocks: &Blocks, width: f32) -> SepBox {
+    let outer_grid = ctx.grid;
+    ctx.grid.line = None;
     let bl = layout_box(ctx, DECOR_STORY, blocks, &[], width, BoxContext::Other, 0, None);
+    ctx.grid = outer_grid;
     let mut items = bl.items;
     items.extend(separator_rules(blocks, &items));
     (items, bl.height)

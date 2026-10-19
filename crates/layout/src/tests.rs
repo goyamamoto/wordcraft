@@ -5924,6 +5924,65 @@ fn footnotes_restart_on_each_page_and_section() {
     assert_eq!((nums[&a], nums[&b], nums[&c]), (1, 2, 5));
 }
 
+/// Note separators lay out off the line grid, as Word for Mac's do (`fn3`/`fn4` probes,
+/// 2026-10-19: on an 18 pt grid a Normal-styled separator paragraph keeps its natural height —
+/// 12.8 pt for 10.5 pt Aptos — and starts at the bottom of the last body line's slot, the
+/// endnotes following right below it; a gridded separator pushed them 5.2 pt down).
+#[test]
+fn note_separators_lay_out_off_the_line_grid() {
+    use wordcraft_doc::section::{DocGrid, DocGridType};
+    let build = |grid: bool| {
+        let mut d = Document::from_text("Alpha\nBeta");
+        d.styles.default_para.space_after = Some(0.0);
+        let eid = d.add_part(
+            wordcraft_doc::PartKind::Endnote,
+            vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("An endnote.", Default::default()))],
+        );
+        d.insert_object(
+            &Pos::body(1, 4),
+            InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Endnote, id: eid, custom: String::new() },
+            &Default::default(),
+        )
+        .unwrap();
+        let mut p = wordcraft_doc::Paragraph::new();
+        p.insert_object(0, InlineObject::note_separator(false), &Default::default()).unwrap();
+        d.endnote_separators = wordcraft_doc::NoteSeparators { separator: Some(vec![wordcraft_doc::para_block(p)]), ..Default::default() };
+        if grid {
+            d.last_section.doc_grid = Some(DocGrid { kind: DocGridType::Lines, line_pitch: 18.0, char_space: 0 });
+        }
+        (d, eid)
+    };
+    // (body's last line bottom, separator top, separator bottom, endnote's first line top)
+    let measure = |grid: bool| {
+        let (d, eid) = build(grid);
+        let l = lay(&d);
+        let mut body_bottom = 0.0f32;
+        let mut sep = None;
+        let mut note = None;
+        for it in &l.pages[0].items {
+            let Placed::Lines { story, y, para, l0, l1, .. } = it else { continue };
+            let bottom = item_bottom(*y, para, *l0, *l1).unwrap();
+            match *story {
+                StoryRef::Body => body_bottom = body_bottom.max(bottom),
+                DECOR_STORY => sep = Some((*y, bottom)),
+                StoryRef::Part(id) if id == eid => note = Some(*y),
+                _ => {}
+            }
+        }
+        let (sy, sb) = sep.expect("separator");
+        (body_bottom, sy, sb, note.expect("endnote"))
+    };
+    let (b0, s0, e0, n0) = measure(false);
+    let (b1, s1, e1, n1) = measure(true);
+    // The separator's height is the paragraph's own, with or without the grid, and less than a pitch.
+    assert!(((e0 - s0) - (e1 - s1)).abs() < 0.01 && e1 - s1 < 18.0, "separator {} tall off the grid, {} on it", e0 - s0, e1 - s1);
+    // It starts where the body ends (the slot's bottom on the grid) and the endnote follows it.
+    assert!((s0 - b0).abs() < 0.01 && (s1 - b1).abs() < 0.01, "separator at {s0}/{s1}, body ends {b0}/{b1}");
+    assert!((n0 - e0).abs() < 0.01 && (n1 - e1).abs() < 0.01, "endnote at {n0}/{n1}, separator ends {e0}/{e1}");
+    // The grid moved the body's end (whole pitches), not the separator's height.
+    assert!(b1 > b0 + 1.0, "{b0} {b1}");
+}
+
 #[test]
 fn endnotes_at_section_end_and_footnotes_below_text() {
     use wordcraft_doc::section::{NotePos, NoteProps};

@@ -7659,6 +7659,19 @@ fn a_japanese_region_starts_from_words_japanese_normal_template() {
     assert!((d.last_section.columns.space - 21.25).abs() < 0.01, "425 twips between columns");
     assert_eq!((d.last_section.page_w, d.last_section.page_h), (595.28, 841.89), "A4 in Japan");
     assert_eq!(d.settings.east_asian_font(false, None, "漢字"), Some("游明朝"), "Han text follows the theme font language");
+    // Its footnote and endnote text styles: Normal off the line grid, no size of their own
+    // (`fn1` probe, 2026-10-19); the references superscript.
+    for id in ["FootnoteText", "EndnoteText"] {
+        let st = d.styles.get(id).expect(id);
+        assert_eq!(
+            (st.based_on.as_deref(), st.para.snap_to_grid, st.para.space_after, st.chr.size),
+            (Some("Normal"), Some(false), None, None),
+            "{id}"
+        );
+    }
+    for id in ["FootnoteReference", "EndnoteReference"] {
+        assert_eq!(d.styles.get(id).expect(id).chr.vert_align, Some(wordcraft_doc::props::VertAlign::Superscript), "{id}");
+    }
     // Word's Japanese Normal.dotm sets these compatibility switches (settings.xml of a document
     // it saved); its English one sets none of them.
     let s7 = &d.settings;
