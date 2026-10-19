@@ -1287,6 +1287,9 @@ impl Paragraph {
     /// The word around `off` (double-click): (start, end) without trailing space.
     pub fn word_at(&self, off: usize) -> (usize, usize) {
         let off = self.clamp(off);
+        if let Some(w) = self.japanese_word_at(off) {
+            return w;
+        }
         let is_w = |c: char| crate::bidi::is_word_char(c);
         let mut a = off;
         for (i, c) in self.text.get(..off).unwrap_or("").char_indices().rev() {
@@ -1315,6 +1318,31 @@ impl Paragraph {
         }
         (a, e)
     }
+    /// The Japanese word at `off`, as Word for Mac's word breaker finds it (see
+    /// [`set_japanese_word_breaker`]): when a breaker is installed and the character at `off`
+    /// (or before it, at the paragraph's end) is kana, kanji or Japanese punctuation, the word
+    /// of its sentence that holds it.
+    fn japanese_word_at(&self, off: usize) -> Option<(usize, usize)> {
+        let breaker = JAPANESE_WORDS.get()?;
+        let c = self.text.get(off..).and_then(|t| t.chars().next()).or_else(|| self.text.get(..off).and_then(|t| t.chars().next_back()))?;
+        // Japanese punctuation (、。「」…) is a word of its own in Word's breaker.
+        if !(is_japanese_letter(c) || matches!(u32::from(c), 0x3001..=0x303F | 0xFF01..=0xFF65)) {
+            return None;
+        }
+        let (a, b) = self.sentence_at(off);
+        let sentence = self.text.get(a..b)?;
+        let ends = breaker(sentence)?;
+        let rel = off.saturating_sub(a).min(sentence.len().saturating_sub(1));
+        let mut start = 0;
+        for e in ends {
+            if e > rel {
+                let (s, e) = (a + start, a + e.min(sentence.len()));
+                return (s < e && self.text.is_char_boundary(s) && self.text.is_char_boundary(e)).then_some((s, e));
+            }
+            start = e;
+        }
+        None
+    }
     /// Sentence around `off` (Ctrl+click), as Word for Mac bounds it: see [`sentence_ends`].
     pub fn sentence_at(&self, off: usize) -> (usize, usize) {
         let off = self.clamp(off);
@@ -1323,6 +1351,24 @@ impl Paragraph {
         let b = ends.iter().copied().find(|&e| e > off).unwrap_or(self.text.len());
         (a, b)
     }
+}
+
+/// Breaks Japanese text into words: the byte offsets where the words of a sentence end, or
+/// `None` when it can't. Installed by the program ([`set_japanese_word_breaker`]).
+pub type JapaneseWordBreaker = fn(&str) -> Option<Vec<usize>>;
+
+static JAPANESE_WORDS: std::sync::OnceLock<JapaneseWordBreaker> = std::sync::OnceLock::new();
+
+/// Install the breaker that finds Japanese words as Word for Mac does (a morphological analysis
+/// lives above this crate: `wordcraft-jaseg`). Without one a double-click in Japanese text
+/// selects the run of word characters around it. The first call wins.
+pub fn set_japanese_word_breaker(f: JapaneseWordBreaker) {
+    let _ = JAPANESE_WORDS.set(f);
+}
+
+/// Kana, kanji and their marks (ー, 々, ゝ, ゞ…): the letters a Japanese word is made of.
+fn is_japanese_letter(c: char) -> bool {
+    matches!(u32::from(c), 0x3005..=0x3007 | 0x3041..=0x309F | 0x30A0..=0x30FF | 0x31F0..=0x31FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0xFF66..=0xFF9F | 0x20000..=0x2FA1F)
 }
 
 /// Where the sentences of `text` end (byte offsets after each sentence, its trailing spaces

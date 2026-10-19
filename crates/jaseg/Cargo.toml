@@ -1,0 +1,13 @@
+[package]
+name = "wordcraft-jaseg"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "WordCraft Japanese word breaking: Word for Mac's words (double-click selection) from a morphological analysis (lindera with an IPADIC dictionary loaded at run time) and Word-like merge rules"
+
+[lints]
+workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+lindera = { version = "6.2.0" }
+log = { workspace = true }

@@ -15,6 +15,7 @@ workspace = true
 
 [dependencies]
 wordcraft-doc = { workspace = true }
+wordcraft-jaseg = { workspace = true }
 wordcraft-engine = { workspace = true }
 wordcraft-render = { workspace = true }
 wordcraft-mcp = { workspace = true }

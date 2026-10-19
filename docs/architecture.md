@@ -1,6 +1,6 @@
 # WordCraft architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-19 · **Change:** trivial (`vendor/winit`: winit 0.30.13 with the macOS input-method patch; previously minor: `proof` is per language: English and Polish; previously major: first committed version; `plan/architecture.md` is local-only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-20 · **Change:** trivial (`jaseg`: Japanese word breaking from a morphological analysis; previously trivial: `vendor/winit`: winit 0.30.13 with the macOS input-method patch; previously minor: `proof` is per language: English and Polish; previously major: first committed version; `plan/architecture.md` is local-only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 How WordCraft is built today (origin/main `40c5d51`). The longer design notes in
 `plan/architecture.md` are gitignored and local to the original author's machine; this file is the
@@ -23,6 +23,7 @@ guard the override and the patch.
 | L0 | `geom` | 0.2k | Units (points, twips, EMU, inches, cm), rectangles, measurement parsing |
 | L1 | `doc` | 10.0k | Document model: stories, paragraphs, runs, tables, sections, styles, numbering, fields, notes, comments, revisions, equations (OMML-shaped math tree, linear/LaTeX input); edit primitives; bidi |
 | L1 | `fonts` | 2.3k | Font database (bundled OFL + system fonts), metrics, outlines, shaping with HarfRust, Word font substitution (`word.rs`: Carlito ↔ Calibri, Caladea ↔ Cambria, Liberation ↔ Arial/Times/Courier), OpenType MATH |
+| L1 | `jaseg` | 0.3k | Japanese words as Word for Mac breaks them: lindera with an IPADIC dictionary read at run time, its morphemes merged into Word's words; installed into `doc` (`set_japanese_word_breaker`) by the apps |
 | L1 | `proof` | 3.8k | Proofing per language (`ProofLang` from a run's `w:lang`): English (public-domain word list) and Polish (installed Hunspell dictionary through a Hunspell-style affix engine) spelling and suggestions, rule-based grammar for both, hyphenation dictionary and Liang patterns (English, Polish) |
 | L2 | `layout` | 9.6k | Shaping runs, line breaking, tabs, lists, tables (row splitting, floating tables), pagination, headers/footers, notes, floating objects and wrap, math layout, fields, hit testing; produces a display list |
 | L2 | `docx` | 8.4k | OOXML WordprocessingML reader and writer (Transitional and Strict namespaces, `.docx/.docm/.dotx/.dotm`), OMML, custom properties, VBA parts preserved |
@@ -70,6 +71,7 @@ guard the override and the patch.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | trivial | `jaseg` (L1): Japanese words as Word for Mac breaks them — lindera with an IPADIC dictionary read at run time, morphemes merged into Word's words; `doc` holds the hook the apps install |
 | 2026-10-19 | trivial | `vendor/winit`: winit 0.30.13 vendored with the macOS input-method patch (surrounding text, 再変換), guarded by `apps/wordcraft/tests/winit_*.rs` |
 | 2026-10-10 | minor | `proof`: proofing languages (English, Polish), affix engine, Polish patterns; layout and engine route each run by its language |
 | 2026-10-10 | major | First committed architecture doc, from the crates' sources and `AGENTS.md` |

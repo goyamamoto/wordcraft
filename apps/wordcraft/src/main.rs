@@ -336,6 +336,8 @@ fn main() -> eframe::Result {
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     logging::install_panic_hook();
+    // Japanese words as Word for Mac breaks them (a double-click), when a dictionary is installed.
+    wordcraft_doc::set_japanese_word_breaker(wordcraft_jaseg::word_ends);
     let mut control_port: Option<u16> = std::env::var("WORDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
     let mut files = Vec::new();
     let mut sample = false;
