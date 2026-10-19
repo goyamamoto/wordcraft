@@ -240,7 +240,7 @@ fn nth(set: &[char], n: u32) -> String {
 }
 
 /// Code points `first..` enclosing 1 to `count`, decimal beyond.
-fn enclosed(n: u32, first: u32, count: u32) -> String {
+pub(crate) fn enclosed(n: u32, first: u32, count: u32) -> String {
     if (1..=count).contains(&n)
         && let Some(c) = char::from_u32(first + n - 1)
     {
@@ -279,12 +279,12 @@ pub(crate) fn decimal_full_width(n: u32) -> String {
     n.to_string().chars().map(|c| c.to_digit(10).and_then(|d| char::from_u32(0xFF10 + d)).unwrap_or(c)).collect()
 }
 
-const AIUEO: &str = "アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン";
+pub(crate) const AIUEO: &str = "アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン";
 const AIUEO_HALF: &str = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜｦﾝ";
 const IROHA: &str = "イロハニホヘトチリヌルヲワカヨタレソツネナラムウヰノオクヤマケフコエテアサキユメミシヱヒモセス";
 const IROHA_HALF: &str = "ｲﾛﾊﾆﾎﾍﾄﾁﾘﾇﾙｦﾜｶﾖﾀﾚｿﾂﾈﾅﾗﾑｳヰﾉｵｸﾔﾏｹﾌｺｴﾃｱｻｷﾕﾒﾐｼヱﾋﾓｾｽ";
-const GANADA: &str = "가나다라마바사아자차카타파하";
-const CHOSUNG: &str = "ㄱㄴㄷㄹㅁㅂㅅㅇㅈㅊㅋㅌㅍㅎ";
+pub(crate) const GANADA: &str = "가나다라마바사아자차카타파하";
+pub(crate) const CHOSUNG: &str = "ㄱㄴㄷㄹㅁㅂㅅㅇㅈㅊㅋㅌㅍㅎ";
 
 fn nth_of(set: &str, n: u32) -> String {
     n.checked_sub(1).and_then(|i| set.chars().nth(i as usize)).map(|c| c.to_string()).unwrap_or_else(|| n.to_string())
