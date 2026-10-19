@@ -1471,6 +1471,9 @@ pub fn japanese_normal(d: &mut Document) {
     let chr = &mut d.styles.default_chr;
     chr.size = Some(10.5);
     chr.size_cs = Some(12.0);
+    // Its Latin language is English (Japan), which Word has no proofing tools for: nothing in a
+    // new Japanese document is marked as misspelt until a run is given another language.
+    chr.lang = Some("en-JP".into());
     chr.lang_ea = Some("ja-JP".into());
     // Its document defaults: Kerning for fonts from 2 pt and standard and contextual ligatures.
     chr.kern = Some(2.0);
