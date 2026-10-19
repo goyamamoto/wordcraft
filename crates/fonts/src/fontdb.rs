@@ -544,6 +544,22 @@ pub const RTL_FALLBACKS: &[&str] = &[
 pub const RTL_FALLBACKS: &[&str] =
     &["Noto Naskh Arabic", "Noto Sans Arabic", "Noto Sans Hebrew", "Vazirmatn", "Segoe UI", "Arial", "Tahoma", "DejaVu Sans"];
 
+/// Is `c` a right-to-left letter (Hebrew, Arabic, Persian, Syriac…) that [`RTL_FALLBACKS`] serve?
+fn rtl_script(c: char) -> bool {
+    crate::is_rtl(c) || arabic_block(c)
+}
+
+/// Is `family` one of the right-to-left scripts' own families ([`RTL_FALLBACKS`])?
+fn rtl_ranked(family: &str) -> bool {
+    RTL_FALLBACKS.iter().any(|n| family.eq_ignore_ascii_case(n))
+}
+
+/// A right-to-left letter in a face that isn't one of its script's own families: the system is
+/// searched for one of those before this face answers ([`FontDb::search_fallback`]).
+fn unranked_rtl(c: char, family: &str) -> bool {
+    rtl_script(c) && !rtl_ranked(family)
+}
+
 /// Families tried (when installed) for characters the loaded fonts lack: CJK, symbols, emoji.
 #[cfg(not(target_arch = "wasm32"))]
 const SYSTEM_FALLBACKS: &[&str] = &[
@@ -1507,13 +1523,22 @@ impl FontDb {
         found
     }
 
-    /// The fallback face for `c`, and the number of loaded faces it was chosen from.
+    /// The fallback face for `c`, and the number of loaded faces it was chosen from. A loaded
+    /// face covering `c` answers — unless `c` is a right-to-left letter and that face is not one
+    /// of the script's own families ([`RTL_FALLBACKS`]): then the system is searched for one of
+    /// them first, so Hebrew and Arabic in a font without them draw in the same face whatever
+    /// fonts happen to be loaded (a document naming a missing serif font loads Times New Roman,
+    /// which has Hebrew; without this the next document's Hebrew took it, and Arial once Arial
+    /// was loaded).
     fn search_fallback(&self, c: char, exclude: u32) -> (Option<Arc<FontFace>>, usize) {
         let (found, n) = self.loaded_fallback(c, exclude);
-        if found.is_some() {
-            return (found, n);
+        match &found {
+            Some(f) if !unranked_rtl(c, &f.family) => (found, n),
+            _ => match self.system_search(c, exclude) {
+                (Some(f), m) => (Some(f), m),
+                (None, _) => (found, n),
+            },
         }
-        self.system_search(c, exclude)
     }
 
     /// [`Self::search_fallback`] when no loaded face covers `c`: load a system font that does,
@@ -1524,7 +1549,7 @@ impl FontDb {
         // A search that held the lock first may have loaded a font covering `c`: choose among the
         // loaded faces again before loading more.
         let (found, n) = self.loaded_fallback(c, exclude);
-        if found.is_none() && self.system_fallback(c) {
+        if found.as_ref().is_none_or(|f| unranked_rtl(c, &f.family)) && self.system_fallback(c) {
             return self.loaded_fallback(c, exclude);
         }
         (found, n)
@@ -1542,11 +1567,7 @@ impl FontDb {
         // Right-to-left letters prefer a font made for the script, so a word isn't split across
         // fonts (that breaks Arabic joining).
         let rank = |f: &FontFace| {
-            if crate::is_rtl(c) || arabic_block(c) {
-                RTL_FALLBACKS.iter().position(|n| f.family.eq_ignore_ascii_case(n)).unwrap_or(RTL_FALLBACKS.len())
-            } else {
-                0
-            }
+            if rtl_script(c) { RTL_FALLBACKS.iter().position(|n| f.family.eq_ignore_ascii_case(n)).unwrap_or(RTL_FALLBACKS.len()) } else { 0 }
         };
         // Complex scripts (Myanmar, Khmer, Indic…): a font with OpenType layout tables, preferring
         // the script's own families, so syllables reorder and stack (#604).
@@ -1653,11 +1674,18 @@ impl FontDb {
                 return false;
             }
         }
-        let covered = |db: &FontDb| db.read_faces().iter().any(|f| f.covers(c));
+        // A right-to-left letter wants one of the script's own families ([`RTL_FALLBACKS`]):
+        // another loaded face covering it doesn't end the search until those have been tried.
+        let covered = |db: &FontDb| db.read_faces().iter().any(|f| f.covers(c) && !unranked_rtl(c, &f.family));
+        let covered_at_all = |db: &FontDb| db.read_faces().iter().any(|f| f.covers(c));
         let cataloged: Vec<String> = self.read_catalog().iter().map(|e| e.family.clone()).collect();
-        let rtl = crate::is_rtl(c) || arabic_block(c);
+        let rtl = rtl_script(c);
         let preferred = RTL_FALLBACKS.iter().filter(|_| rtl);
         for fam in crate::script_fallbacks(c).iter().chain(preferred).chain(SYSTEM_FALLBACKS.iter()) {
+            if rtl && !rtl_ranked(fam) && covered_at_all(self) {
+                // None of the script's families has it; a face already loaded does.
+                return true;
+            }
             // Each family is tried once: one that fails to load isn't read again per character.
             if self.is_loaded(fam) || !cataloged.iter().any(|f| f.eq_ignore_ascii_case(fam)) {
                 continue;
@@ -1670,7 +1698,7 @@ impl FontDb {
                 return true;
             }
         }
-        if self.indexed_fallback(c) {
+        if covered_at_all(self) || self.indexed_fallback(c) {
             return true;
         }
         let mut sys = self.sys.lock().unwrap_or_else(|e| e.into_inner());
@@ -1775,6 +1803,23 @@ mod tests_sysfonts;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Hebrew and Arabic in a font without them draw in one of the scripts' own families
+    /// (`RTL_FALLBACKS`) whatever other faces are loaded: a missing serif font loads Times New
+    /// Roman, which has both, and the fallback is still Arial (or Geeza Pro) rather than the face
+    /// that happened to be loaded first.
+    #[test]
+    fn right_to_left_fallback_prefers_the_scripts_families_over_a_loaded_face() {
+        let db = FontDb::global();
+        let serif = crate::word::resolve("No Such Serif Font", false, false).face;
+        for c in ['ש', 'ع'] {
+            let Some(found) = db.fallback_for(c, u32::MAX) else { continue };
+            let ranked_installed = RTL_FALLBACKS.iter().any(|n| db.has_family(n) && db.face(n, "Regular").covers(c));
+            if serif.covers(c) && ranked_installed {
+                assert!(rtl_ranked(&found.family), "{c}: {} with {} loaded", found.family, serif.family);
+            }
+        }
+    }
 
     #[test]
     fn east_asian_run_fallback_is_cached_per_char_set() {
