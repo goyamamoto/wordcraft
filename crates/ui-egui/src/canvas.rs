@@ -4888,6 +4888,52 @@ mod tests {
     /// The input method may name committed text while its composition shows (macOS live
     /// conversion marks the words before its marked text again to convert them together), and a
     /// commit may name the text it replaces: both replace that text, never add to it.
+    /// A new blank document, the input method's marked text in its empty paragraph (a suggestion
+    /// an input method shows, or a composition), then taken back or committed: the ribbon's
+    /// Underline stays off and the text typed afterwards is not underlined (the composition's
+    /// underline stayed on the paragraph mark, so Underline showed on from then on).
+    #[test]
+    fn a_composition_in_a_new_document_leaves_underline_off() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("file.new", json!({"template": "blank"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for _ in 0..8 {
+            h.step();
+        }
+        let underline =
+            |h: &mut egui_kittest::Harness<'_, WordApp>| h.state_mut().session.run("format.state", &json!({})).unwrap()["underline"] == json!(true);
+        assert!(!underline(&mut h));
+        // A suggestion shown as marked text, then taken back (empty marked text).
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "明日は晴れるでしょう".into(), active_range_chars: None }));
+        h.step();
+        assert!(!underline(&mut h), "composing: Underline stays off, as in Word");
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None }));
+        h.step();
+        assert!(!underline(&mut h), "taken back: Underline off");
+        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "");
+        // A composition committed, then plain typing: neither underlined.
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "にほんご".into(), active_range_chars: Some(0..2) }));
+        h.step();
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None }));
+        h.event(egui::Event::Ime(egui::ImeEvent::Commit("日本語".into())));
+        h.step();
+        h.event(egui::Event::Text("a".into()));
+        h.step();
+        let s = &h.state().session;
+        let p = s.doc.para_at(&s.sel.focus).unwrap();
+        assert_eq!(p.text, "日本語a");
+        assert!(p.runs.iter().all(|r| r.props.underline.is_none()), "{:?}", p.runs);
+        assert!(p.mark.underline.is_none());
+        assert!(!underline(&mut h));
+    }
+
     #[test]
     fn ime_replaces_committed_text_named_while_composing_and_on_commit() {
         let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());

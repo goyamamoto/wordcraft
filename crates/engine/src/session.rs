@@ -1333,6 +1333,9 @@ impl Session {
         if let Some(p) = &self.pending {
             return p.clone();
         }
+        if let Some(p) = self.composition_props() {
+            return p.clone();
+        }
         let f = &self.sel.focus;
         let Some(p) = self.doc.para_at(f) else { return CharProps::default() };
         let props = p.props_at(f.off);
