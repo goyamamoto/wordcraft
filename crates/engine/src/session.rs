@@ -1394,6 +1394,79 @@ pub fn blank_document(region: &wordcraft_geom::Region) -> Document {
 /// switches (`w:doNotExpandShiftReturn`, `w:ulTrailSpace`, `w:spaceForUL`,
 /// `w:balanceSingleByteDoubleByteWidth`, `w:doNotLeaveBackslashAlone`,
 /// `w:adjustLineHeightInTable`, `w:useFELayout`). The paper follows the region as before.
+/// The styles of Word's Japanese Normal.dotm where they differ from its English one (the files
+/// Word for Mac saved after its built-in styles were applied through its object model with
+/// Japanese editing, `st1`–`st3` and `fn1` probes, 2026-10-19): the headings are black (the
+/// theme's text colour, where the English ones are its dark blue), in the major fonts (Aptos
+/// Display and 游ゴシック Light) at every level, Heading 1–3 16, 14 and 12 pt with 14, 8 and 8 pt
+/// before and 4 after, Heading 4–9 the text's size with 4 before and 2 after, none italic, all
+/// kept with the next paragraph and on one page; Title and Subtitle are centred (Subtitle 8 pt
+/// after); Quote has 8 pt after as well as before; Caption is bold and nothing else; Header and
+/// Footer keep Normal's spacing, off the line grid, with the 234 and 468 pt tabs; TOC 1 has no
+/// indent or spacing and TOC 2–9 are indented one more character a level; TOC Heading is Heading 1
+/// at 12 pt in the automatic colour with no space before or after, not kept together; footnote
+/// and endnote text are Normal off the grid (10.5 pt, where the English template's are 10 pt with
+/// single spacing and no space after), the references superscript in both.
+pub fn japanese_normal_styles(styles: &mut wordcraft_doc::styles::StyleSheet) {
+    use wordcraft_doc::props::{Align, CharProps, ParaProps, Rgb, TextColor};
+    let black = Some(TextColor::Rgb(Rgb(0, 0, 0)));
+    for n in 1..=9u32 {
+        let Some(style) = styles.get_mut(&format!("Heading{n}")) else { continue };
+        let (size, before, after) = match n {
+            1 => (Some(16.0), 14.0, 4.0),
+            2 => (Some(14.0), 8.0, 4.0),
+            3 => (Some(12.0), 8.0, 4.0),
+            _ => (None, 4.0, 2.0),
+        };
+        style.para.space_before = Some(before);
+        style.para.space_after = Some(after);
+        style.para.keep_next = Some(true);
+        style.para.keep_lines = Some(true);
+        style.chr.font = Some(wordcraft_doc::styles::HEADING_FONT.into());
+        style.chr.size = size;
+        style.chr.italic = None;
+        style.chr.color = black;
+    }
+    if let Some(style) = styles.get_mut("Title") {
+        style.para.align = Some(Align::Center);
+    }
+    if let Some(style) = styles.get_mut("Subtitle") {
+        style.para.align = Some(Align::Center);
+        style.para.space_after = Some(8.0);
+        style.chr.font = Some(wordcraft_doc::styles::HEADING_FONT.into());
+    }
+    if let Some(style) = styles.get_mut("Quote") {
+        style.para.space_after = Some(8.0);
+    }
+    if let Some(style) = styles.get_mut("Caption") {
+        style.para = ParaProps::default();
+        style.chr = CharProps { bold: Some(true), ..Default::default() };
+    }
+    for id in ["Header", "Footer"] {
+        if let Some(style) = styles.get_mut(id) {
+            style.para = ParaProps { tabs: style.para.tabs.take(), snap_to_grid: Some(false), ..Default::default() };
+        }
+    }
+    for n in 1..=9u32 {
+        if let Some(style) = styles.get_mut(&format!("TOC{n}")) {
+            style.para = ParaProps { indent_left_chars: (n > 1).then_some((n - 1) as f32), ..Default::default() };
+        }
+    }
+    if let Some(style) = styles.get_mut("TOCHeading") {
+        style.para.space_before = Some(0.0);
+        style.para.space_after = Some(0.0);
+        style.para.keep_lines = Some(false);
+        style.chr.size = Some(12.0);
+        style.chr.color = None;
+    }
+    for id in ["FootnoteText", "EndnoteText"] {
+        if let Some(style) = styles.get_mut(id) {
+            style.para = ParaProps { snap_to_grid: Some(false), ..Default::default() };
+            style.chr = CharProps::default();
+        }
+    }
+}
+
 pub fn japanese_normal(d: &mut Document) {
     let chr = &mut d.styles.default_chr;
     chr.size = Some(10.5);
@@ -1419,16 +1492,7 @@ pub fn japanese_normal(d: &mut Document) {
     d.settings.do_not_leave_backslash_alone = true;
     d.settings.adjust_line_height_in_table = true;
     d.settings.use_fe_layout = true;
-    // Its footnote and endnote text styles are the Normal style off the line grid (`fn1` probe,
-    // 2026-10-19: Word's Japanese Normal.dotm gives them `w:snapToGrid w:val="0"` and nothing
-    // else — 10.5 pt, where the English template's are 10 pt with single spacing and no space
-    // after); the reference styles are superscript in both.
-    for id in ["FootnoteText", "EndnoteText"] {
-        if let Some(style) = d.styles.get_mut(id) {
-            style.para = wordcraft_doc::props::ParaProps { snap_to_grid: Some(false), ..Default::default() };
-            style.chr = wordcraft_doc::props::CharProps::default();
-        }
-    }
+    japanese_normal_styles(&mut d.styles);
     let sect = &mut d.last_section;
     sect.doc_grid = Some(wordcraft_doc::section::DocGrid { kind: wordcraft_doc::section::DocGridType::Lines, line_pitch: 18.0, char_space: 0 });
     sect.header = 851.0 / 20.0;
