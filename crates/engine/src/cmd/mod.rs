@@ -434,6 +434,27 @@ pub fn now_iso() -> String {
     iso_from_unix_secs(now_unix())
 }
 
+/// The local time zone's offset from UTC in seconds, now (daylight saving included): the
+/// system's, or the browser's on the web; 0 when neither can say.
+pub fn local_offset_secs() -> i64 {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        i64::from(chrono::Local::now().offset().local_minus_utc())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let minutes = js_sys::Date::new_0().get_timezone_offset();
+        if minutes.is_finite() { -(minutes * 60.0) as i64 } else { 0 }
+    }
+}
+
+/// Seconds since the Unix epoch shifted to local time: dividing by 86 400 gives the local date's
+/// days since 1970-01-01, the remainder its time of day. DATE and TIME fields show local time,
+/// as Word's do (a 20:43 clock in Tokyo reads 20 時 43 分, not 11:43).
+pub fn now_local_secs() -> i64 {
+    (now_unix() as i64).saturating_add(local_offset_secs())
+}
+
 /// Days since 1970-01-01 → (year, month, day) (Howard Hinnant's algorithm).
 pub fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;

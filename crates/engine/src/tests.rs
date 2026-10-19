@@ -6608,6 +6608,23 @@ fn japanese_index_sorts_and_heads_its_entries_as_word_does() {
     assert!(!field_para.plain_text().contains('x'), "the old result is gone: {:?}", field_para.plain_text());
 }
 
+/// A DATE field updated in a Japanese document writes Japanese names (月曜日), in an English one
+/// English (Monday), by the field's own text language (`dt1` probe, 2026-10-19).
+#[test]
+fn date_fields_take_their_languages_names() {
+    let weekday = |lang: &str| {
+        let mut s = Session::new(wordcraft_doc::Document::from_text(""));
+        s.set_editing_language(Some(lang));
+        run(&mut s, "insert.field", json!({"instr": "DATE \\@ \"dddd\""}));
+        run(&mut s, "references.updateFields", json!({}));
+        s.doc.plain_text(StoryRef::Body).trim().to_string()
+    };
+    let ja = weekday("ja-JP");
+    assert!(ja.ends_with("曜日") && ja.chars().count() == 3, "{ja}");
+    let en = weekday("en-US");
+    assert!(en.ends_with("day") && en.is_ascii(), "{en}");
+}
+
 /// Review of #844: a numbered column (`1.`, `2.`, `10.`) sorts as numbers; text with no language
 /// at all follows the editing language (a Polish interface reads `3,50` as 3.5).
 #[test]
