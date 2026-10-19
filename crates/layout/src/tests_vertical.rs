@@ -107,6 +107,69 @@ fn a_tbrlv_section_stacks_its_lines_from_the_left_as_word_for_mac_does() {
 }
 
 #[test]
+fn a_table_in_a_vertical_section_stands_upright_at_the_top_as_word_for_mac_draws_it() {
+    // Word for Mac (its PDFs, 2026-10-20, `vtab` probes): a table in a top-to-bottom section is
+    // drawn horizontally at the top of the text area, its start edge where the next line would
+    // go, taking no room in the flow; the lines whose columns touch or cross its width — the
+    // paragraph's line before it included — start below it, the lines past it at the top again.
+    for ltr in [false, true] {
+        let long = "後ろの段落は十段以上にわたる長い文章です。".repeat(20);
+        let mut d = Document::from_text(&format!("前の段落\n{long}"));
+        // No space between the paragraphs, as in Word's Japanese template.
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(1, 0), &|p| {
+            p.space_after = Some(0.0);
+            p.space_before = Some(0.0);
+        })
+        .unwrap();
+        d.last_section.text_direction = TextDirection::Down;
+        d.last_section.stack_left_to_right = ltr;
+        let mut t = wordcraft_doc::Table::new(1, 1, 100.0);
+        t.rows[0].cells[0] = wordcraft_doc::table::Cell::with_text("狭い表");
+        t.rows[0].cells[0].props.width = Some(100.0);
+        d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let page = &l.pages[0];
+        let cell = page
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Placed::Cell { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .expect("a cell");
+        assert!(cell.w > cell.h, "upright: {cell:?}");
+        assert!((cell.y - page.body.y).abs() < 1.0, "at the top of the text area: {cell:?} {:?}", page.body);
+        // Its cell text runs across.
+        let c = l.caret(&Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, 0]), off: 0 }).unwrap();
+        let c2 = l.caret(&Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, 0]), off: 3 }).unwrap();
+        assert!((c2.x - c.x).abs() > 5.0 && (c2.top - c.top).abs() < 0.5, "horizontal cell text: {c:?} {c2:?}");
+        // The line before it (its last) and the lines across its width start below it; one past
+        // it starts at the top.
+        let before = l.caret(&Pos::body(0, 0)).unwrap();
+        assert!(before.top >= cell.bottom() - 0.5, "the touching line starts below the table: {before:?} {cell:?}");
+        let after = l.caret(&Pos::body(2, 0)).unwrap();
+        assert!(after.top >= cell.bottom() - 0.5, "{after:?} {cell:?}");
+        // A line well past the table's width starts at the top of the text area again: the
+        // first character of its column.
+        let line_start = |off: usize| {
+            let wrap = l.index.get(&(StoryRef::Body, Path::top(2))).map(|v| v[0]).unwrap();
+            let Placed::Lines { para, .. } = &l.pages[wrap.0].items[wrap.1] else { panic!() };
+            para.lines.iter().rev().find(|ln| ln.start <= off).map(|ln| ln.start).unwrap()
+        };
+        let far = l.caret(&Pos::body(2, line_start(long.len() / 2))).unwrap();
+        if far.page == 0 && (far.x + far.width < cell.x - 1.0 || far.x > cell.right() + 1.0) {
+            assert!((far.top - page.body.y).abs() < 1.0, "past the table, at the top: {far:?}");
+        }
+        // The table sits just past the first line on the side the lines stack from.
+        if ltr {
+            assert!(cell.x > before.x && cell.x - page.body.x < 40.0, "{cell:?} {before:?}");
+        } else {
+            assert!(cell.right() < before.x + before.width && page.body.right() - cell.right() < 40.0, "{cell:?} {before:?}");
+        }
+    }
+}
+
+#[test]
 fn bottom_to_top_section_stacks_lines_from_the_left() {
     let l = lay(&vertical_doc(TextDirection::Up));
     assert!(body_lines(&l).iter().all(|(.., t)| *t == TextDirection::Up));
