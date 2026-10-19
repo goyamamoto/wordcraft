@@ -88,6 +88,17 @@ pub fn apply(text: &str, opps: &mut Vec<usize>, kinsoku: bool, word_wrap: bool, 
                 opps.push(i);
             }
         }
+        // After a closing quotation mark before an East Asian character: Word's lists forbid ’ ”
+        // at the start of a line, not at its end (Word for Mac: 44 あ then ’いろは keeps the ’ on
+        // the first line and starts the next with い), where UAX #14 keeps a quotation mark with
+        // what follows it.
+        for (i, c) in text.char_indices() {
+            let after = i + c.len_utf8();
+            if matches!(c, '’' | '”') && next_char(after).is_some_and(|n| is_east_asian(n) && !NO_START.contains(n) && !is_conditional_starter(n))
+            {
+                opps.push(after);
+            }
+        }
         // Before a small kana or ー after an East Asian letter (not after opening punctuation),
         // at the standard level only.
         if level == Level::Standard {
@@ -152,6 +163,11 @@ mod tests {
         let small = breaks("天井がパカッと開いた。ラメシールが「ッ」", true, true);
         assert!(small.iter().any(|s| s == "ッ") && small.iter().any(|s| s == "ー"), "{small:?}");
         assert_eq!(small.iter().filter(|s| *s == "ッ").count(), 1, "not after 「: {small:?}");
+        // A line may end with ’ or ” before an East Asian character (Word's lists forbid them only
+        // at a line's start), not before a Latin letter.
+        let quotes = breaks("あ’いう”aえ", true, true);
+        assert!(quotes.iter().any(|s| s == "い"), "{quotes:?}");
+        assert!(!quotes.iter().any(|s| s == "a"), "{quotes:?}");
         // An ellipsis may start a line after a letter (Word's lists leave it out), not after 「.
         let dots = breaks("ああ…いい「…」‥う", true, true);
         assert_eq!(dots.iter().filter(|s| *s == "…").count(), 1, "{dots:?}");

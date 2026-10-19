@@ -8050,6 +8050,12 @@ fn closing_marks_end_a_justified_line_as_word_for_mac_ends_it() {
     assert!(near(l[0].2[2].0, 462.0) && near(l[0].2[2].1, 10.5) && near(l[0].2[1].0, 451.5), "{l:?}");
     let l = lines_of(&format!("{}。いろは", "あ".repeat(37)), 12.5, Align::Justify, Some(false), None);
     assert_eq!(l.iter().map(|x| x.0).collect::<Vec<_>>(), vec![36, 5], "{l:?}");
+    // ’ and ” (narrow) fit the 6 pt to spare and the line breaks after them (Word's lists forbid
+    // them only at a line's start).
+    for q in ['’', '”'] {
+        let l = lines_of(&format!("{a44}{q}いろは"), 10.5, Align::Justify, None, None);
+        assert_eq!(l.iter().map(|x| x.0).collect::<Vec<_>>(), vec![45, 3], "{q} {l:?}");
+    }
     // Kinsoku off without a grid: as with it on.
     let l = lines_of(&format!("{a44}。いろは"), 10.5, Align::Justify, None, Some(false));
     assert_eq!(l.iter().map(|x| x.0).collect::<Vec<_>>(), vec![45, 3], "{l:?}");
