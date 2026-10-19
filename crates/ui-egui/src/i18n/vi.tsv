@@ -141,12 +141,14 @@
 	Page Border	Viền trang
 	Apply to:	Áp dụng cho:
 	Whole document	Toàn bộ tài liệu
+	This document uses the Aptos font, which isn't installed. Lines and pages may break differently from Word.	Tài liệu này dùng phông Aptos, phông chưa được cài đặt. Ngắt dòng và ngắt trang có thể khác với Word.
 	This section	Phần này
 	Fill	Tô nền
 	Setting:	Thiết lập:
 	3-D	3-D
 	Custom	Tùy chỉnh
 	Style:	Kiểu:
+	Don't show again	Không hiển thị lại
 	Dot dash	Nét chấm gạch
 	Triple	Nét ba
 	Between	Giữa
@@ -370,6 +372,7 @@
 	Formatting at Selection	Định dạng tại vùng chọn
 	Formula	Công thức
 	General	Chung
+	Get Aptos from Microsoft	Tải Aptos từ Microsoft
 	Go To	Đi tới
 	Go To (⌘⌥G)	Đi tới (⌘⌥G)
 	Go To…	Đi tới…

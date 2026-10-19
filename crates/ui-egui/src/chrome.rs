@@ -394,6 +394,63 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
         });
 }
 
+/// Whether the notice offering Aptos shows: the document asks for Aptos, none is installed, and
+/// the notice wasn't closed or turned off. The check is kept per document revision.
+pub(crate) fn wants_aptos_notice(app: &WordApp, ctx: &egui::Context) -> bool {
+    if app.ui.aptos_notice_off || app.ui.aptos_notice_closed || !app.has_document() {
+        return false;
+    }
+    let key = (app.session.document_id(), app.session.rev());
+    let id = egui::Id::new("aptos_notice_check");
+    if let Some((k, missing)) = ctx.data(|d| d.get_temp::<((u64, u64), bool)>(id))
+        && k == key
+    {
+        return missing;
+    }
+    let missing = app.session.missing_aptos();
+    ctx.data_mut(|d| d.insert_temp(id, (key, missing)));
+    missing
+}
+
+/// A bar under the ribbon when the document is set in Aptos and Aptos isn't installed: Word lays
+/// the document out with Aptos, and no free font has its widths, so lines and pages may break
+/// differently here. It offers Microsoft's free download (`ui.getAptos`), and closes for this
+/// run or for good (`ui.hideAptosNotice`).
+pub fn aptos_notice(app: &mut WordApp, ui: &mut Ui) {
+    if !wants_aptos_notice(app, ui.ctx()) {
+        return;
+    }
+    let t = Tokens::get(ui.ctx());
+    egui::Panel::top("aptos_notice")
+        .frame(
+            egui::Frame::NONE.fill(t.panel).inner_margin(egui::Margin { left: 12, right: 8, top: 4, bottom: 4 }).stroke(Stroke::new(1.0, t.border)),
+        )
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(tl!(
+                        "This document uses the Aptos font, which isn't installed. Lines and pages may break differently from Word."
+                    ))
+                    .font(regular(12.0))
+                    .color(t.text),
+                );
+                if ui.button(tl!("Get Aptos from Microsoft")).clicked() {
+                    let _ = app.run("ui.getAptos", json!({}));
+                }
+                if ui.button(tl!("Don't show again")).clicked() {
+                    let _ = app.run("ui.hideAptosNotice", json!({"forever": true}));
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let close = ui.add(egui::Button::new("×").frame(false)).on_hover_text(tl!("Close"));
+                    close.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Close")));
+                    if close.clicked() {
+                        let _ = app.run("ui.hideAptosNotice", json!({}));
+                    }
+                });
+            });
+        });
+}
+
 pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Panel::bottom("status")

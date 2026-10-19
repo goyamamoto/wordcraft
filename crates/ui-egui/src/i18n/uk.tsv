@@ -190,6 +190,7 @@
 	Page Border	Межа сторінки
 	Apply to:	Застосувати до:
 	These marks show even when Show/Hide ¶ is off.	Ці знаки відображаються, навіть коли «Показати/приховати ¶» вимкнено.
+	This document uses the Aptos font, which isn't installed. Lines and pages may break differently from Word.	У цьому документі використано шрифт Aptos, який не встановлено. Розриви рядків і сторінок можуть відрізнятися від Word.
 	Title Bar	Рядок заголовка
 	Typing replaces selected text	Введення замінює виділений текст
 	Update fields before printing	Оновлювати поля перед друком
@@ -201,6 +202,7 @@
 	3-D	Об'ємна
 	Custom	Власна
 	Style:	Стиль:
+	Don't show again	Більше не показувати
 	Dot dash	Штрихпунктирна
 	Triple	Потрійна
 	Between	Між абзацами
@@ -446,6 +448,7 @@
 	Formatting at Selection	Форматування виділення
 	Formula	Формула
 	General	Загальні
+	Get Aptos from Microsoft	Завантажити Aptos від Microsoft
 	Go To	Перейти
 	Go to	Перейти
 	Go To (⌘⌥G)	Перейти (⌘⌥G)

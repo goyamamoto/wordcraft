@@ -188,6 +188,7 @@
 	Page Border	Borda da página
 	Apply to:	Aplicar a:
 	These marks show even when Show/Hide ¶ is off.	Estas marcas aparecem mesmo com Mostrar/ocultar ¶ desativado.
+	This document uses the Aptos font, which isn't installed. Lines and pages may break differently from Word.	Este documento usa a fonte Aptos, que não está instalada. As quebras de linha e de página podem ser diferentes do Word.
 	Title Bar	Barra de título
 	Typing replaces selected text	O que você digita substitui o texto selecionado
 	Update fields before printing	Atualizar campos antes de imprimir
@@ -199,6 +200,7 @@
 	3-D	3D
 	Custom	Personalizado
 	Style:	Estilo:
+	Don't show again	Não mostrar novamente
 	Dot dash	Traço e ponto
 	Triple	Tripla
 	Between	Entre parágrafos
@@ -436,6 +438,7 @@
 	Formatting at Selection	Formatação na seleção
 	Formula	Fórmula
 	General	Geral
+	Get Aptos from Microsoft	Obter o Aptos da Microsoft
 	Go To	Ir para
 	Go to	Ir para
 	Go To (⌘⌥G)	Ir para (⌘⌥G)

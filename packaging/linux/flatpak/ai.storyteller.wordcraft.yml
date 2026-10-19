@@ -50,6 +50,8 @@ modules:
       - install -Dm644 packaging/linux/ai.storyteller.wordcraft.desktop /app/share/applications/ai.storyteller.wordcraft.desktop
       - install -Dm644 packaging/linux/ai.storyteller.wordcraft.mime.xml /app/share/mime/packages/ai.storyteller.wordcraft.xml
       - mkdir -p /app/share/icons && cp -R assets/app-icon/hicolor /app/share/icons/
+      # The Japanese dictionary (the pinned archive below), beside /app/bin's binaries.
+      - mkdir -p /app/share/wordcraft/dict && cp -R ja-dict /app/share/wordcraft/dict/lindera-ipadic
       - >-
         version=$(awk '/^\[/{p=($0=="[workspace.package]");next} p&&$1=="version"{gsub(/[" ]/,"",$3);print $3;exit}' Cargo.toml);
         install -d /app/share/metainfo;
@@ -65,3 +67,8 @@ modules:
           - build-flatpak
           - .flatpak-builder
       - cargo-sources.json
+      # lindera's prebuilt IPADIC for Japanese words (see packaging/env.sh: JA_DICT_URL).
+      - type: archive
+        url: https://github.com/lindera/lindera/releases/download/v6.2.0/lindera-ipadic-6.2.0.zip
+        sha256: 5ed4bba6b429030b0387df67d40d5751d35dedef0306f4bac6d957cad5f04b72
+        dest: ja-dict

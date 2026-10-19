@@ -145,12 +145,14 @@
 	Page Border	Bordure de page
 	Apply to:	Appliquer à :
 	Whole document	Tout le document
+	This document uses the Aptos font, which isn't installed. Lines and pages may break differently from Word.	Ce document utilise la police Aptos, qui n'est pas installée. Les sauts de ligne et de page peuvent différer de Word.
 	This section	Cette section
 	Fill	Remplissage
 	Setting:	Type :
 	3-D	3-D
 	Custom	Personnalisé
 	Style:	Style :
+	Don't show again	Ne plus afficher
 	Dot dash	Tiret-point
 	Triple	Triple
 	Between	Entre
@@ -389,6 +391,7 @@
 	Formatting at Selection	Mise en forme de la sélection
 	Formula	Formule
 	General	Général
+	Get Aptos from Microsoft	Obtenir Aptos auprès de Microsoft
 	Go To	Atteindre
 	Go to	Atteindre
 	Go To (⌘⌥G)	Atteindre (⌘⌥G)

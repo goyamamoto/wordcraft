@@ -217,6 +217,7 @@
 	Document Text	Belge Metni
 	Document Title	Belge Başlığı
 	Documents you open will show up here.	Açtığınız belgeler burada görünür.
+	Don't show again	Bir daha gösterme
 	Dot-dash	Nokta-çizgi
 	Dot-dot-dash	Nokta-nokta-çizgi
 	Dotted	Noktalı
@@ -297,6 +298,7 @@
 	Formatting at Selection	Seçimdeki Biçimlendirme
 	Formula	Formül
 	General	Genel
+	Get Aptos from Microsoft	Aptos'u Microsoft'tan edinin
 	Go To	Git
 	Go to	Git
 	Go To (⌘⌥G)	Git (⌘⌥G)
@@ -775,6 +777,7 @@
 	Themes	Temalar
 	Thesaurus	Eş Anlamlılar Sözlüğü
 	Thick	Kalın
+	This document uses the Aptos font, which isn't installed. Lines and pages may break differently from Word.	Bu belge yüklü olmayan Aptos yazı tipini kullanıyor. Satır ve sayfa sonları Word'den farklı olabilir.
 	Three	Üç
 	Tight	Sıkı
 	Title	Başlık

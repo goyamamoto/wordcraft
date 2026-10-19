@@ -4124,6 +4124,27 @@ fn table_style_parts_format_every_table_using_the_style() {
 /// region by default — Word for Mac with Japanese editing shows them (2026-10-19) — and off
 /// elsewhere; `view.cropMarks` chooses for good, touching neither the document nor the undo stack.
 #[test]
+fn a_document_set_in_aptos_without_aptos_installed_is_noticed() {
+    // Office's body font since 2024: a new document asks for it through the theme.
+    let mut t = s();
+    let installed = wordcraft_fonts::FontDb::global().has_family("Aptos");
+    assert_eq!(t.missing_aptos(), !installed, "theme fonts are Aptos: {} / {}", t.doc.settings.minor_font, t.doc.settings.major_font);
+    // A document whose fonts are all others never is.
+    t.doc.settings.minor_font = "Times New Roman".into();
+    t.doc.settings.major_font = "Georgia".into();
+    t.doc.styles.default_chr.font = Some("Times New Roman".into());
+    for st in &mut t.doc.styles.styles {
+        st.chr.font = None;
+    }
+    assert!(!t.missing_aptos());
+    // A style in Aptos Display (headings) counts.
+    if let Some(st) = t.doc.styles.styles.first_mut() {
+        st.chr.font = Some("Aptos Display".into());
+    }
+    assert_eq!(t.missing_aptos(), !installed);
+}
+
+#[test]
 fn text_boundaries_are_off_until_chosen() {
     let mut t = s();
     assert!(!t.view.text_boundaries, "off in a new document, as in Word");
