@@ -19,6 +19,8 @@ fn with_grid(text: &str, kind: DocGridType, char_space: i32) -> Document {
         }
     }
     d.last_section.doc_grid = Some(DocGrid { kind, line_pitch: 18.0, char_space });
+    // As Word's Japanese Normal: single-byte characters gain half the grid's gap.
+    d.settings.balance_single_byte_double_byte_width = true;
     d
 }
 
@@ -37,6 +39,38 @@ fn lines(l: &DocLayout) -> (usize, Vec<f32>) {
         }
     }
     (first, hs)
+}
+
+/// Word's `w:adjustLineHeightInTable` (`cp5` probes, Word for Mac 2026-10-19, an 18 pt line grid):
+/// with it a table cell's lines snap to the pitch like the body's (94.7, 112.7, 130.7…); without
+/// it — Word's English template — they keep their natural heights (93.3, 108.2, 123.3: 15.1 pt
+/// apart for 10.5 pt Yu Mincho) while the body stays on the grid.
+#[test]
+fn table_text_snaps_to_the_line_grid_only_with_adjust_line_height_in_table() {
+    let cell_heights = |adjust: bool| -> (Vec<f32>, Vec<f32>) {
+        let mut d = with_grid("Body line\nAfter", DocGridType::Lines, 0);
+        let mut t = wordcraft_doc::Table::new(1, 1, 300.0);
+        let mut cell = wordcraft_doc::Paragraph::with_text("Cell line one\nCell line two", wordcraft_doc::CharProps::default());
+        cell.props = d.body[0].as_para().unwrap().props.clone();
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(cell)];
+        d.body.insert(1, std::sync::Arc::new(Block::Table(t)));
+        d.settings.adjust_line_height_in_table = adjust;
+        let l = lay(&d);
+        let (mut body, mut cell) = (Vec::new(), Vec::new());
+        for it in &l.pages[0].items {
+            if let Placed::Lines { para, path, l0, l1, .. } = it {
+                let hs = para.lines[*l0..*l1].iter().map(|line| line.height);
+                if path.0.len() > 1 { cell.extend(hs) } else { body.extend(hs) }
+            }
+        }
+        (body, cell)
+    };
+    let (body, cell) = cell_heights(true);
+    assert_eq!((body.len(), cell.len()), (2, 2), "{body:?} {cell:?}");
+    assert!(body.iter().chain(&cell).all(|h| (h - 18.0).abs() < 1e-3), "all on the pitch: body {body:?} cell {cell:?}");
+    let (body, cell) = cell_heights(false);
+    assert!(body.iter().all(|h| (h - 18.0).abs() < 1e-3), "the body stays on the grid: {body:?}");
+    assert!(cell.iter().all(|h| *h < 17.0 && *h > 10.0), "the cell's lines take their natural height: {cell:?}");
 }
 
 #[test]

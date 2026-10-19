@@ -672,7 +672,8 @@ fn fit_text_blocks(b: &mut Builder, text: &str) {
 pub(crate) const EMPHASIS_ROOM: f32 = 0.36;
 
 /// Which spaces (U+0020) take the East Asian width — half their font size — as measured in Word
-/// for Mac (10.5 pt 游明朝 and Aptos, `cg7`/`cg10`/`cg15` samples, 2026-10-19): a space next to an
+/// for Mac with `w:balanceSingleByteDoubleByteWidth` set, as its Japanese template does (without
+/// it no space does: `layout_para`; 10.5 pt 游明朝 and Aptos, `cg7`/`cg10`/`cg15` samples, 2026-10-19): a space next to an
 /// East Asian character, through other spaces, and every space of a run of two or more (あ␣a,
 /// a␣あ, あ␣␣a, a␣␣あ, x␣␣y and ab␣␣cd all take 5.25 pt a space; x␣y takes Aptos's 2.14), with
 /// or without a lines-and-characters grid. Snapping to characters (`snap_all`) measures a single
@@ -723,17 +724,21 @@ fn space_widths(b: &mut Builder, ea_space: &[bool]) {
 }
 
 /// Character grid for paragraphs that snap to it (see [`Grid`] for the measurements). Lines and
-/// characters: an East Asian character advances by its own advance (its em, or half of it for a
-/// half-width form) plus the grid's gap, its glyph at the start; Latin text and spaces gain half
-/// the gap each. Snap to characters: an East Asian character takes whole cells with its advance
-/// centred in them (a half-width ｱ sits 3.2 pt into an 11.7 pt cell); a mark of a compressed
-/// chain (`chain`) keeps its em, and Latin text its advances: `distribute_cells` fits them to
-/// cells line by line.
-fn snap_chars(b: &mut Builder, text: &str, grid: &Grid, chain: &[bool]) {
+/// characters: an East Asian character advances by its own advance plus the grid's gap, its
+/// glyph at the start; single-byte characters — Latin text, spaces and half-width forms — gain
+/// half the gap each with `w:balanceSingleByteDoubleByteWidth` (`balance`, Word's Japanese
+/// template) and the whole gap without it (`cp6` probes, Word for Mac 2026-10-19: on an 11.7 pt
+/// pitch over 10.5 pt, b follows a by 5.63 with the switch and 6.23 without, ｱ takes 5.85 and
+/// 6.45). Snap to characters: an East Asian character takes whole cells with its advance centred
+/// in them (a half-width ｱ sits 3.2 pt into an 11.7 pt cell); a mark of a compressed chain
+/// (`chain`) keeps its em, and Latin text its advances: `distribute_cells` fits them to cells
+/// line by line.
+fn snap_chars(b: &mut Builder, text: &str, grid: &Grid, chain: &[bool], balance: bool) {
     if grid.chars.is_none() {
         return;
     }
     let gap = grid.gap();
+    let single_byte_gap = if balance { gap / 2.0 } else { gap };
     for (k, c) in b.clusters.iter_mut().enumerate() {
         if !matches!(c.kind, ClKind::Text | ClKind::Space) || c.adv <= 0.0 {
             continue;
@@ -745,7 +750,11 @@ fn snap_chars(b: &mut Builder, text: &str, grid: &Grid, chain: &[bool]) {
                 continue;
             }
             let natural = (c.adv - spacing).max(0.0);
-            let adv = grid.ea_advance(natural) + spacing;
+            let adv = if grid.cell.is_none() && is_half_width_form(ch) {
+                (natural + single_byte_gap).max(0.0) + spacing
+            } else {
+                grid.ea_advance(natural) + spacing
+            };
             if grid.cell.is_some() {
                 let shift = (adv - spacing - natural) / 2.0;
                 for g in b.glyphs.get_mut(c.g0 as usize..c.g1 as usize).into_iter().flatten() {
@@ -754,9 +763,15 @@ fn snap_chars(b: &mut Builder, text: &str, grid: &Grid, chain: &[bool]) {
             }
             c.adv = adv;
         } else if grid.cell.is_none() {
-            c.adv += gap / 2.0;
+            c.adv += single_byte_gap;
         }
     }
+}
+
+/// A half-width form (ｱｲｳ, ｡｢｣ and the half-width symbols): a single-byte character to the
+/// character grid.
+fn is_half_width_form(c: char) -> bool {
+    matches!(c as u32, 0xFF61..=0xFFDC | 0xFFE8..=0xFFEE)
 }
 
 /// What a cluster is to a snap-to-characters line (see `distribute_cells`).
@@ -2283,11 +2298,15 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     }
     let snapped = rp.snap_to_grid && env.grid.chars.is_some();
     let snap_cells = snapped && env.grid.cell.is_some();
-    let ea_space = ea_space_flags(&b, &p.text, snap_cells);
+    // Spaces take the East Asian width only with `w:balanceSingleByteDoubleByteWidth` (Word's
+    // Japanese template sets it; `cp6` probes, 2026-10-19: without it あ a and ab␣␣cd keep the
+    // Latin space, 2.7 pt, in every grid).
+    let balance = env.doc.settings.balance_single_byte_double_byte_width;
+    let ea_space = if balance { ea_space_flags(&b, &p.text, snap_cells) } else { vec![false; b.clusters.len()] };
     space_widths(&mut b, &ea_space);
     let chain = if snap_cells && env.doc.settings.punct_compression.compresses() { chain_flags(&b, &p.text) } else { Vec::new() };
     if snapped {
-        snap_chars(&mut b, &p.text, &env.grid, &chain);
+        snap_chars(&mut b, &p.text, &env.grid, &chain, balance);
     }
     let autos = if rp.auto_space_de || rp.auto_space_dn {
         auto_space(&mut b, &p.text, rp.auto_space_de, rp.auto_space_dn, &env.grid, snapped)
