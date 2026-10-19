@@ -1953,11 +1953,15 @@ fn border_lines_in(d: &Document, l: &DocLayout) -> Vec<(f32, f32, f32, f32)> {
         .collect()
 }
 
+/// A character border boxes the run on its own line (ascent above the baseline to descent
+/// below), the lines outside it, and takes room: the text moves in by the border's width and
+/// what follows moves on by as much — as Word for Mac sets it (`cb1` probe, 2026-10-19).
 #[test]
 fn character_border_draws_one_box_around_run() {
     use wordcraft_doc::props::Border;
     let mut d = Document::from_text("Hello world");
     assert!(border_lines(&d).is_empty());
+    let plain = lay(&d);
     d.format_range(&Pos::body(0, 0), &Pos::body(0, 5), &|c| c.border = Some(Border::single(0.5))).unwrap();
     // One layout for both the draw list and the expected geometry: the background font scan can change metrics between layouts.
     let l = lay(&d);
@@ -1965,13 +1969,94 @@ fn character_border_draws_one_box_around_run() {
     assert_eq!(lines.len(), 4, "{lines:?}");
     let Some(Placed::Lines { para, x, y, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
     let (gx0, gx1) = (x + para.x_of(0, 0).unwrap(), x + para.x_of(0, 5).unwrap());
-    let (top, bottom) = (*y, y + para.lines[0].height);
+    let st = &para.styles[para.clusters[0].style as usize];
+    let base = y + para.lines[0].baseline - para.lines[0].top;
+    let (top, bottom) = (base - st.ascent - 0.25, base + st.descent + 0.25);
     let horiz: Vec<_> = lines.iter().filter(|l| l.1 == l.3).collect();
     let vert: Vec<_> = lines.iter().filter(|l| l.0 == l.2).collect();
     assert_eq!(horiz.len(), 2);
     assert_eq!(vert.len(), 2);
-    assert!(horiz.iter().any(|h| (h.1 - top).abs() < 0.01) && horiz.iter().any(|h| (h.1 - bottom).abs() < 0.01), "{lines:?}");
+    assert!(horiz.iter().any(|h| (h.1 - top).abs() < 0.01) && horiz.iter().any(|h| (h.1 - bottom).abs() < 0.01), "{lines:?} {top} {bottom}");
     assert!(horiz.iter().all(|h| (h.0 - gx0).abs() < 0.01 && (h.2 - gx1).abs() < 0.01), "{lines:?} {gx0} {gx1}");
+    assert!(vert.iter().any(|v| (v.0 - gx0 - 0.25).abs() < 0.01) && vert.iter().any(|v| (v.0 - gx1 + 0.25).abs() < 0.01), "{lines:?}");
+    // The box takes a point: "world" starts 1 pt later than without the border, "Hello" 0.5 pt.
+    let Some(Placed::Lines { para: p0, .. }) = plain.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+    assert!((para.x_of(0, 6).unwrap() - p0.x_of(0, 6).unwrap() - 1.0).abs() < 0.01);
+    let hello = |p: &ParaLayout| p.glyphs[p.clusters[0].g0 as usize].dx + p.x_of(0, 0).unwrap();
+    assert!((hello(para) - hello(p0) - 0.5).abs() < 0.01);
+}
+
+/// Word for Mac (`cb1` probe, 10.5-pt 游明朝 on an 18-pt line grid, 2026-10-19): the box around
+/// えお in あいうえおかき runs from the run's ascent to its descent (15.0 pt, not the 18-pt grid
+/// slot) with 0.5-pt lines outside it; か follows 22 pt after う (21 of text and the two
+/// borders); a 0.5-pt border 4 pt from the text takes 4.5 pt a side; runs with equal borders
+/// share one box, bold or not; character shading covers the run's cells on that same line and
+/// takes no room.
+#[test]
+fn character_borders_and_shading_as_word_for_mac_draws_them() {
+    use wordcraft_doc::props::{Border, Rgb};
+    use wordcraft_doc::section::{DocGrid, DocGridType};
+    if !wordcraft_fonts::word::resolve("游明朝", false, false).face.covers('語') {
+        return;
+    }
+    let doc = |f: &dyn Fn(&mut Document)| {
+        let props = wordcraft_doc::CharProps {
+            font: Some("游明朝".into()),
+            font_ea: Some("游明朝".into()),
+            size: Some(10.5),
+            lang_ea: Some("ja-JP".into()),
+            ..Default::default()
+        };
+        let mut d = Document::from_text("");
+        d.last_section.doc_grid = Some(DocGrid { kind: DocGridType::Lines, line_pitch: 18.0, char_space: 0 });
+        d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("あいうえおかき", props))];
+        f(&mut d);
+        d
+    };
+    let para_of = |l: &DocLayout| {
+        l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, x, y, .. } = i { Some((para.clone(), *x, *y)) } else { None }).unwrap()
+    };
+    let near = |a: f32, b: f32| (a - b).abs() < 0.05;
+    // えお bordered (bytes 9..15).
+    let d = doc(&|d| d.format_range(&Pos::body(0, 9), &Pos::body(0, 15), &|c| c.border = Some(Border::single(0.5))).unwrap());
+    let l = lay(&d);
+    let (para, x, y) = para_of(&l);
+    let (u, ka) = (para.x_of(0, 6).unwrap(), para.x_of(0, 15).unwrap());
+    assert!(near(ka - u, 10.5 + 22.0), "か {ka} う {u}");
+    let lines = border_lines_in(&d, &l);
+    let horiz: Vec<_> = lines.iter().filter(|l| l.1 == l.3).collect();
+    let (t, b) = (horiz.iter().map(|h| h.1).fold(f32::MAX, f32::min), horiz.iter().map(|h| h.1).fold(f32::MIN, f32::max));
+    assert!(near(b - t - 0.5, 15.015), "box {t}..{b}");
+    let base = y + para.lines[0].baseline - para.lines[0].top;
+    assert!((t + 0.25 - (base - 10.5 * 1.051)).abs() < 0.1 && (b - 0.25 - (base + 10.5 * 0.379)).abs() < 0.1, "box {t}..{b} base {base}");
+    assert!(near(horiz[0].0, x + u + 10.5) && near(horiz[0].2, x + ka), "{horiz:?}");
+    // 4 pt from the text: 4.5 pt a side.
+    let d =
+        doc(&|d| d.format_range(&Pos::body(0, 9), &Pos::body(0, 15), &|c| c.border = Some(Border { space: 4.0, ..Border::single(0.5) })).unwrap());
+    let (para, ..) = para_of(&lay(&d));
+    assert!(near(para.x_of(0, 15).unwrap() - para.x_of(0, 6).unwrap(), 10.5 + 21.0 + 9.0));
+    // えお plain and かき bold with the same border: one box, く 1 pt after き's advance.
+    let d = doc(&|d| {
+        d.format_range(&Pos::body(0, 9), &Pos::body(0, 21), &|c| c.border = Some(Border::single(0.5))).unwrap();
+        d.format_range(&Pos::body(0, 15), &Pos::body(0, 21), &|c| c.bold = Some(true)).unwrap();
+    });
+    let l = lay(&d);
+    assert_eq!(border_lines_in(&d, &l).len(), 4);
+    let (para, ..) = para_of(&l);
+    assert!(near(para.x_of(0, 15).unwrap() - para.x_of(0, 9).unwrap(), 21.0 + 0.5), "no room between the runs");
+    // Shading: the run's cells on its own line, no room.
+    let d = doc(&|d| d.format_range(&Pos::body(0, 9), &Pos::body(0, 15), &|c| c.shading = Some(Rgb(0xD9, 0xD9, 0xD9))).unwrap());
+    let l = lay(&d);
+    let (para, x, y) = para_of(&l);
+    assert!(near(para.x_of(0, 15).unwrap() - para.x_of(0, 6).unwrap(), 31.5));
+    let fills: Vec<_> = display::page_display(&d, &l.pages[0], &Default::default())
+        .into_iter()
+        .filter_map(|i| if let display::Draw::Fill { rect, text_bg: true, .. } = i { Some(rect) } else { None })
+        .collect();
+    let base = y + para.lines[0].baseline - para.lines[0].top;
+    assert!(fills.iter().all(|r| near(r.h, 15.015) && (r.y - (base - 10.5 * 1.051)).abs() < 0.1), "{fills:?}");
+    let (lo, hi) = (fills.iter().map(|r| r.x).fold(f32::MAX, f32::min), fills.iter().map(|r| r.right()).fold(f32::MIN, f32::max));
+    assert!(near(lo, x + para.x_of(0, 9).unwrap()) && near(hi - lo, 21.0), "{fills:?}");
 }
 
 #[test]

@@ -135,19 +135,12 @@ impl PropCtx {
         Some(c)
     }
 
-    /// `w:shd`: its fill colour (a theme fill first), or a solid pattern's colour.
+    /// `w:shd`: its fill colour (a theme fill first), a solid pattern's colour, or a percentage
+    /// pattern's tint of its colour over the fill.
     pub fn shd_fill(&self, e: &El) -> Option<Rgb> {
-        if let Some(c) = self.theme_color(e, "w:themeFill", "w:themeFillTint", "w:themeFillShade") {
-            return Some(c);
-        }
-        // A solid pattern without a fill is painted in its pattern colour, a theme one first.
-        if e.attr("w:val") == Some("solid")
-            && e.attr("w:fill").and_then(Rgb::parse).is_none()
-            && let Some(c) = self.theme_color(e, "w:themeColor", "w:themeTint", "w:themeShade")
-        {
-            return Some(c);
-        }
-        shd_fill(e)
+        let fill = self.theme_color(e, "w:themeFill", "w:themeFillTint", "w:themeFillShade").or_else(|| e.attr("w:fill").and_then(Rgb::parse));
+        let color = self.theme_color(e, "w:themeColor", "w:themeTint", "w:themeShade").or_else(|| e.attr("w:color").and_then(Rgb::parse));
+        shade(e.attr("w:val"), fill, color)
     }
 
     pub fn rpr(&self, e: &El) -> CharProps {
@@ -462,17 +455,36 @@ fn tab_stop(t: &El) -> Option<TabStop> {
     Some(TabStop { pos, align, leader })
 }
 
-/// `w:shd/@w:fill` (a solid fill colour; `auto` = none), ignoring theme fills ([`PropCtx::shd_fill`]).
-fn shd_fill(e: &El) -> Option<Rgb> {
-    let fill = e.attr("w:fill").and_then(Rgb::parse);
+/// The colour a shading paints: a percentage pattern (`pct15`…) is that share of its pattern
+/// colour (`auto` = black) over its fill (`auto` = white) — Word for Mac paints `pct15` on
+/// `auto` as D9D9D9 (`cb1` probe, 2026-10-19); otherwise the fill, or a solid pattern's colour.
+fn shade(val: Option<&str>, fill: Option<Rgb>, color: Option<Rgb>) -> Option<Rgb> {
+    if let Some(share) = val.and_then(pattern_share) {
+        let (f, c) = (fill.unwrap_or(Rgb(255, 255, 255)), color.unwrap_or(Rgb(0, 0, 0)));
+        let mix = |a: u8, b: u8| (f32::from(a) * (1.0 - share) + f32::from(b) * share).round().clamp(0.0, 255.0) as u8;
+        return Some(Rgb(mix(f.0, c.0), mix(f.1, c.1), mix(f.2, c.2)));
+    }
     if fill.is_some() {
         return fill;
     }
-    // A solid pattern uses the pattern colour.
-    if e.attr("w:val") == Some("solid") {
-        return e.attr("w:color").and_then(Rgb::parse);
+    if val == Some("solid") {
+        return color;
     }
     None
+}
+
+/// The share of the pattern colour in a `pctNN` shading pattern (`pct12` is 12.5 %, `pct37`
+/// 37.5, `pct62` 62.5, `pct87` 87.5).
+fn pattern_share(val: &str) -> Option<f32> {
+    let n: u32 = val.strip_prefix("pct")?.parse().ok()?;
+    Some(match n {
+        12 => 0.125,
+        37 => 0.375,
+        62 => 0.625,
+        87 => 0.875,
+        1..=100 => n as f32 / 100.0,
+        _ => return None,
+    })
 }
 
 pub fn border(e: &El) -> Border {

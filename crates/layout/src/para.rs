@@ -827,6 +827,47 @@ fn snap_chars(b: &mut Builder, text: &str, grid: &Grid, chain: &[bool], balance:
     }
 }
 
+/// Character borders take room, as Word for Mac sets them (`cb1`/`cbv1` probes, 2026-10-19): the
+/// text of a bordered run moves in by the border's width plus its distance from the text
+/// (`w:space`), and what follows moves on by as much after it — a 0.5-pt border adds a point to
+/// the run, a 1.5-pt one three, a 0.5-pt border 4 pt from the text nine. Runs with equal borders
+/// share one box, so the room sits at the ends of the group only. The paragraph mark is never
+/// boxed.
+fn border_room(b: &mut Builder) {
+    let border_of = |k: usize| -> Option<wordcraft_doc::props::Border> {
+        let c = b.clusters.get(k)?;
+        if c.kind == ClKind::Marker {
+            return None;
+        }
+        b.styles.get(c.style as usize).and_then(|st| st.rc.border)
+    };
+    let n = b.clusters.len();
+    let ends: Vec<(usize, f32, bool, bool)> = (0..n)
+        .filter_map(|k| {
+            let bd = border_of(k)?;
+            let room = (bd.width.max(0.0) + bd.space.max(0.0)).min(50.0);
+            if room <= 0.0 {
+                return None;
+            }
+            let first = k == 0 || border_of(k - 1) != Some(bd);
+            let last = k + 1 >= n || border_of(k + 1) != Some(bd);
+            (first || last).then_some((k, room, first, last))
+        })
+        .collect();
+    for (k, room, first, last) in ends {
+        let Some(c) = b.clusters.get_mut(k) else { continue };
+        if first {
+            c.adv += room;
+            for g in b.glyphs.get_mut(c.g0 as usize..c.g1 as usize).into_iter().flatten() {
+                g.dx += room;
+            }
+        }
+        if last {
+            c.adv += room;
+        }
+    }
+}
+
 /// A half-width form (ｱｲｳ, ｡｢｣ and the half-width symbols): a single-byte character to the
 /// character grid.
 fn is_half_width_form(c: char) -> bool {
@@ -2547,6 +2588,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     } else {
         Vec::new()
     };
+    border_room(&mut b);
     let (cell_classes, cell_autos) = if snap_cells {
         let mut cell_autos = vec![0.0f32; b.clusters.len()];
         for (k, a) in &autos {
