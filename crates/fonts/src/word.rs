@@ -692,8 +692,16 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
         let s = substitutes(base).iter().find(|s| db.has_family(s)).copied().unwrap_or(crate::FALLBACK_FAMILY);
         (s.to_string(), true)
     };
-    let face = db.face(&fam, style_name(bold, italic));
-    let r = Resolved { synth_bold: bold && face.weight < 600.0, synth_italic: italic && !face.italic, substituted, face: FaceRef::of(&face) };
+    // Word draws bold for its own fonts without a bold style by emboldening the regular face
+    // (`word_lacks_bold`): the regular face here too, whatever bold the stand-in has.
+    let real_bold = bold && !word_lacks_bold(family);
+    let face = db.face(&fam, style_name(real_bold, italic));
+    let r = Resolved {
+        synth_bold: bold && (!real_bold || face.weight < 600.0),
+        synth_italic: italic && !face.italic,
+        substituted,
+        face: FaceRef::of(&face),
+    };
     let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
     if c.0 == generation {
         c.1.insert(key, r);
@@ -1032,6 +1040,33 @@ pub fn named_ea_metrics(family: &str) -> Option<NamedEa> {
 
 /// Is `family` one of the MS Mincho / MS Gothic families Word bundles (by its English or
 /// Japanese name)?
+/// Word's own fonts that have no bold style: Word for Mac draws their bold by emboldening the
+/// regular glyphs (its PDFs show YuMincho-Regular, MS-Mincho, MS-Gothic and YuGothic-Light for
+/// bold runs of 游明朝, ＭＳ 明朝, ＭＳ ゴシック, ＭＳ Ｐ明朝, ＭＳ Ｐゴシック and 游ゴシック Light,
+/// 2026-10-20), where 游ゴシック, 游明朝 Demibold, メイリオ and the Hiragino families have a bold
+/// face of their own. A face standing in for one of these is emboldened the same way.
+pub fn word_lacks_bold(family: &str) -> bool {
+    const NAMES: &[&str] = &["游明朝", "Yu Mincho", "YuMincho", "游明朝 Light", "Yu Mincho Light", "游ゴシック Light", "Yu Gothic Light"];
+    if is_office_ms(family) {
+        return true;
+    }
+    let base = fold_cjk_name(family);
+    NAMES.iter().any(|n| fold_cjk_name(n) == base)
+}
+
+/// The points Word for Mac adds to each glyph's advance across a line when it emboldens a face
+/// itself: a fiftieth of an em in the font's units, rounded — 0.02 em for Yu Mincho, Hiragino
+/// Maru Gothic and Yu Gothic Light (0.48 pt at 24 pt), 5/256 em for the MS fonts and Osaka (0.468
+/// pt), on kanji, kana and Latin letters alike, nothing on spaces (its PDFs, 2026-10-20). The
+/// MS fonts' 256-unit em counts whatever face stands in for them.
+pub fn synthetic_bold_extra(family: &str, upem: f32, size: f32) -> f32 {
+    let u = if is_office_ms(family) { 256.0 } else { upem };
+    if !(u.is_finite() && u >= 1.0 && size.is_finite()) {
+        return 0.0;
+    }
+    (u / 50.0).round() / u * size.clamp(0.0, 1584.0)
+}
+
 pub fn is_office_ms(family: &str) -> bool {
     const MS: &[&str] =
         &["MS Mincho", "MS PMincho", "MS Gothic", "MS PGothic", "MS UI Gothic", "ＭＳ 明朝", "ＭＳ Ｐ明朝", "ＭＳ ゴシック", "ＭＳ Ｐゴシック"];
@@ -1490,6 +1525,30 @@ mod tests {
         assert_eq!(charset_base_family("Cyr"), "Cyr");
         assert_eq!(charset_base_family("Calibri"), "Calibri");
         assert_eq!(substitutes(charset_base_family("Times New Roman Cyr")), substitutes("Times New Roman"));
+    }
+
+    /// Word for Mac emboldens its own fonts that have no bold style (游明朝, the MS fonts, 游ゴシック
+    /// Light) and widens each glyph by a fiftieth of an em in the font's units (its PDFs, 2026-10-20).
+    #[test]
+    fn words_fonts_without_a_bold_are_emboldened_and_widened() {
+        for name in ["游明朝", "Yu Mincho", "ＭＳ 明朝", "MS Mincho", "ＭＳ ゴシック", "ＭＳ Ｐ明朝", "MS PGothic", "游ゴシック Light"]
+        {
+            assert!(word_lacks_bold(name), "{name}");
+            let b = resolve(name, true, false);
+            assert!(b.synth_bold, "{name}: bold drawn by emboldening");
+            assert_eq!(b.face.id(), resolve(name, false, false).face.id(), "{name}: from the regular face");
+        }
+        for name in ["游ゴシック", "Yu Gothic", "游明朝 Demibold", "メイリオ", "Hiragino Mincho ProN", "Aptos", "Times New Roman"] {
+            assert!(!word_lacks_bold(name), "{name}");
+        }
+        // 0.02 em for a 1000-unit em; 5/256 em for the MS fonts, whatever face stands in.
+        assert!((synthetic_bold_extra("游明朝", 1000.0, 24.0) - 0.48).abs() < 1e-4);
+        assert!((synthetic_bold_extra("游明朝", 1000.0, 10.5) - 0.21).abs() < 1e-4);
+        assert!((synthetic_bold_extra("ＭＳ 明朝", 1000.0, 24.0) - 0.46875).abs() < 1e-4);
+        assert!((synthetic_bold_extra("Osaka", 256.0, 24.0) - 0.46875).abs() < 1e-4);
+        assert!((synthetic_bold_extra("Hiragino Maru Gothic ProN", 1000.0, 24.0) - 0.48).abs() < 1e-4);
+        assert_eq!(synthetic_bold_extra("游明朝", f32::NAN, 24.0), 0.0);
+        assert_eq!(synthetic_bold_extra("游明朝", 1000.0, f32::INFINITY), 0.0);
     }
 
     #[test]

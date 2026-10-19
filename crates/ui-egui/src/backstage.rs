@@ -558,6 +558,20 @@ mod tests {
         h.run_steps(4);
     }
 
+    /// Run frames until `done` holds (at most five seconds). Right after a click the recovery
+    /// worker may not have started yet — not busy, and not finished either — so waiting for it
+    /// to be idle can return before the click's work has happened (it did under a loaded full
+    /// test run); wait for the outcome itself.
+    fn settle_until(h: &mut egui_kittest::Harness<'_, WordApp>, done: impl Fn(&WordApp) -> bool) {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !done(h.state()) {
+            h.run_steps(2);
+            assert!(std::time::Instant::now() < end, "timed out waiting for the recovery");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        settle_recovery(h);
+    }
+
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn recovery_page_keeps_dismissed_copies_and_confirms_discard() {
@@ -579,8 +593,14 @@ mod tests {
         assert_eq!(h.state().session.recovery_documents().len(), 1);
         h.get_by_label("Discard…").click();
         h.run_steps(4);
-        h.get_by_label("Discard").click();
-        settle_recovery(&mut h);
+        for _ in 0..5 {
+            if !matches!(h.state().dialog, Some(crate::dialogs::Dialog::DiscardRecovery { .. })) {
+                break;
+            }
+            h.get_by_label("Discard").click();
+            h.run_steps(4);
+        }
+        settle_until(&mut h, |a| a.session.recovery_documents().is_empty());
         assert!(h.state().session.recovery_documents().is_empty());
         assert!(h.query_by_label("No recovery copies.").is_some());
         drop(h);
@@ -606,8 +626,16 @@ mod tests {
         assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Current unsaved work");
         h.get_by_label("Restore").click();
         h.run_steps(4);
-        h.get_by_label("Don't Save").click();
-        settle_recovery(&mut h);
+        // A dialog's buttons can be in the accessibility tree a frame before they take a click
+        // (seen once in a loaded full test run): click again while Save Changes is still up.
+        for _ in 0..5 {
+            if !matches!(h.state().dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })) {
+                break;
+            }
+            h.get_by_label("Don't Save").click();
+            h.run_steps(4);
+        }
+        settle_until(&mut h, |a| a.session.doc.plain_text(wordcraft_doc::StoryRef::Body) == "Recovered synthetic work");
         assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Recovered synthetic work");
         assert!(h.state().session.dirty && h.state().session.path.is_none());
         assert!(h.state().autosave_path.is_none());

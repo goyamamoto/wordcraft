@@ -95,6 +95,10 @@ pub struct StyleRun {
     /// each, as Word for Mac sets them, whatever face stands in
     /// (`wordcraft_fonts::word::is_half_width_char`).
     pub half: bool,
+    /// Points added to each non-space character's advance across a line where Word emboldens
+    /// the face itself (`wordcraft_fonts::word::synthetic_bold_extra`); 0 elsewhere, and in
+    /// vertical text, whose columns Word doesn't lengthen.
+    pub bold_extra: f32,
 }
 
 /// A positioned glyph inside its cluster.
@@ -1452,6 +1456,19 @@ impl<'a> Builder<'a> {
             None => (r.synth_bold, r.synth_italic),
             Some(f) => (rc.bold && f.get().weight < 600.0, rc.italic && !f.get().italic),
         };
+        // Word widens what it emboldens itself — its own fonts without a bold style and real
+        // fonts without one — not a stand-in that merely lacks the bold Word has.
+        let named_family = ea_family.unwrap_or(&rc.font);
+        let bold_extra = if synth_bold && !self.env.vertical {
+            let w = wordcraft_fonts::word::resolve(named_family, rc.bold, rc.italic);
+            if wordcraft_fonts::word::word_lacks_bold(named_family) || (w.synth_bold && !w.substituted) {
+                wordcraft_fonts::word::synthetic_bold_extra(named_family, face.upem as f32, rc.draw_size() * if small { 0.8 } else { 1.0 })
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
         let st = StyleRun {
             face,
             size,
@@ -1466,6 +1483,7 @@ impl<'a> Builder<'a> {
             v_centre: ((wordcraft_fonts::word::vertical_em_centre(ea_family.unwrap_or(&rc.font), &face) - (a - d) / 2.0) * k) as f32,
             named: wordcraft_fonts::word::named_ea_metrics(ea_family.unwrap_or(&rc.font)),
             half: wordcraft_fonts::word::is_half_width_family(&rc.font),
+            bold_extra,
         };
         // A `u32` index (like the glyph ranges) counts more distinct formats than a paragraph can
         // hold in memory, so every format keeps its own style.
@@ -1740,7 +1758,8 @@ impl<'a> Builder<'a> {
                 } else {
                     ClKind::Text
                 });
-                let adv = if kind == ClKind::Marker { 0.0 } else { adv + spacing_for(rc.spacing, ch) };
+                let bold = if kind == ClKind::Text && !ch.is_whitespace() { st.bold_extra } else { 0.0 };
+                let adv = if kind == ClKind::Marker { 0.0 } else { adv + bold + spacing_for(rc.spacing, ch) };
                 // Clusters index the document text, never the displayed text.
                 let (cs, ce) = if substituted { remap_range(&map_starts, &orig_of, sub.len(), gs, ge) } else { (gs, ge) };
                 self.clusters.push(Cluster {
@@ -4224,12 +4243,32 @@ fn pl_text_at(c: &Cluster) -> bool {
     c.dot
 }
 
+/// The width of a decimal tab's text before its decimal separator: the clusters after the tab
+/// cluster `tj` up to the first separator, within the `seg` points of text the tab holds.
+/// `None` when the text has no separator.
+fn decimal_lead(pl: &ParaLayout, tj: usize, seg: f32) -> Option<f32> {
+    let mut w = 0.0;
+    for c in pl.clusters.get(tj + 1..)? {
+        if w >= seg - 0.001 {
+            return None;
+        }
+        if pl_text_at(c) {
+            return Some(w);
+        }
+        w += c.adv.max(0.0);
+    }
+    None
+}
+
 fn resolve_tab(pl: &mut ParaLayout, pending: &mut Option<(usize, TabStop, f32)>, xs: &mut [f32], c0: usize, x: f32, xo: &mut f32) {
     // Finish a centre/right/decimal tab: its text (possibly empty) ends at `x`.
     let Some((tj, stop, tx)) = pending.take() else { return };
     let seg = x - tx - pl.clusters.get(tj).map(|c| c.adv).unwrap_or(0.0);
     let want = match stop.align {
-        TabAlign::Right | TabAlign::Decimal => stop.pos - tx - seg,
+        TabAlign::Right => stop.pos - tx - seg,
+        // The decimal separator starts at the stop (Word for Mac: 12.5's point at the stop, its
+        // 12 before it, 2026-10-20); text without one ends there.
+        TabAlign::Decimal => stop.pos - tx - decimal_lead(pl, tj, seg).unwrap_or(seg),
         TabAlign::Center => stop.pos - tx - seg / 2.0,
         _ => return,
     }

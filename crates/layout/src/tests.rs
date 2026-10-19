@@ -6231,6 +6231,63 @@ fn footnotes_restart_on_each_page_and_section() {
 /// `12` at 528.28; exactly at a `7` starting at 533.89). Previously the first dot came half an
 /// advance later and the last stopped 1.2 advances short.
 #[test]
+fn bold_yu_mincho_is_widened_as_word_for_mac_emboldens_it() {
+    // Word for Mac draws bold 游明朝 by emboldening its regular glyphs and widens each by 0.02 em
+    // (its PDFs, 2026-10-20: 10.71 pt a kanji at 10.5 pt, 24.48 at 24); a font with a bold of its
+    // own (游ゴシック) keeps its advance, and a vertical column isn't lengthened.
+    let adv = |font: &str, bold: bool, text: &str| {
+        let chr = wordcraft_doc::CharProps {
+            font: Some(font.into()),
+            font_ea: Some(font.into()),
+            size: Some(24.0),
+            bold: Some(bold),
+            ..Default::default()
+        };
+        let mut d = Document::from_text("");
+        d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, chr))];
+        let l = lay(&d);
+        let pl = first_para(&l).clone();
+        pl.clusters.iter().filter(|c| c.kind == crate::para::ClKind::Text).map(|c| c.adv).collect::<Vec<_>>()
+    };
+    let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+    let regular = adv("游明朝", false, "一二");
+    let bold = adv("游明朝", true, "一二");
+    assert!(near(bold[0], regular[0] + 0.48) && near(bold[1], regular[1] + 0.48), "{regular:?} {bold:?}");
+    // Latin letters in the same face gain the same.
+    let (ra, ba) = (adv("游明朝", false, "AB"), adv("游明朝", true, "AB"));
+    assert!(near(ba[0], ra[0] + 0.48), "{ra:?} {ba:?}");
+    // The MS fonts: 5/256 em.
+    let (rm, bm) = (adv("ＭＳ 明朝", false, "一"), adv("ＭＳ 明朝", true, "一"));
+    assert!(near(bm[0], rm[0] + 0.46875), "{rm:?} {bm:?}");
+    // 游ゴシック has a bold: no change.
+    let (rg, bg) = (adv("游ゴシック", false, "一"), adv("游ゴシック", true, "一"));
+    assert!(near(bg[0], rg[0]), "{rg:?} {bg:?}");
+}
+
+#[test]
+fn a_decimal_tab_puts_the_decimal_point_at_the_stop() {
+    // Word for Mac (its PDF read 2026-10-20, `biz` probe): 価格<tab>12.5 under a decimal stop
+    // has the point start at the stop, the digits before it; 整数<tab>1200, without a point, ends
+    // at the stop. WordCraft ended 12.5 at the stop, as if the stop were right-aligned.
+    use wordcraft_doc::props::{TabAlign, TabLeader, TabStop};
+    let mut d = Document::from_text("価格\t12.5\n整数\t1200\nx\t3.25 kg");
+    let stop = 210.0;
+    for i in 0..3 {
+        d.para_mut(StoryRef::Body, &Path::top(i)).unwrap().props.tabs =
+            Some(vec![TabStop { pos: stop, align: TabAlign::Decimal, leader: TabLeader::None }]);
+    }
+    let l = lay(&d);
+    let x_of = |para: u32, byte: usize| l.caret(&Pos::body(para as usize, byte)).unwrap().x - 72.0;
+    // 価格 is 6 bytes, the tab 1: "12.5" starts at byte 7, its point at byte 9.
+    assert!((x_of(0, 9) - stop).abs() < 0.05, "the point at the stop: {}", x_of(0, 9));
+    assert!(x_of(0, 7) < stop, "the digits before it");
+    // No point: the text ends at the stop.
+    assert!((x_of(1, 11) - stop).abs() < 0.05, "1200 ends at the stop: {}", x_of(1, 11));
+    // The first point counts, whatever follows it.
+    assert!((x_of(2, 3) - stop).abs() < 0.05, "3.25 kg: the point at the stop: {}", x_of(2, 3));
+}
+
+#[test]
 fn tab_leaders_sit_on_their_advance_grid_up_to_the_tabs_text() {
     use wordcraft_doc::props::{TabAlign, TabLeader, TabStop};
     let mut d = Document::from_text("abc\t12\nabc\t7\nabcdef\t12");
