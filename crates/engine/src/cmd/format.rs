@@ -368,7 +368,10 @@ fn resolved(s: &Session) -> Vec<ResolvedChar> {
             return out;
         }
     }
-    let Some((a, b)) = target(s) else {
+    // The caret in the input method's composition: the formatting typing had where it began
+    // (the composition's underlines are not the text's, and the word at the caret is provisional).
+    let composing = s.composition_props().is_some();
+    let Some((a, b)) = target(s).filter(|_| !composing) else {
         let f = &s.sel.focus;
         let style = s.doc.para_at(f).and_then(|p| p.props.style.clone());
         out.push(s.doc.styles.resolve_char(style.as_deref(), &s.typing_props()));
