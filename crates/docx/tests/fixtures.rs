@@ -2932,3 +2932,20 @@ fn row_table_borders_round_trip() {
     let again = wordcraft_docx::read(&saved).unwrap();
     assert_eq!(d.body, again.body);
 }
+
+/// Percentage shading patterns paint a share of the pattern colour over the fill: Word for Mac
+/// paints Character Shading (`pct15` on `auto`) as D9D9D9 (`cb1` probe, 2026-10-19); a pattern
+/// colour and a fill blend the same way, `pct12` is 12.5 %, and a plain fill or a solid pattern
+/// stays what it was.
+#[test]
+fn percentage_shading_patterns_tint_the_fill() {
+    let body = r#"<w:p><w:r><w:rPr><w:shd w:val="pct15" w:color="auto" w:fill="auto"/></w:rPr><w:t>a</w:t></w:r><w:r><w:rPr><w:shd w:val="pct50" w:color="FF0000" w:fill="FFFF00"/></w:rPr><w:t>b</w:t></w:r><w:r><w:rPr><w:shd w:val="pct12" w:color="auto" w:fill="auto"/></w:rPr><w:t>c</w:t></w:r><w:r><w:rPr><w:shd w:val="clear" w:color="auto" w:fill="FFFF00"/></w:rPr><w:t>d</w:t></w:r><w:r><w:rPr><w:shd w:val="solid" w:color="00FF00" w:fill="auto"/></w:rPr><w:t>e</w:t></w:r></w:p>"#;
+    let d = read_body(body);
+    let p = paras(&d);
+    let at = |i: usize| p[0].props_of_char(i).shading;
+    assert_eq!(at(0), Some(Rgb(0xD9, 0xD9, 0xD9)));
+    assert_eq!(at(1), Some(Rgb(0xFF, 0x80, 0x00)));
+    assert_eq!(at(2), Some(Rgb(0xDF, 0xDF, 0xDF)));
+    assert_eq!(at(3), Some(Rgb(0xFF, 0xFF, 0x00)));
+    assert_eq!(at(4), Some(Rgb(0x00, 0xFF, 0x00)));
+}
