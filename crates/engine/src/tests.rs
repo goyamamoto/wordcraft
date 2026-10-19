@@ -1240,6 +1240,25 @@ fn props_at(s: &Session, off: usize) -> wordcraft_doc::CharProps {
     s.doc.para_at(&pos).map(|p| p.props_of_char(off).clone()).unwrap_or_default()
 }
 
+/// Drop Cap sizes the letter as Word for Mac does and stores the size in its run (Word's Font box
+/// shows 38.5 for three lines of 10.5-pt 游明朝); None gives the letter the text's size back.
+#[test]
+fn drop_cap_sizes_its_letter_like_word() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Every line of this paragraph wraps around a large first letter and more words follow it."}));
+    run(&mut s, "insert.dropCap", json!({"lines": 3}));
+    let p = s.doc.para_at(&Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0 }).unwrap().clone();
+    assert_eq!(p.props.drop_cap, Some(3));
+    let size = props_at(&s, 0).size.expect("the letter has its own size");
+    assert!(size > 30.0, "size {size}");
+    assert_eq!(props_at(&s, 1).size, None);
+    let mut q = p.clone();
+    q.format(0, 1, &|c| c.size = None).unwrap();
+    assert_eq!(wordcraft_layout::drop_cap_size(&s.doc, &q), Some(size));
+    run(&mut s, "insert.dropCap", json!({"lines": 0}));
+    assert_eq!(props_at(&s, 0).size, None);
+}
+
 /// Paste of another program's formatted copy keeps its formatting (#687); Merge Formatting keeps
 /// only its emphasis, in the destination's font; Keep Text Only drops it all.
 #[test]
