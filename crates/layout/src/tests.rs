@@ -9709,3 +9709,159 @@ fn break_marks_follow_word_for_mac() {
         display::break_mark(display::BreakRule::Column, v, 1e9, v, 10.0, "Column Break", 1.0, &mut out);
     }
 }
+
+/// Punctuation compression by the run's East Asian language, as Word for Mac applies it (`hk3`
+/// probe, 2026-10-19; see `para::CompressRules`): Japanese closes up neither 」！ nor 。？ but
+/// ：「, ・「 and 」。; Simplified Chinese counts ！ as a closing mark (」！「 closes up both) and
+/// neither ？ nor ・ as a mark; Traditional Chinese is Japanese without ・; Korean, English and no
+/// tag at all follow the editing language (Japanese) or compress nothing.
+#[test]
+fn punctuation_compression_follows_the_east_asian_language() {
+    let text = "」！「。？「：「・「」。";
+    let advs = |lang: Option<&str>| {
+        let chr =
+            wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(10.0), lang_ea: lang.map(String::from), ..Default::default() };
+        let mut d = Document::from_text("");
+        d.settings.punct_compression = wordcraft_doc::east_asian::PunctCompression::CompressPunctuation;
+        d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, chr))];
+        cluster_advances(&d)
+    };
+    let check = |lang: Option<&str>, halves: &[usize]| {
+        let a = advs(lang);
+        assert_eq!(a.len(), 12, "{lang:?}: {a:?}");
+        for (k, adv) in a.iter().enumerate() {
+            let want = if halves.contains(&k) { 5.0 } else { 10.0 };
+            assert!((adv - want).abs() < 0.01, "{lang:?}: cluster {k} takes {adv}, Word {want}: {a:?}");
+        }
+    };
+    // 」！「 。？「 ：「 ・「 」。 — the 「 after ： or ・ (or, in Simplified Chinese, ！) loses its
+    // blank left half; 」 before 。 (or ！) its right. Word's PDFs can't tell which of a pair
+    // shrinks: the origins come out the same either way.
+    check(Some("ja-JP"), &[7, 9, 10]);
+    check(None, &[7, 9, 10]);
+    check(Some("zh-TW"), &[7, 10]);
+    check(Some("zh-HK"), &[7, 10]);
+    check(Some("zh-CN"), &[0, 2, 7, 10]);
+    check(Some("zh-SG"), &[0, 2, 7, 10]);
+    check(Some("ko-KR"), &[]);
+    check(Some("en-US"), &[]);
+}
+
+/// Marks after a Hangul letter in the same face keep their width, as Word for Mac keeps them
+/// (`hk2`/`hk4` probes, AppleMyungjo and AppleGothic with Japanese set, 2026-10-19: 다。「 and
+/// 다」。 stay whole, あ」。 and あ、「다 close up; a Hangul letter drawn in another face — a fallback
+/// face, or another run's font — leaves the marks after it to close up).
+#[test]
+fn marks_after_a_hangul_letter_in_the_same_face_keep_their_width() {
+    let r = wordcraft_fonts::word::resolve("AppleMyungjo", false, false);
+    if r.substituted || !r.face.covers('다') || !r.face.covers('。') || !r.face.covers('あ') {
+        return;
+    }
+    let chr = |font: &str| wordcraft_doc::CharProps {
+        font: Some(font.into()),
+        font_ea: Some(font.into()),
+        size: Some(10.0),
+        lang_ea: Some("ja-JP".into()),
+        ..Default::default()
+    };
+    let text = "다。「あ」。あ、「다」。あ";
+    let mut d = Document::from_text("");
+    d.settings.punct_compression = wordcraft_doc::east_asian::PunctCompression::CompressPunctuation;
+    d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, chr("AppleMyungjo")))];
+    let a = cluster_advances(&d);
+    // 다 。 「 あ 」 。 あ 、 「 다 」 。 あ — the 「 after 、 loses its left half (the 、 keeps its width).
+    let want = [10.0, 10.0, 10.0, 10.0, 5.0, 10.0, 10.0, 10.0, 5.0, 10.0, 10.0, 10.0, 10.0];
+    for (k, (adv, w)) in a.iter().zip(want).enumerate() {
+        assert!((adv - w).abs() < 0.05, "cluster {k} of {text} takes {adv}, Word {w}: {a:?}");
+    }
+    // 다 in AppleMyungjo, the marks in Source Sans 3's fallback face: 。 closes up.
+    let mut para = wordcraft_doc::Paragraph::with_text("다。「あ", chr("Source Sans 3"));
+    para.format(0, "다".len(), &|c| {
+        c.font = Some("AppleMyungjo".into());
+        c.font_ea = Some("AppleMyungjo".into());
+    })
+    .unwrap();
+    d.body = vec![wordcraft_doc::para_block(para)];
+    let a = cluster_advances(&d);
+    assert!((a[1] + a[2] - 15.0).abs() < 0.05, "。「 after another face's 다 closes up to 1.5 em: {a:?}");
+}
+
+/// A mark a proportional East Asian face draws narrower than its em is never compressed
+/// (`hk2`/`hk3` probes, 2026-10-19: Apple SD Gothic Neo's 。 at 0.773 em and 「 at 0.33 keep
+/// their advances in 다。「括弧」（丸）、 with Japanese or Korean set; its ，．！ at 0.865 too).
+#[test]
+fn proportional_marks_are_never_compressed() {
+    let r = wordcraft_fonts::word::resolve("Apple SD Gothic Neo", false, false);
+    if r.substituted || !r.face.covers('。') || !r.face.covers('括') {
+        return;
+    }
+    let text = "다。「括弧」（丸）、「끝」。，．！";
+    let chr = wordcraft_doc::CharProps {
+        font: Some("Apple SD Gothic Neo".into()),
+        font_ea: Some("Apple SD Gothic Neo".into()),
+        size: Some(10.0),
+        lang_ea: Some("ja-JP".into()),
+        ..Default::default()
+    };
+    let mut d = Document::from_text("");
+    d.settings.punct_compression = wordcraft_doc::east_asian::PunctCompression::CompressPunctuation;
+    d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, chr))];
+    let l = lay(&d);
+    let pl = first_para(&l);
+    let upem = r.face.upem as f32;
+    for (c, ch) in pl.clusters.iter().zip(text.chars()) {
+        let want = r.face.advance(r.face.glyph_for(ch)) as f32 / upem * 10.0;
+        assert!((c.adv - want).abs() < 0.05, "{ch} takes {} (its glyph advances {want})", c.adv);
+        let dx = pl.glyphs.get(c.g0 as usize).map_or(0.0, |g| g.dx);
+        assert!(dx.abs() < 0.01, "{ch}'s glyph is not moved: {dx}");
+    }
+    assert!(
+        pl.clusters.iter().any(|c| c.adv < 4.0),
+        "the brackets are a third of an em: {:?}",
+        pl.clusters.iter().map(|c| c.adv).collect::<Vec<_>>()
+    );
+}
+
+/// A space beside East Asian text takes half the full-width advance of the face that draws it,
+/// else of the East Asian face next to it (`hk3`/`vk3` probes, 2026-10-19, see
+/// `para::space_widths`): Apple SD Gothic Neo's 4.54 pt at 10.5 pt (its ideographs advance
+/// 0.865 em; 6.3 in a vertical column, where they advance 1.2 em), AppleGothic's 5.25, and 4.54
+/// again for a space Source Sans 3 draws between Apple SD Gothic Neo's kana.
+#[test]
+fn east_asian_spaces_take_half_their_faces_full_width_advance() {
+    let asdg = wordcraft_fonts::word::resolve("Apple SD Gothic Neo", false, false);
+    if asdg.substituted || !asdg.face.covers('一') || !asdg.face.covers('あ') {
+        return;
+    }
+    let size = 10.5f32;
+    let half = |face: &wordcraft_fonts::FontFace, vertical: bool| {
+        let gid = face.glyph_for('一');
+        let adv = if vertical { face.vertical_advance(gid).unwrap() } else { face.advance(gid) };
+        (adv / face.upem) as f32 * size / 2.0
+    };
+    let space = |font: &str, font_ea: &str, vertical: bool| {
+        let chr = wordcraft_doc::CharProps { font: Some(font.into()), font_ea: Some(font_ea.into()), size: Some(size), ..Default::default() };
+        let mut d = Document::from_text("");
+        d.settings.balance_single_byte_double_byte_width = true;
+        if vertical {
+            d.last_section.text_direction = TextDirection::Down;
+        }
+        d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("あい うえ", chr))];
+        cluster_advances(&d)[2]
+    };
+    let want = half(&asdg.face, false);
+    assert!((want - 0.865 * size / 2.0).abs() < 0.05, "Apple SD Gothic Neo's ideographs advance 0.865 em: {want}");
+    let got = space("Apple SD Gothic Neo", "Apple SD Gothic Neo", false);
+    assert!((got - want).abs() < 0.01, "a space of Apple SD Gothic Neo takes {got}, Word {want}");
+    let got = space("Source Sans 3", "Apple SD Gothic Neo", false);
+    assert!((got - want).abs() < 0.01, "a space of Source Sans 3 between Apple SD Gothic Neo's kana takes {got}, Word {want}");
+    let want_v = half(&asdg.face, true);
+    assert!((want_v - 1.2 * size / 2.0).abs() < 0.05, "its vertical advance is 1.2 em: {want_v}");
+    let got = space("Apple SD Gothic Neo", "Apple SD Gothic Neo", true);
+    assert!((got - want_v).abs() < 0.01, "in a vertical column the space takes {got}, Word {want_v}");
+    let gothic = wordcraft_fonts::word::resolve("AppleGothic", false, false);
+    if !gothic.substituted && gothic.face.covers('一') {
+        let got = space("AppleGothic", "Apple SD Gothic Neo", false);
+        assert!((got - size / 2.0).abs() < 0.01, "a space of AppleGothic between Apple SD Gothic Neo's kana takes {got}, Word {}", size / 2.0);
+    }
+}

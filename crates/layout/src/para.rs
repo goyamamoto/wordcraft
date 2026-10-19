@@ -725,14 +725,59 @@ fn ea_space_flags(b: &Builder, text: &str, snap_all: bool) -> Vec<bool> {
     flags
 }
 
-/// Gives the East Asian spaces their width: half the space's font size (plus its character spacing).
-fn space_widths(b: &mut Builder, ea_space: &[bool]) {
-    for (k, c) in b.clusters.iter_mut().enumerate() {
-        if ea_space.get(k).copied().unwrap_or(false)
-            && let Some(st) = b.styles.get(c.style as usize)
-            && st.size.is_finite()
-        {
-            c.adv = (st.size * 0.5 + spacing_for(st.rc.spacing, ' ')).max(0.0);
+/// Gives the East Asian spaces their width (plus their character spacing): half the full-width
+/// advance — 一's, in the column direction — of the face the space is drawn in, else of the
+/// East Asian face nearest it, else half the size. Word for Mac (`hk2`–`hk3`, `vk2`–`vk3` probes,
+/// 2026-10-19): a space of Apple SD Gothic Neo, whose Hangul and ideographs advance 0.865 em,
+/// takes 4.54 pt at 10.5 pt and 10.38 at 24 (its own space glyph is 0.263 em), 6.3 pt in a
+/// vertical column (its vertical advance is 1.2 em); one of AppleGothic or 游明朝 5.25 either
+/// way; one Times New Roman draws between that font's kana takes 4.55, Apple SD Gothic Neo's.
+fn space_widths(b: &mut Builder, ea_space: &[bool], text: &str) {
+    if !ea_space.iter().any(|f| *f) {
+        return;
+    }
+    let n = b.clusters.len();
+    let ea_style = |c: &Cluster| cluster_char(text, c).filter(|ch| is_east_asian(*ch)).map(|_| c.style);
+    let mut before = vec![None; n];
+    let mut last = None;
+    for (k, c) in b.clusters.iter().enumerate() {
+        if let Some(f) = before.get_mut(k) {
+            *f = last;
+        }
+        last = ea_style(c).or(last);
+    }
+    let mut after = vec![None; n];
+    let mut next = None;
+    for (k, c) in b.clusters.iter().enumerate().rev() {
+        next = ea_style(c).or(next);
+        if let Some(f) = after.get_mut(k) {
+            *f = next;
+        }
+    }
+    let vertical = b.env.vertical;
+    let half_em = |st: &StyleRun, size: f32| -> Option<f32> {
+        let gid = st.face.glyph_for('一');
+        if gid == 0 {
+            return None;
+        }
+        let adv = if vertical { st.face.vertical_advance(gid).unwrap_or_else(|| st.face.advance(gid)) } else { st.face.advance(gid) };
+        let w = (adv / st.face.upem.max(1.0)) as f32 * size * 0.5;
+        (w.is_finite() && w > 0.0).then_some(w)
+    };
+    for k in 0..n {
+        if !ea_space.get(k).copied().unwrap_or(false) {
+            continue;
+        }
+        let Some(st) = b.clusters.get(k).and_then(|c| b.styles.get(c.style as usize)) else { continue };
+        if !st.size.is_finite() {
+            continue;
+        }
+        let neighbour = before.get(k).copied().flatten().or(after.get(k).copied().flatten());
+        let half = half_em(st, st.size)
+            .or_else(|| neighbour.and_then(|si| b.styles.get(si as usize)).and_then(|es| half_em(es, st.size)))
+            .unwrap_or(st.size * 0.5);
+        if let Some(c) = b.clusters.get_mut(k) {
+            c.adv = (half + spacing_for(st.rc.spacing, ' ')).max(0.0);
         }
     }
 }
@@ -987,22 +1032,118 @@ enum Tail {
     Pull(f32),
 }
 
+/// Which marks a run's East Asian language (`w:lang/@w:eastAsia`) lets Word for Mac compress
+/// (`hk2`–`hk4` probes, 2026-10-19, 游明朝, Hiragino Mincho ProN, AppleGothic and AppleMyungjo at
+/// 10.5 pt): Japanese compresses the closing marks before any full-width mark but ！ and ？
+/// (」！, ．！, 、？ keep their width; ：「, ；「 and ・「 close up); Simplified Chinese counts ！ as a
+/// closing mark too (」！「 closes up both, 。！ and ！。 and ！！ the first; ！「 the ！) and neither
+/// ？ nor ・ as a mark at all (？「, 。？ and ・「 keep their width); Traditional Chinese is
+/// Japanese without ・; Korean, English and every other tag compress nothing at all (not even
+/// 游明朝's 。「); no tag at all follows the Japanese editing language. A mark whose face draws
+/// it narrower than its em (Apple SD Gothic Neo's 。 at 0.773 em, 「 at 0.33) is never compressed,
+/// nor is a mark that follows a Hangul letter in the same face (다。「, 다」。: the marks after
+/// a strong character take its script, as Unicode itemises them, and Korean compresses nothing;
+/// abc。「, ａｂｃ。「, １２。「, αβ。「 and あ」。 close up, as do marks after a Hangul letter drawn
+/// in another face — a fallback face or another run's).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CompressRules {
+    Japanese,
+    Simplified,
+    Traditional,
+    None,
+}
+
+impl CompressRules {
+    fn for_lang(lang: Option<&str>) -> Self {
+        let Some(tag) = lang.map(str::trim).filter(|t| !t.is_empty()) else { return Self::Japanese };
+        match wordcraft_doc::east_asian::script_of_lang(tag) {
+            Some("Jpan") => Self::Japanese,
+            Some("Hans") => Self::Simplified,
+            Some("Hant") => Self::Traditional,
+            _ => Self::None,
+        }
+    }
+    /// A closing mark this language narrows to half its em before another mark.
+    fn closing(self, c: char) -> bool {
+        match self {
+            Self::None => false,
+            Self::Simplified => COMPRESSIBLE.contains(c) || c == '！',
+            Self::Japanese | Self::Traditional => COMPRESSIBLE.contains(c),
+        }
+    }
+    /// A full-width mark that closes up with a closing mark before it or an opening bracket
+    /// after it.
+    fn mark(self, c: char) -> bool {
+        FULL_WIDTH_PUNCT.contains(c)
+            && match self {
+                Self::None => false,
+                Self::Japanese => !matches!(c, '！' | '？'),
+                Self::Traditional => !matches!(c, '！' | '？' | '・'),
+                Self::Simplified => !matches!(c, '？' | '・'),
+            }
+    }
+}
+
+/// Per cluster: the nearest character of a strong script before it in the same face is Hangul
+/// (see [`CompressRules`]). Empty when the text has no Hangul.
+fn hangul_context(b: &Builder, text: &str) -> Vec<bool> {
+    if !text.chars().any(is_hangul) {
+        return Vec::new();
+    }
+    let mut out = vec![false; b.clusters.len()];
+    let mut korean = false;
+    let mut face: Option<u32> = None;
+    for (k, c) in b.clusters.iter().enumerate() {
+        let f = b.styles.get(c.style as usize).map(|st| st.face.id());
+        if f != face {
+            korean = false;
+            face = f;
+        }
+        if let Some(ch) = cluster_char(text, c) {
+            if is_hangul(ch) {
+                korean = true;
+            } else if ch.is_alphabetic() {
+                korean = false;
+            }
+        }
+        if let Some(o) = out.get_mut(k) {
+            *o = korean;
+        }
+    }
+    out
+}
+
+/// The cluster's glyph advances a whole em in its face (a mark a proportional face draws
+/// narrower is never compressed).
+fn full_width_glyph(b: &Builder, c: &Cluster) -> bool {
+    let (Some(st), Some(g)) = (b.styles.get(c.style as usize), b.glyphs.get(c.g0 as usize)) else { return false };
+    c.g1 > c.g0 && st.face.advance(g.gid) >= st.face.upem * 0.95
+}
+
 /// `cells`: the paragraph snaps to characters, where Word for Mac was measured (`cg2`/`cg9`,
 /// 2026-10-19) to compress a closing mark only before another closing mark (。、) and to keep an
 /// opening bracket after a mark (、「) in its whole cell.
 fn compress_punctuation(b: &mut Builder, text: &str, cells: bool) {
     let mut halve: Vec<usize> = Vec::new();
     let mut shrink_left: Vec<usize> = Vec::new();
+    let korean = hangul_context(b, text);
     for i in 1..b.clusters.len() {
         let (Some(prev), Some(next)) = (b.clusters.get(i - 1), b.clusters.get(i)) else { continue };
         let (Some(pc), Some(nc)) = (cluster_char(text, prev), cluster_char(text, next)) else { continue };
+        let rules = |c: &Cluster| CompressRules::for_lang(b.styles.get(c.style as usize).and_then(|st| st.rc.lang_ea.as_deref()));
+        let (pr, nr) = (rules(prev), rules(next));
+        if korean.get(i - 1).copied().unwrap_or(false) || korean.get(i).copied().unwrap_or(false) {
+            continue;
+        }
         if cells {
-            if COMPRESSIBLE.contains(pc) && COMPRESSIBLE.contains(nc) {
+            if pr.closing(pc) && nr.closing(nc) && full_width_glyph(b, prev) {
                 halve.push(i - 1);
             }
-        } else if OPENING.contains(nc) && FULL_WIDTH_PUNCT.contains(pc) {
-            shrink_left.push(i);
-        } else if COMPRESSIBLE.contains(pc) && FULL_WIDTH_PUNCT.contains(nc) {
+        } else if OPENING.contains(nc) && nr.mark(nc) && pr.mark(pc) {
+            if full_width_glyph(b, next) {
+                shrink_left.push(i);
+            }
+        } else if pr.closing(pc) && nr.mark(nc) && full_width_glyph(b, prev) {
             halve.push(i - 1);
         }
     }
@@ -2396,7 +2537,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     // Latin space, 2.7 pt, in every grid).
     let balance = env.doc.settings.balance_single_byte_double_byte_width;
     let ea_space = if balance { ea_space_flags(&b, &p.text, snap_cells) } else { vec![false; b.clusters.len()] };
-    space_widths(&mut b, &ea_space);
+    space_widths(&mut b, &ea_space, &p.text);
     let chain = if snap_cells && env.doc.settings.punct_compression.compresses() { chain_flags(&b, &p.text) } else { Vec::new() };
     if snapped {
         snap_chars(&mut b, &p.text, &env.grid, &chain, balance);
