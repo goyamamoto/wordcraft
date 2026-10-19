@@ -1851,9 +1851,6 @@ preview	Title	Örnek
 	Select a picture, shape, chart or table to describe it.	Açıklamak için bir resim, şekil, grafik veya tablo seçin.
 	Document Grid	Belge Kılavuzu
 	No grid	Kılavuz yok
-	Lines only	Yalnızca satırlar
-	Lines and characters	Satırlar ve karakterler
-	Text snaps to characters	Metin karakterlere yapışır
 	Characters per line:	Satır başına karakter:
 	Lines per page:	Sayfa başına satır:
 	Moved from	Taşındı (kaynak)
@@ -2669,3 +2666,9 @@ preview	Title	Örnek
 	Baseline	Taban çizgisi
 	Snap to grid when document grid is defined	Belge kılavuzu tanımlandığında kılavuza uydur
 	Automatically adjust right indent when document grid is defined	Belge kılavuzu tanımlandığında sağ girintiyi otomatik ayarla
+	Text direction:	Metin yönü:
+	Specify line grid only	Yalnızca satır ızgarasını belirt
+	Specify line and character grid	Satır ve karakter ızgarasını belirt
+	Text snaps to character grid	Metni karakter ızgarasına yasla
+	Pitch:	Aralık:
+	Use default pitch	Varsayılan aralığı kullan

@@ -1611,9 +1611,6 @@
 	Select a picture, shape, chart or table to describe it.	Selecione uma imagem, forma, gráfico ou tabela para descrevê-lo.
 	Document Grid	Grade do documento
 	No grid	Sem grade
-	Lines only	Somente linhas
-	Lines and characters	Linhas e caracteres
-	Text snaps to characters	O texto se ajusta aos caracteres
 	Characters per line:	Caracteres por linha:
 	Lines per page:	Linhas por página:
 	Moved from	Movido de
@@ -2286,3 +2283,9 @@
 	Baseline	Linha de base
 	Snap to grid when document grid is defined	Ajustar à grade quando a grade do documento for definida
 	Automatically adjust right indent when document grid is defined	Ajustar automaticamente o recuo direito quando a grade do documento for definida
+	Text direction:	Direção do texto:
+	Specify line grid only	Especificar somente grade de linhas
+	Specify line and character grid	Especificar grade de linhas e caracteres
+	Text snaps to character grid	Alinhar texto à grade de caracteres
+	Pitch:	Passo:
+	Use default pitch	Usar passo padrão

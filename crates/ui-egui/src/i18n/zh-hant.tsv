@@ -1600,9 +1600,6 @@
 	Select a picture, shape, chart or table to describe it.	選取圖片、圖形、圖表或表格以加入描述。
 	Document Grid	文件格線
 	No grid	無格線
-	Lines only	僅行
-	Lines and characters	行與字元
-	Text snaps to characters	文字貼齊字元格線
 	Characters per line:	每行字數：
 	Lines per page:	每頁行數：
 	Moved from	移動自
@@ -2275,3 +2272,11 @@
 	Baseline	基線
 	Snap to grid when document grid is defined	若已定義文件格線，則貼齊格線
 	Automatically adjust right indent when document grid is defined	若已定義文件格線，則自動調整右縮排
+	Text direction:	文字方向：
+	Specify line grid only	只指定行格線
+	Specify line and character grid	指定行與字元格線
+	Text snaps to character grid	文字貼齊字元格線
+	Pitch:	間距：
+	Use default pitch	使用預設間距
+direction	Horizontal	橫書
+direction	Vertical	直書

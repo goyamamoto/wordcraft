@@ -1663,9 +1663,6 @@
 	Select a picture, shape, chart or table to describe it.	Seleziona un'immagine, una forma, un grafico o una tabella da descrivere.
 	Document Grid	Griglia del documento
 	No grid	Nessuna griglia
-	Lines only	Solo righe
-	Lines and characters	Righe e caratteri
-	Text snaps to characters	Testo allineato ai caratteri
 	Characters per line:	Caratteri per riga:
 	Lines per page:	Righe per pagina:
 	Moved from	Spostato da
@@ -2681,3 +2678,9 @@ preview	Title	Esempio
 	Baseline	Linea di base
 	Snap to grid when document grid is defined	Allinea alla griglia se è definita la griglia del documento
 	Automatically adjust right indent when document grid is defined	Regola automaticamente il rientro destro se è definita la griglia del documento
+	Text direction:	Direzione testo:
+	Specify line grid only	Specifica solo la griglia delle righe
+	Specify line and character grid	Specifica la griglia delle righe e dei caratteri
+	Text snaps to character grid	Allinea il testo alla griglia dei caratteri
+	Pitch:	Passo:
+	Use default pitch	Usa passo predefinito

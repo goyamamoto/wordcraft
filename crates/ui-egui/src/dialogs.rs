@@ -148,6 +148,86 @@ fn special_menu(ui: &mut Ui, extra: &FindExtra) -> Option<&'static str> {
     picked
 }
 
+/// Page Setup's Document Grid fields as Word's 文字数と行数 tab holds them: the grid kind (0 no
+/// grid, 1 lines only, 2 lines and characters, 3 text snaps to characters), characters per line
+/// with their pitch (字送り), lines per page with their pitch (行送り), and whether the character
+/// pitch is the default one (the Normal style's size, `w:charSpace` 0). Counts and pitches follow
+/// each other as in Word ([`reconcile_page_grid`]); `extent` is the text area (width, height)
+/// the counts were taken over, so a margin edited in the dialog recounts them.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageGrid {
+    pub kind: u8,
+    pub chars: u32,
+    pub char_pitch: f32,
+    pub default_pitch: bool,
+    pub lines: u32,
+    pub line_pitch: f32,
+    pub extent: (f32, f32),
+}
+
+impl PageGrid {
+    /// Whether OK has a grid to apply: the kind, a pitch or the default-pitch choice changed
+    /// (the counts follow the pitches, and the extent is the margins' business).
+    fn differs(&self, was: &PageGrid) -> bool {
+        self.kind != was.kind
+            || self.default_pitch != was.default_pitch
+            || (self.char_pitch - was.char_pitch).abs() > 1e-4
+            || (self.line_pitch - was.line_pitch).abs() > 1e-4
+    }
+}
+
+/// Updates the grid fields after an edit as Word's Page Setup does: the field that changed since
+/// `prev` drives its partner — a count sets its pitch to the text extent over the count (Word for
+/// Mac writes 30 lines of a 648-pt text height as a 432-twip pitch, 2026-10-19), a pitch sets its
+/// count to the extent over the pitch rounded down, and Use default pitch puts the Normal style's
+/// size back. `tw` and `th` are the text area's width and height in points, `size` the Normal
+/// style's font size.
+pub fn reconcile_page_grid(g: &mut PageGrid, prev: &PageGrid, tw: f32, th: f32, size: f32) {
+    use wordcraft_doc::section::{MAX_GRID_PITCH, MIN_GRID_PITCH};
+    let count = |extent: f32, pitch: f32| ((extent / pitch.max(MIN_GRID_PITCH) + 0.001).floor() as u32).clamp(1, 1000);
+    let pitch = |extent: f32, n: u32| (extent / n.max(1) as f32).clamp(MIN_GRID_PITCH, MAX_GRID_PITCH);
+    let size = if size.is_finite() { size.clamp(MIN_GRID_PITCH, MAX_GRID_PITCH) } else { 10.5 };
+    let (tw, th) = (if tw.is_finite() { tw.max(18.0) } else { 18.0 }, if th.is_finite() { th.max(18.0) } else { 18.0 });
+    let moved = (g.extent.0 - tw).abs() > 0.01 || (g.extent.1 - th).abs() > 0.01;
+    g.extent = (tw, th);
+    let mut recount = moved;
+    if g.default_pitch && !prev.default_pitch {
+        g.char_pitch = size;
+        recount = true;
+    } else if g.chars != prev.chars {
+        g.char_pitch = pitch(tw, g.chars);
+        g.default_pitch = false;
+        recount = true;
+    } else if (g.char_pitch - prev.char_pitch).abs() > 1e-4 {
+        g.default_pitch = false;
+        recount = true;
+    }
+    if !g.char_pitch.is_finite() {
+        g.char_pitch = size;
+        recount = true;
+    }
+    g.char_pitch = g.char_pitch.clamp(MIN_GRID_PITCH, MAX_GRID_PITCH);
+    if recount || g.chars == 0 {
+        g.chars = count(tw, g.char_pitch);
+    }
+    let mut recount = moved;
+    if g.lines != prev.lines {
+        g.line_pitch = pitch(th, g.lines);
+        recount = true;
+    } else if (g.line_pitch - prev.line_pitch).abs() > 1e-4 {
+        recount = true;
+    }
+    if !g.line_pitch.is_finite() {
+        g.line_pitch = 18.0;
+        recount = true;
+    }
+    g.line_pitch = g.line_pitch.clamp(MIN_GRID_PITCH, MAX_GRID_PITCH);
+    if recount || g.lines == 0 {
+        g.lines = count(th, g.line_pitch);
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "dialog", rename_all = "camelCase")]
 pub enum Dialog {
@@ -266,10 +346,17 @@ pub enum Dialog {
         landscape: bool,
         /// Mirrored margins (the whole document's): left and right become inside and outside.
         mirror: bool,
-        /// Document grid: kind (0 none, 1 lines, 2 lines and characters, 3 snap to characters),
-        /// lines per page and characters per line; `grid_was` as opened (applied only if changed).
-        grid: (u8, u32, u32),
-        grid_was: (u8, u32, u32),
+        /// Document grid ([`PageGrid`]); `grid_was` as opened (applied only if changed) and
+        /// `grid_prev` as of the last frame (the field the user changed drives its partner).
+        grid: PageGrid,
+        grid_was: PageGrid,
+        grid_prev: PageGrid,
+        /// Text direction (`layout.textDirection`): vertical (down) or horizontal; as opened.
+        vertical: bool,
+        vertical_was: bool,
+        /// Columns (`layout.columns` count); as opened.
+        columns: u32,
+        columns_was: u32,
         /// Section direction: right to left (`layout.sectionRtl`).
         rtl: bool,
         /// Paper width and height in the measurement unit as shown (landscape: the wide side
@@ -1029,7 +1116,18 @@ impl Dialog {
                     _ => 0,
                 };
                 let size = app.session.doc.styles.resolve_char(Some("Normal"), &Default::default()).size;
-                let grid = (kind, sp.grid_lines_per_page().min(1000), sp.grid_chars_per_line(size).min(1000));
+                let g = sp.doc_grid.unwrap_or_default();
+                let grid = PageGrid {
+                    kind,
+                    chars: sp.grid_chars_per_line(size).min(1000),
+                    char_pitch: g.char_pitch(size),
+                    default_pitch: g.char_space == 0,
+                    lines: sp.grid_lines_per_page().min(1000),
+                    line_pitch: g.line_pitch(),
+                    extent: (sp.text_width(), sp.text_height()),
+                };
+                let vertical = sp.text_direction != wordcraft_doc::props::TextDirection::Horizontal;
+                let columns = sp.columns.count.clamp(1, 12);
                 let paper = (sp.page_w / crate::options::unit().pt_per_unit(), sp.page_h / crate::options::unit().pt_per_unit());
                 Dialog::PageSetup {
                     paper,
@@ -1044,6 +1142,11 @@ impl Dialog {
                     mirror: app.session.doc.settings.mirror_margins,
                     grid,
                     grid_was: grid,
+                    grid_prev: grid,
+                    vertical,
+                    vertical_was: vertical,
+                    columns,
+                    columns_was: columns,
                     rtl: sp.rtl,
                     valign: sp.valign,
                 }
@@ -2108,7 +2211,27 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             ok || cancel
         }
-        Dialog::PageSetup { top, bottom, left, right, landscape, mirror, rtl, grid, grid_was, paper, paper_was, paper_custom, message, valign } => {
+        Dialog::PageSetup {
+            top,
+            bottom,
+            left,
+            right,
+            landscape,
+            mirror,
+            rtl,
+            grid,
+            grid_was,
+            grid_prev,
+            vertical,
+            vertical_was,
+            columns,
+            columns_was,
+            paper,
+            paper_was,
+            paper_custom,
+            message,
+            valign,
+        } => {
             ui.label(egui::RichText::new(tl!("Margins")).font(semibold(12.5)));
             egui::Grid::new("ps").num_columns(4).show(ui, |ui| {
                 ui.label(tl!("Top:"));
@@ -2132,20 +2255,47 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             ui.label(egui::RichText::new(tl!("Pages")).font(semibold(12.5)));
             ui.checkbox(mirror, tl!("Mirror margins"));
             page_paper_group(ui, paper, landscape, paper_custom);
+            // Word's 文字数と行数 tab: text direction and columns, the grid kind, characters per
+            // line and lines per page each with their pitch, and Use default pitch.
             ui.label(egui::RichText::new(tl!("Document Grid")).font(semibold(12.5)));
-            ui.horizontal_wrapped(|ui| {
-                ui.radio_value(&mut grid.0, 0, tl!("No grid"));
-                ui.radio_value(&mut grid.0, 1, tl!("Lines only"));
-                ui.radio_value(&mut grid.0, 2, tl!("Lines and characters"));
-                ui.radio_value(&mut grid.0, 3, tl!("Text snaps to characters"));
+            ui.horizontal(|ui| {
+                ui.label(tl!("Text direction:"));
+                ui.radio_value(vertical, false, crate::i18n::tc("direction", "Horizontal"));
+                ui.radio_value(vertical, true, crate::i18n::tc("direction", "Vertical"));
+                ui.add_space(12.0);
+                ui.label(tl!("Columns:"));
+                ui.add(egui::DragValue::new(columns).range(1..=12));
             });
-            egui::Grid::new("ps_grid").num_columns(4).show(ui, |ui| {
-                ui.add_enabled(grid.0 >= 2, egui::Label::new(tl!("Characters per line:")));
-                ui.add_enabled(grid.0 >= 2, egui::DragValue::new(&mut grid.2).range(1..=1000));
-                ui.add_enabled(grid.0 >= 1, egui::Label::new(tl!("Lines per page:")));
-                ui.add_enabled(grid.0 >= 1, egui::DragValue::new(&mut grid.1).range(1..=1000));
+            ui.horizontal_wrapped(|ui| {
+                ui.radio_value(&mut grid.kind, 0, tl!("No grid"));
+                ui.radio_value(&mut grid.kind, 1, tl!("Specify line grid only"));
+                ui.radio_value(&mut grid.kind, 2, tl!("Specify line and character grid"));
+                ui.radio_value(&mut grid.kind, 3, tl!("Text snaps to character grid"));
+            });
+            let ppu = crate::options::unit().pt_per_unit();
+            let gutter = wordcraft_engine::cmd::page::sect(&app.session).gutter;
+            let (tw, th) = (((paper.0 - *left - *right) * ppu - gutter).max(18.0), ((paper.1 - *top - *bottom) * ppu).max(18.0));
+            let size = app.session.doc.styles.resolve_char(Some("Normal"), &Default::default()).size;
+            egui::Grid::new("ps_grid").num_columns(5).show(ui, |ui| {
+                let chars_on = grid.kind >= 2;
+                ui.add_enabled(chars_on, egui::Label::new(tl!("Characters per line:")));
+                ui.add_enabled(chars_on, egui::DragValue::new(&mut grid.chars).range(1..=1000));
+                ui.add_enabled(chars_on, egui::Label::new(tl!("Pitch:")));
+                ui.add_enabled(
+                    chars_on && !grid.default_pitch,
+                    egui::DragValue::new(&mut grid.char_pitch).range(1.0..=1584.0).speed(0.05).max_decimals(2).suffix(" pt"),
+                );
+                ui.add_enabled(chars_on, egui::Checkbox::new(&mut grid.default_pitch, tl!("Use default pitch")));
+                ui.end_row();
+                let lines_on = grid.kind >= 1;
+                ui.add_enabled(lines_on, egui::Label::new(tl!("Lines per page:")));
+                ui.add_enabled(lines_on, egui::DragValue::new(&mut grid.lines).range(1..=1000));
+                ui.add_enabled(lines_on, egui::Label::new(crate::i18n::tc("lines", "Pitch:")));
+                ui.add_enabled(lines_on, egui::DragValue::new(&mut grid.line_pitch).range(1.0..=1584.0).speed(0.05).max_decimals(2).suffix(" pt"));
                 ui.end_row();
             });
+            reconcile_page_grid(grid, grid_prev, tw, th, size);
+            *grid_prev = *grid;
             ui.horizontal(|ui| {
                 ui.label(tl!("Section direction:"));
                 ui.radio_value(rtl, false, tl!("Left-to-right"));
@@ -2165,16 +2315,26 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                         if let Some((_, v)) = commands.iter_mut().rev().find(|(id, _)| *id == "layout.margins") {
                             v["mirror"] = json!(*mirror);
                         }
-                        if grid != grid_was {
-                            let kind = ["none", "lines", "linesAndChars", "snapToChars"].get(grid.0 as usize).copied().unwrap_or("none");
+                        if grid.differs(grid_was) {
+                            let kind = ["none", "lines", "linesAndChars", "snapToChars"].get(grid.kind as usize).copied().unwrap_or("none");
                             let mut v = json!({"type": kind});
-                            if grid.1 != grid_was.1 {
-                                v["linesPerPage"] = json!(grid.1);
+                            if (grid.line_pitch - grid_was.line_pitch).abs() > 1e-4 {
+                                v["linePitch"] = json!(grid.line_pitch);
                             }
-                            if grid.2 != grid_was.2 {
-                                v["charsPerLine"] = json!(grid.2);
+                            if grid.default_pitch != grid_was.default_pitch || (grid.char_pitch - grid_was.char_pitch).abs() > 1e-4 {
+                                let space =
+                                    if grid.default_pitch { 0 } else { wordcraft_doc::section::DocGrid::char_space_for(grid.char_pitch, size) };
+                                v["charSpace"] = json!(space);
                             }
                             commands.push(("layout.documentGrid", v));
+                        }
+                        if *vertical != *vertical_was {
+                            let value = if *vertical { "down" } else { "horizontal" };
+                            commands.push(("layout.textDirection", json!({"value": value, "target": "section"})));
+                        }
+                        if *columns != *columns_was {
+                            let c = wordcraft_engine::cmd::page::sect(&app.session).columns.clone();
+                            commands.push(("layout.columns", json!({"count": *columns, "space": c.space, "separator": c.separator})));
                         }
                         if *rtl != wordcraft_engine::cmd::page::sect(&app.session).rtl {
                             commands.push(("layout.sectionRtl", json!({"value": *rtl})));
@@ -4485,6 +4645,113 @@ mod tests {
         let after = h.ctx.memory(|m| m.area_rect(id)).expect("dialog is still open");
         assert!((after.min.x - (before.min.x - 200.0)).abs() <= 1.0, "moved left: {before:?} -> {after:?}");
         assert!((after.min.y - (before.min.y + 120.0)).abs() <= 1.0, "moved down: {before:?} -> {after:?}");
+    }
+
+    /// Page Setup's 文字数と行数 fields follow each other as Word's do: a count sets its pitch to
+    /// the text extent over the count (30 lines of 648 pt → 21.6 pt, the 432 twips Word for Mac
+    /// writes), a pitch sets its count rounded down, Use default pitch puts the Normal size back
+    /// and an edited pitch clears it; hostile numbers are clamped.
+    #[test]
+    fn page_grid_counts_and_pitches_follow_each_other_as_words_page_setup_does() {
+        let (tw, th, size) = (425.2, 648.0, 10.5);
+        let opened = PageGrid { kind: 1, chars: 40, char_pitch: 10.5, default_pitch: true, lines: 36, line_pitch: 18.0, extent: (tw, th) };
+        let mut g = opened;
+        reconcile_page_grid(&mut g, &opened, tw, th, size);
+        assert_eq!(g, opened, "nothing changed, nothing moves");
+        // Lines per page 30 → the pitch is the text height over 30 (Word writes linePitch 432).
+        let prev = g;
+        g.lines = 30;
+        reconcile_page_grid(&mut g, &prev, tw, th, size);
+        assert_eq!((g.lines, g.line_pitch), (30, 21.6));
+        // Pitch 20 → 648 / 20 = 32.4 lines, rounded down.
+        let prev = g;
+        g.line_pitch = 20.0;
+        reconcile_page_grid(&mut g, &prev, tw, th, size);
+        assert_eq!((g.lines, g.line_pitch), (32, 20.0));
+        // Characters per line 30 → the pitch is the text width over 30, no longer the default.
+        let prev = g;
+        g.chars = 30;
+        reconcile_page_grid(&mut g, &prev, tw, th, size);
+        assert!((g.char_pitch - tw / 30.0).abs() < 1e-3 && !g.default_pitch, "{g:?}");
+        assert_eq!(g.chars, 30);
+        // Use default pitch → the Normal style's size and the characters it fits.
+        let prev = g;
+        g.default_pitch = true;
+        reconcile_page_grid(&mut g, &prev, tw, th, size);
+        assert_eq!((g.char_pitch, g.chars, g.default_pitch), (10.5, 40, true));
+        // Editing the pitch with the default on turns it off and recounts.
+        let prev = g;
+        g.char_pitch = 21.0;
+        reconcile_page_grid(&mut g, &prev, tw, th, size);
+        assert_eq!((g.char_pitch, g.chars, g.default_pitch), (21.0, 20, false));
+        // Hostile numbers never panic and stay inside the grid's range.
+        let prev = g;
+        g.line_pitch = f32::NAN;
+        g.chars = 0;
+        reconcile_page_grid(&mut g, &prev, f32::INFINITY, f32::NAN, f32::NAN);
+        assert!(g.line_pitch.is_finite() && g.lines >= 1 && g.chars >= 1 && g.char_pitch.is_finite(), "{g:?}");
+        // A margin edited in the dialog recounts over the new extent at the same pitches.
+        let mut g = opened;
+        reconcile_page_grid(&mut g, &opened, tw, 324.0, size);
+        assert_eq!((g.lines, g.line_pitch, g.chars, g.differs(&opened)), (18, 18.0, 40, false));
+    }
+
+    /// Page Setup's 文字数と行数 tab applied with OK: Lines per page 30 with "Specify line grid
+    /// only" gives the section a 21.6-pt line pitch (648 / 30, Word for Mac's 432 twips) that the
+    /// dialog reads back; Text direction Vertical and Columns 2 turn the section and split it,
+    /// leaving the grid alone; an unchanged dialog runs nothing.
+    #[test]
+    fn page_setup_applies_the_document_grid_text_direction_and_columns() {
+        use egui_kittest::kittest::Queryable;
+        use wordcraft_doc::props::TextDirection;
+        let sect = |app: &WordApp| wordcraft_engine::cmd::page::sect(&app.session);
+        let mut h = app_harness(app_with("Page"));
+        let _ = h.state_mut().run("layout.size", json!({"width": 612.0, "height": 792.0}));
+        let _ = h.state_mut().run("layout.margins", json!({"top": 72.0, "bottom": 72.0, "left": 72.0, "right": 72.0}));
+        let steps = h.state().session.undo_labels().len();
+        h.state_mut().run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
+        h.run_steps(3);
+        if let Some(Dialog::PageSetup { grid, .. }) = h.state_mut().dialog.as_mut() {
+            assert_eq!((grid.kind, grid.default_pitch), (0, true), "{grid:?}");
+            grid.kind = 1;
+            grid.lines = 30;
+        }
+        h.run_steps(2);
+        if let Some(Dialog::PageSetup { grid, .. }) = h.state().dialog.as_ref() {
+            assert!((grid.line_pitch - 21.6).abs() < 1e-3, "the pitch follows the count: {grid:?}");
+        }
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none());
+        let s = sect(h.state());
+        let g = s.doc_grid.expect("a line grid");
+        assert!((g.line_pitch() - 21.6).abs() < 1e-3 && s.grid_lines_per_page() == 30, "{g:?}");
+        assert_eq!(h.state().session.undo_labels().len(), steps + 1, "one undo step");
+        // Reopened: the same 30 lines at 21.6 pt; OK unchanged runs nothing.
+        h.state_mut().run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
+        h.run_steps(3);
+        if let Some(Dialog::PageSetup { grid, vertical, columns, .. }) = h.state_mut().dialog.as_mut() {
+            assert_eq!((grid.kind, grid.lines, *vertical, *columns), (1, 30, false, 1));
+            assert!((grid.line_pitch - 21.6).abs() < 1e-3, "{grid:?}");
+        }
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        assert_eq!(h.state().session.undo_labels().len(), steps + 2, "one step (the margins and orientation Page Setup always sends)");
+        assert_eq!(sect(h.state()).doc_grid, Some(g), "the grid as it was");
+        // Vertical and two columns.
+        h.state_mut().run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
+        h.run_steps(3);
+        if let Some(Dialog::PageSetup { vertical, columns, .. }) = h.state_mut().dialog.as_mut() {
+            *vertical = true;
+            *columns = 2;
+        }
+        h.run_steps(2);
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        let s = sect(h.state());
+        assert_eq!((s.text_direction, s.columns.count, s.grid_lines_per_page()), (TextDirection::Down, 2, 30));
+        assert_eq!(s.doc_grid, Some(g), "the grid as it was");
+        assert_eq!(h.state().session.undo_labels().len(), steps + 3, "one undo step for both");
     }
 
     fn app_harness(app: WordApp) -> egui_kittest::Harness<'static, WordApp> {

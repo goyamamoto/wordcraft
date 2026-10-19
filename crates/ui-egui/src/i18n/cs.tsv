@@ -1796,9 +1796,6 @@
 	Select a picture, shape, chart or table to describe it.	Vyberte obrázek, tvar, graf nebo tabulku, kterou chcete popsat.
 	Document Grid	Mřížka dokumentu
 	No grid	Bez mřížky
-	Lines only	Pouze řádky
-	Lines and characters	Řádky a znaky
-	Text snaps to characters	Text se přichytává ke znakům
 	Characters per line:	Znaků na řádek:
 	Lines per page:	Řádků na stránku:
 	Moved from	Přesunuto odtud
@@ -2664,3 +2661,9 @@ preview	Title	Ukázka
 	Baseline	Účaří
 	Snap to grid when document grid is defined	Přichytit k mřížce, je-li definována mřížka dokumentu
 	Automatically adjust right indent when document grid is defined	Automaticky upravit pravé odsazení, je-li definována mřížka dokumentu
+	Text direction:	Směr textu:
+	Specify line grid only	Pouze mřížka řádků
+	Specify line and character grid	Mřížka řádků a znaků
+	Text snaps to character grid	Text přichytávat k mřížce znaků
+	Pitch:	Rozteč:
+	Use default pitch	Použít výchozí rozteč

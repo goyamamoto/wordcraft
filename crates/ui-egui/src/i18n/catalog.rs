@@ -23,7 +23,11 @@ pub struct Entry {
 /// - `template`: the name of a built-in document template (Home and New), which may need other
 ///   wording than the same English word elsewhere (the "Letter" template and the "Letter" paper
 ///   size); it falls back to the plain entry.
-pub const CONTEXTS: &[&str] = &["preview", "template"];
+/// - `direction`: a text direction (Page Setup's Horizontal and Vertical), which Japanese,
+///   Chinese and Korean name as a writing mode (横書き, 縦書き); it falls back to the plain entry.
+/// - `lines`: a label beside the lines-per-page count (Page Setup's second Pitch), which
+///   Japanese names differently from the one beside the characters (行送り, 字送り).
+pub const CONTEXTS: &[&str] = &["preview", "template", "direction", "lines"];
 
 /// A parsed catalog. Values are owned for the life of the process (catalogs are built once).
 #[derive(Debug, Default)]

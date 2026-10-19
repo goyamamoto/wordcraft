@@ -1489,11 +1489,8 @@
 	Wrap Text Sides	Strony zawijania tekstu
 	Characters per line:	Znaków w wierszu:
 	Document Grid	Siatka dokumentu
-	Lines and characters	Wiersze i znaki
-	Lines only	Tylko wiersze
 	Lines per page:	Wierszy na stronie:
 	No grid	Bez siatki
-	Text snaps to characters	Tekst przyciąga do znaków
 
 # Interface text added on main since the first Polish catalog
 	A, B, C, …	A, B, C, …
@@ -2662,3 +2659,9 @@ preview	Title	Tytuł
 	Baseline	Linia bazowa
 	Snap to grid when document grid is defined	Przyciągaj do siatki, gdy zdefiniowano siatkę dokumentu
 	Automatically adjust right indent when document grid is defined	Automatycznie dopasuj wcięcie z prawej, gdy zdefiniowano siatkę dokumentu
+	Text direction:	Kierunek tekstu:
+	Specify line grid only	Określ tylko siatkę wierszy
+	Specify line and character grid	Określ siatkę wierszy i znaków
+	Text snaps to character grid	Przyciągaj tekst do siatki znaków
+	Pitch:	Odstęp:
+	Use default pitch	Użyj domyślnego odstępu

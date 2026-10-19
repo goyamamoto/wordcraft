@@ -1611,9 +1611,6 @@
 	Select a picture, shape, chart or table to describe it.	Виберіть зображення, фігуру, діаграму або таблицю, щоб описати її.
 	Document Grid	Сітка документа
 	No grid	Без сітки
-	Lines only	Лише рядки
-	Lines and characters	Рядки й символи
-	Text snaps to characters	Текст прив’язується до символів
 	Characters per line:	Символів у рядку:
 	Lines per page:	Рядків на сторінці:
 	Moved from	Переміщено звідси
@@ -2286,3 +2283,9 @@
 	Baseline	Базова лінія
 	Snap to grid when document grid is defined	Прив'язати до сітки, якщо задано сітку документа
 	Automatically adjust right indent when document grid is defined	Автоматично підбирати правий відступ, якщо задано сітку документа
+	Text direction:	Напрямок тексту:
+	Specify line grid only	Лише сітка рядків
+	Specify line and character grid	Сітка рядків і знаків
+	Text snaps to character grid	Текст за сіткою знаків
+	Pitch:	Крок:
+	Use default pitch	Крок за замовчуванням

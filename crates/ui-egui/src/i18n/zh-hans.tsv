@@ -1611,10 +1611,7 @@
 	Select a picture, shape, chart or table to describe it.	选择图片、形状、图表或表格以添加描述。
 	Document Grid	文档网格
 	No grid	无网格
-	Lines only	仅行
-	Lines and characters	行和字符
-	Text snaps to characters	文字贴合字符网格
-	Characters per line:	每行字数：
+	Characters per line:	每行字符数：
 	Lines per page:	每页行数：
 	Moved from	移动自
 	Moved to	移动到
@@ -2286,3 +2283,9 @@
 	Baseline	基线
 	Snap to grid when document grid is defined	如果定义了文档网格，则对齐到网格
 	Automatically adjust right indent when document grid is defined	如果定义了文档网格，则自动调整右缩进
+	Text direction:	文字排列：
+	Specify line grid only	只指定行网格
+	Specify line and character grid	指定行和字符网格
+	Text snaps to character grid	文字对齐字符网格
+	Pitch:	跨度：
+	Use default pitch	使用默认跨度
