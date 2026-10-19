@@ -362,8 +362,11 @@ pub struct ParaLayout {
     /// Bidi embedding level of each byte of the paragraph text (UAX #9, before the per-line
     /// rule L1). Empty when the paragraph is plain left-to-right text.
     pub bidi_levels: Vec<u8>,
-    /// Width of the drop cap letter itself (without the gap to the text).
+    /// Width of the drop cap letter itself (the text starts right after it).
     pub drop_cap_w: f32,
+    /// The drop cap letter's ink bottom relative to its baseline, points, positive up (negative
+    /// for a letter reaching below the baseline): the letter is placed with it on line N's baseline.
+    pub drop_cap_ink: f32,
     /// Laid-out equations by object index.
     pub maths: Vec<(usize, Arc<crate::math::MathLayout>)>,
     /// Ruby (Phonetic Guide) text over base-text clusters, in cluster order.
@@ -2065,6 +2068,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         .filter(|c| p.text.len() > c.len_utf8());
     let mut drop_cap = None;
     let mut drop_cap_w = 0.0;
+    let mut drop_cap_ink = 0.0;
     let mut maths = Vec::new();
     let mut enclosures = Vec::new();
     let mut rubies = Vec::new();
@@ -2158,16 +2162,80 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
             && let Some(c) = drop_first
             && let Some(first) = text.get(..c.len_utf8())
         {
-            let line_h = (rc.size * 1.2).max(1.0);
+            // Word for Mac (`dc1`–`dc5` probes, 2026-10-19): the letter keeps the size its run
+            // asks for when that is larger than the text's (a Word file stores the size Word
+            // computed); else it is sized, in half points rounded down, so that its ink spans
+            // from `word_drop_cap_top` above the first line's baseline to line N's baseline
+            // (漢 38.5 pt, あ 42.5 and W 50.5 for three 10.5-pt lines of 游明朝 and Aptos; T 56
+            // for three 12-pt Times New Roman lines). The text starts at the letter's advance
+            // (no gap), and the letter's ink bottom sits on line N's baseline (`drop_cap_ink`).
             let lines = rp.drop_cap as f32;
-            // Capital height is ~0.7 em: the letter's cap spans from line 1's caps to line N's baseline.
+            // The text beside the letter: the run after it when the letter is a run of its own
+            // (a Word file's frame run), else this run.
+            let body = if text.len() == c.len_utf8() {
+                p.run_ranges().find(|(r, _)| r.start == c.len_utf8()).map(|(_, cp)| resolve(cp)).unwrap_or_else(|| rc.clone())
+            } else {
+                rc.clone()
+            };
             let mut big = (*rc).clone();
-            // `clamp` would panic here when the text itself is larger than 1000 pt.
-            big.size = (((lines - 1.0) * line_h + rc.size * 0.7) / 0.7).min(1000.0).max(rc.size);
+            // A Word file's frame run carries the lowering Word computed (`w:position`): the
+            // letter is placed by its ink here instead.
+            big.position = 0.0;
+            big.vert_align = wordcraft_doc::props::VertAlign::Baseline;
             let before = b.clusters.len();
+            let gbefore = b.glyphs.len();
+            if rc.size <= body.size + 0.5 {
+                // The text's line pitch, as `break_lines` sizes its lines.
+                let pitch = {
+                    let si = b.style(&body, None, false, None);
+                    let natural = b.styles.get(si as usize).map_or(body.size * 1.2, |s| s.ascent + s.descent);
+                    let grid = Some(b.env.grid).filter(|g| g.line.is_some() && rp.snap_to_grid);
+                    match (rp.line_spacing, grid) {
+                        (LineSpacing::Exactly(v), _) => v,
+                        (LineSpacing::Multiple(m), Some(g)) => g.snap_height(natural) * m,
+                        (LineSpacing::Multiple(m), None) => natural * m,
+                        (LineSpacing::AtLeast(v), Some(g)) => g.snap_height(natural).max(v),
+                        (LineSpacing::AtLeast(v), None) => natural.max(v),
+                    }
+                };
+                // The family the letter was asked for: Office's Yu fonts have their own rule.
+                let requested: Option<String> = if east_asian(c) {
+                    rc.font_ea.clone().or_else(|| b.env.doc.settings.east_asian_font(false, rc.lang_ea.as_deref(), first).map(str::to_string))
+                } else {
+                    Some(rc.font.clone())
+                };
+                // Shape at the text's size to learn the letter's face and ink, then size it.
+                big.size = body.size;
+                b.shape(first, 0, &Arc::new(big.clone()), None);
+                let sized = b.clusters.get(before).and_then(|c| Some((b.styles.get(c.style as usize)?, b.glyphs.get(c.g0 as usize)?.gid))).and_then(
+                    |(st, gid)| {
+                        let (_, y0, _, y1) = wordcraft_fonts::math::glyph_bounds(&st.face, gid)?;
+                        let h = (y1 - y0) / st.face.upem as f32;
+                        (h > 0.05).then(|| ((lines - 1.0) * pitch + word_drop_cap_top(requested.as_deref(), &st.face) * body.size) / h)
+                    },
+                );
+                b.clusters.truncate(before);
+                b.glyphs.truncate(gbefore);
+                big.size = sized
+                    .map(|s| (s * 2.0).floor() / 2.0)
+                    .unwrap_or_else(|| {
+                        // Nothing to measure (a blank glyph): a capital's ~0.7 em spans the lines.
+                        let line_h = (body.size * 1.2).max(1.0);
+                        ((lines - 1.0) * line_h + body.size * 0.7) / 0.7
+                    })
+                    .min(1000.0)
+                    .max(body.size);
+            }
             b.shape(first, 0, &Arc::new(big), None);
             let w: f32 = b.clusters.get(before..).map(|c| c.iter().map(|c| c.adv).sum()).unwrap_or(0.0);
-            drop_cap = Some((b.clusters.len() - before, rp.drop_cap, w + rc.size * 0.3));
+            drop_cap_ink = b
+                .clusters
+                .get(before)
+                .and_then(|c| Some((b.styles.get(c.style as usize)?, b.glyphs.get(c.g0 as usize)?.gid)))
+                .and_then(|(st, gid)| wordcraft_fonts::math::glyph_bounds(&st.face, gid).map(|(_, y0, _, _)| y0 * st.size / st.face.upem as f32))
+                .filter(|v| v.is_finite())
+                .unwrap_or(0.0);
+            drop_cap = Some((b.clusters.len() - before, rp.drop_cap, w));
             drop_cap_w = w;
             // The letter hangs beside the text; lines flow at the indent `break_lines` adds.
             for c in b.clusters.iter_mut().skip(before) {
@@ -2484,6 +2552,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         hyph_after: Vec::new(),
         bidi_levels: b.levels,
         drop_cap_w,
+        drop_cap_ink,
         maths,
         rubies,
         displays,
@@ -3383,12 +3452,14 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
             break;
         }
     }
-    // Hang the drop cap from the first line's caps down to line N's baseline, left of the text.
+    // Hang the drop cap left of the text with its ink bottom on line N's baseline (Word for Mac:
+    // 漢's baseline 2.6 pt above the third line's at 38.5 pt, 二's 6.4 pt below the second line's
+    // at 90.5, T's on it; `dc1`–`dc3` probes, 2026-10-19).
     if let Some((nc, dl, dw)) = pl.drop_cap
         && let (Some(l0), Some(ln)) = (lines.first(), lines.get((dl as usize).min(lines.len()).saturating_sub(1)))
     {
         let short = lines.len() < dl as usize;
-        let dy = if short { (dl as f32 - 1.0) * l0.height } else { ln.baseline - l0.baseline };
+        let dy = if short { (dl as f32 - 1.0) * l0.height } else { ln.baseline - l0.baseline } + pl.drop_cap_ink;
         let dx = dw.min(first_x0.unwrap_or(0.0) - first_left.max(rp.indent_left));
         // Toward the start edge: left, or right (and from the letter's right edge) when mirrored.
         let dx = if rtl_para { pl.drop_cap_w - dx } else { dx };
@@ -3712,8 +3783,62 @@ const MIN_SPAN: f32 = 20.0;
 fn baseline_offset(spacing: LineSpacing, asc: f32, height: f32, desc: f32) -> f32 {
     match spacing {
         LineSpacing::Multiple(m) => asc * m.min(1.0),
-        LineSpacing::AtLeast(_) | LineSpacing::Exactly(_) => height - desc,
+        LineSpacing::AtLeast(_) => height - desc,
+        // Word for Mac puts the baseline of an exact line 80% of the way down whatever the font:
+        // 24 pt below the top of a 30-pt line of 10.5-pt 游明朝 and of 12-pt Times New Roman, 6.4
+        // below that of an 8-pt line of the Times (`dc3` probe, 2026-10-19).
+        LineSpacing::Exactly(_) => height * 0.8,
     }
+}
+
+/// How far above the first line's baseline a drop cap's ink reaches, in em of the text's size:
+/// the top of the line's em box, 1 em above the bottom of the face's `hhea` descent (Times New
+/// Roman, Arial, Georgia, Verdana, Courier New, Comic Sans MS, Impact, Apple SD Gothic Neo,
+/// Songti SC, Meiryo, Osaka and ＭＳ 明朝/ゴシック in Word for Mac — `dc1`–`dc5` probes, 2026-10-19,
+/// each within the half-point rounding); Office's own 游明朝/游ゴシック put it 0.45 em up and Toppan
+/// Bunkyu 0.04 (measured: their tables aren't ours to read). `requested` is the family the
+/// letter was asked for, `face` the one drawing it.
+fn word_drop_cap_top(requested: Option<&str>, face: &wordcraft_fonts::FontFace) -> f32 {
+    let yu = |f: &str| wordcraft_fonts::word::is_office_yu(f);
+    let toppan = |f: &str| f.starts_with("Toppan Bunkyu");
+    if requested.is_some_and(yu) || yu(&face.family) {
+        return 0.45;
+    }
+    if requested.is_some_and(toppan) || toppan(&face.family) {
+        return 0.04;
+    }
+    (1.0 - (face.hhea_descent() / face.upem.max(1.0)) as f32).clamp(0.05, 1.0)
+}
+
+/// The font size Word for Mac gives the drop cap letter of `p` (see `layout_para`): the paragraph
+/// laid out with the letter's own size cleared, so that the text's size and font decide. `None`
+/// when the paragraph has no drop cap or nothing to drop.
+pub fn drop_cap_size(doc: &Document, p: &Paragraph) -> Option<f32> {
+    let first = p.text.chars().next()?;
+    let mut p = p.clone();
+    p.format(0, first.len_utf8(), &|c| c.size = None).ok()?;
+    let fields = FieldCtx::default();
+    let env = ParaEnv {
+        doc,
+        width: 468.0,
+        label: None,
+        fields: &fields,
+        show_hidden: false,
+        field_codes: false,
+        hide_deleted: false,
+        table: None,
+        proofing: None,
+        numeral: NumeralMode::default(),
+        exclusions: &[],
+        eq_number: 0,
+        read_line_spacing: None,
+        grid: Grid::default(),
+        fit_objects: false,
+        vertical: false,
+    };
+    let pl = layout_para(&p, &env);
+    pl.drop_cap.filter(|d| d.0 > 0)?;
+    pl.clusters.first().and_then(|c| pl.styles.get(c.style as usize)).map(|s| s.size)
 }
 
 /// The spans of a row at `top` (about `h` tall) between `lo` and `hi` that text can use around
