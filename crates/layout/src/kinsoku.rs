@@ -118,6 +118,15 @@ pub fn apply(text: &str, opps: &mut Vec<usize>, kinsoku: bool, word_wrap: bool, 
             }
         }
     }
+    // After a hyphen before a quotation mark, kinsoku or not: Word for Mac breaks hungry-"very"
+    // and あ×44 x-"abc" after the hyphen as it does before a letter or a bracket (`hb1`,
+    // 2026-10-19), where UAX #14 keeps a quotation mark with what precedes it.
+    for (i, c) in text.char_indices() {
+        let after = i + c.len_utf8();
+        if c == '-' && next_char(after).is_some_and(|n| matches!(n, '"' | '\'' | '“' | '‘' | '„' | '‚' | '«' | '‹')) {
+            opps.push(after);
+        }
+    }
     if !word_wrap {
         // Between any two letters or digits that are not East Asian (whole graphemes, so accents
         // stay with their letters).
@@ -172,6 +181,12 @@ mod tests {
         let dots = breaks("ああ…いい「…」‥う", true, true);
         assert_eq!(dots.iter().filter(|s| *s == "…").count(), 1, "{dots:?}");
         assert!(dots.iter().any(|s| s == "‥"), "{dots:?}");
+        // After a hyphen before a quotation mark, as before a letter.
+        for k in [true, false] {
+            let hy = breaks("hungry-\"very\" hungry-“so” x-'y' あ-\"abc\"", k, true);
+            assert_eq!(hy.iter().filter(|s| *s == "\"").count(), 2, "{hy:?}");
+            assert!(hy.iter().any(|s| s == "“") && hy.iter().any(|s| s == "'"), "{hy:?}");
+        }
         // Latin text: unchanged by kinsoku, broken anywhere without word wrap.
         let en = "Hello wonderful (world), 50%.";
         assert_eq!(breaks(en, true, true), breaks(en, false, true));
