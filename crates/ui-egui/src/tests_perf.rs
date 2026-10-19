@@ -112,18 +112,22 @@ fn scrolling_a_big_table_fingerprints_only_pages_coming_into_view() {
     assert_eq!(h.state().canvas.page_keys.hashed, first, "idle frames fingerprint nothing");
     // Scroll a long way down: each newly shown page is fingerprinted once.
     let mut max_textures = 0;
-    for _ in 0..60 {
+    for _ in 0..40 {
         wheel(&mut h, -400.0);
         h.step();
         max_textures = max_textures.max(h.state().canvas.texture_count());
     }
     let offset = h.state().canvas.scroll_offset.y;
-    assert!(offset > 20_000.0, "scrolled through many pages: {offset}");
+    let page_px = 792.0 * crate::canvas::PX_PER_PT;
+    assert!(offset > 8.0 * page_px, "scrolled through many pages: {offset}");
     let after = std::sync::Arc::clone(&h.state_mut().session.layout());
     assert!(std::sync::Arc::ptr_eq(&layout, &after), "scrolling never lays the document out again");
     let hashed = h.state().canvas.page_keys.hashed;
-    // 60 steps of 400 pt cross about 24'000 / 1'056 ≈ 23 pages (at 100%, 1.33 px a point).
-    assert!(hashed < pages && hashed <= first + 30, "pages fingerprinted: {hashed} of {pages}");
+    // 40 steps of 400 points cross about 16'000 / 1'056 ≈ 15 pages at 1.33 points a point (96
+    // per inch), 20 at one (100 % on a Mac): only those and the ones in view are fingerprinted.
+    // Pages sit side by side when more than one fits across the window (two at 100 % on a Mac).
+    let crossed = (offset / page_px).ceil() as usize * h.state().canvas.cols.max(1);
+    assert!(hashed < pages && hashed <= first + crossed + 3, "pages fingerprinted: {hashed} of {pages}, {crossed} crossed");
     // Textures stay bounded to the pages near the view.
     assert!(max_textures <= 12, "textures kept while scrolling: {max_textures}");
     assert!(h.state().canvas.texture_count() >= 1, "the pages in view stay rendered");
