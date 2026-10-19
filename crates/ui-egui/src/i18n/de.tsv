@@ -1596,9 +1596,6 @@
 	Select a picture, shape, chart or table to describe it.	Wählen Sie ein Bild, eine Form, ein Diagramm oder eine Tabelle aus, um es zu beschreiben.
 	Document Grid	Dokumentraster
 	No grid	Kein Raster
-	Lines only	Nur Zeilen
-	Lines and characters	Zeilen und Zeichen
-	Text snaps to characters	Text am Zeichenraster ausrichten
 	Characters per line:	Zeichen pro Zeile:
 	Lines per page:	Zeilen pro Seite:
 	Moved from	Verschoben von
@@ -2270,3 +2267,9 @@
 	Baseline	Grundlinie
 	Snap to grid when document grid is defined	Am Raster ausrichten, wenn ein Dokumentraster definiert ist
 	Automatically adjust right indent when document grid is defined	Rechten Einzug automatisch anpassen, wenn ein Dokumentraster definiert ist
+	Text direction:	Textrichtung:
+	Specify line grid only	Nur Zeilenraster festlegen
+	Specify line and character grid	Zeilen- und Zeichenraster festlegen
+	Text snaps to character grid	Text am Zeichenraster ausrichten
+	Pitch:	Abstand:
+	Use default pitch	Standardabstand verwenden

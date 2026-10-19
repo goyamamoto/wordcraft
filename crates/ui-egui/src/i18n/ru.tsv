@@ -1849,9 +1849,6 @@ preview	Title	Пример
 	Select a picture, shape, chart or table to describe it.	Выберите рисунок, фигуру, диаграмму или таблицу, чтобы описать её.
 	Document Grid	Сетка документа
 	No grid	Без сетки
-	Lines only	Только строки
-	Lines and characters	Строки и символы
-	Text snaps to characters	Текст привязывается к символам
 	Characters per line:	Символов в строке:
 	Lines per page:	Строк на странице:
 	Moved from	Перемещено из
@@ -2667,3 +2664,9 @@ preview	Title	Пример
 	Baseline	Базовая линия
 	Snap to grid when document grid is defined	Привязать к сетке, если задана сетка документа
 	Automatically adjust right indent when document grid is defined	Автоматически подбирать правый отступ, если задана сетка документа
+	Text direction:	Направление текста:
+	Specify line grid only	Только сетка строк
+	Specify line and character grid	Сетка строк и знаков
+	Text snaps to character grid	Текст по сетке знаков
+	Pitch:	Шаг:
+	Use default pitch	Шаг по умолчанию

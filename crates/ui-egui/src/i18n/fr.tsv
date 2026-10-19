@@ -1503,9 +1503,6 @@
 	Select a picture, shape, chart or table to describe it.	Sélectionnez une image, une forme, un graphique ou un tableau pour le décrire.
 	Document Grid	Grille du document
 	No grid	Sans grille
-	Lines only	Lignes uniquement
-	Lines and characters	Lignes et caractères
-	Text snaps to characters	Le texte s’aligne sur les caractères
 	Characters per line:	Caractères par ligne :
 	Lines per page:	Lignes par page :
 	Moved from	Déplacé depuis
@@ -2278,3 +2275,9 @@
 	Baseline	Ligne de base
 	Snap to grid when document grid is defined	Aligner sur la grille lorsque la grille du document est définie
 	Automatically adjust right indent when document grid is defined	Ajuster automatiquement le retrait droit lorsque la grille du document est définie
+	Text direction:	Orientation du texte :
+	Specify line grid only	Spécifier la grille de lignes seulement
+	Specify line and character grid	Spécifier la grille de lignes et de caractères
+	Text snaps to character grid	Aligner le texte sur la grille de caractères
+	Pitch:	Pas :
+	Use default pitch	Utiliser le pas par défaut

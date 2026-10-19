@@ -1722,9 +1722,6 @@
 	Select a picture, shape, chart or table to describe it.	Valige pilt, kujund, diagramm või tabel, et seda kirjeldada.
 	Document Grid	Dokumendi ruudustik
 	No grid	Ruudustikuta
-	Lines only	Ainult read
-	Lines and characters	Read ja märgid
-	Text snaps to characters	Tekst joondub märkide ruudustikku
 	Characters per line:	Märke reas:
 	Lines per page:	Ridu lehel:
 	Location	Asukoht
@@ -2305,3 +2302,9 @@
 	Baseline	Baasjoon
 	Snap to grid when document grid is defined	Kinnita ruudustikule, kui dokumendi ruudustik on määratud
 	Automatically adjust right indent when document grid is defined	Kohanda paremtaanet automaatselt, kui dokumendi ruudustik on määratud
+	Text direction:	Teksti suund:
+	Specify line grid only	Määra ainult reavõrgustik
+	Specify line and character grid	Määra rea- ja märgivõrgustik
+	Text snaps to character grid	Tekst joondub märgivõrgustikule
+	Pitch:	Samm:
+	Use default pitch	Kasuta vaikesammu

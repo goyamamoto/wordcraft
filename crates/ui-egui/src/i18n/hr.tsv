@@ -1252,9 +1252,7 @@ template	Letter	Pismo
 	Lines	Crte
 	Lines +/−	Retci +/−
 	Lines added	Dodani retci
-	Lines and characters	Retci i znakovi
 	Lines deleted	Izbrisani retci
-	Lines only	Samo crte
 	Lines per page:	Redaka po stranici:
 	Link	Poveznica
 	Link entries to their headings	Poveži unose s njihovim naslovima
@@ -2221,7 +2219,6 @@ template	Letter	Pismo
 	Text over Colon Equal	Tekst iznad dvotočke i jednako
 	Text over Equal	Tekst iznad jednako
 	Text size	Veličina teksta
-	Text snaps to characters	Tekst se poravnava prema znakovima
 	Text to display:	Tekst za prikaz:
 	Text:	Tekst:
 	Text\nBox	Tekstni\nokvir
@@ -2669,3 +2666,9 @@ preview	Title	Naslov
 	Baseline	Osnovna linija
 	Snap to grid when document grid is defined	Poravnaj s rešetkom kad je rešetka dokumenta definirana
 	Automatically adjust right indent when document grid is defined	Automatski prilagodi desnu uvlaku kad je rešetka dokumenta definirana
+	Text direction:	Smjer teksta:
+	Specify line grid only	Samo rešetka redaka
+	Specify line and character grid	Rešetka redaka i znakova
+	Text snaps to character grid	Tekst se poravnava s rešetkom znakova
+	Pitch:	Korak:
+	Use default pitch	Koristi zadani korak

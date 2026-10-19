@@ -60,7 +60,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"value"?: bool} (true: the section's columns run right to left; without a value it toggles)"#),
         CommandSpec::new("layout.textDirection", "Text Direction", "Layout › Page Setup", text_direction).params(
-            r#"{"value"?: "horizontal|down|up"} (also lrTb|tbRl|btLr; down: rotate all text 90°, lines top to bottom stacking right to left; up: 270°; default: the next after the current). In a table cell it turns the selected cells, in a text box the box; anywhere else the section(s) of the selection"#,
+            r#"{"value"?: "horizontal|down|up", "target"?: "section"} (also lrTb|tbRl|btLr; down: rotate all text 90°, lines top to bottom stacking right to left; up: 270°; default: the next after the current). In a table cell it turns the selected cells, in a text box the box — unless target is section (Page Setup) — anywhere else the section(s) of the selection"#,
         ),
         CommandSpec::new("layout.differentFirstPage", "Different First Page", "Header & Footer › Options", |s, v| {
             let on = p::bool(v, "value").unwrap_or(!sect(s).title_page);
@@ -266,10 +266,11 @@ fn text_direction(s: &mut Session, v: &Value) -> CmdResult {
         None => None,
     };
     let dir = dir.unwrap_or(text_direction_at(s).next());
-    if s.sel.focus.path.cell().is_some() {
+    let section = p::str(v, "target") == Some("section");
+    if !section && s.sel.focus.path.cell().is_some() {
         return super::table::text_direction(s, &json!({"value": dir.ooxml()}));
     }
-    if super::objects::text_box_target(s).is_some() {
+    if !section && super::objects::text_box_target(s).is_some() {
         let vert = match dir {
             TextDirection::Horizontal => TextVert::Horz,
             TextDirection::Down => TextVert::Vert,
@@ -845,6 +846,10 @@ mod tests {
         s.run("layout.textDirection", &json!({"value": "btLr"})).unwrap();
         assert_eq!(text_direction_at(&s), TextDirection::Up);
         assert_eq!(sect(&s).text_direction, TextDirection::Down);
+        // Page Setup names the section: the cell keeps its direction, the section turns.
+        s.run("layout.textDirection", &json!({"value": "horizontal", "target": "section"})).unwrap();
+        assert_eq!(text_direction_at(&s), TextDirection::Up, "the cell is as it was");
+        assert_eq!(sect(&s).text_direction, TextDirection::Horizontal);
     }
 
     /// #1206: each Margins and Columns preset is recognised after it's applied (Mirrored and

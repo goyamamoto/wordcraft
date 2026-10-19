@@ -1621,9 +1621,6 @@
 	Select a picture, shape, chart or table to describe it.	Markera en bild, figur, ett diagram eller en tabell som du vill beskriva.
 	Document Grid	Dokumentrutnät
 	No grid	Inget rutnät
-	Lines only	Bara rader
-	Lines and characters	Rader och tecken
-	Text snaps to characters	Texten fästs mot tecken
 	Characters per line:	Tecken per rad:
 	Lines per page:	Rader per sida:
 	Moved from	Flyttat från
@@ -2684,3 +2681,9 @@ preview	Title	Titel
 	Baseline	Baslinje
 	Snap to grid when document grid is defined	Fäst mot rutnät när dokumentets rutnät är definierat
 	Automatically adjust right indent when document grid is defined	Justera höger indrag automatiskt när dokumentets rutnät är definierat
+	Text direction:	Textriktning:
+	Specify line grid only	Ange endast radrutnät
+	Specify line and character grid	Ange rad- och teckenrutnät
+	Text snaps to character grid	Fäst text mot teckenrutnätet
+	Pitch:	Delning:
+	Use default pitch	Använd standarddelning

@@ -1436,9 +1436,6 @@
 	Select a picture, shape, chart or table to describe it.	Изберете изображение, фигура, диаграма или таблица, за да добавите описание.
 	Document Grid	Мрежа на документа
 	No grid	Без мрежа
-	Lines only	Само редове
-	Lines and characters	Редове и знаци
-	Text snaps to characters	Прилепване на текста към знаците
 	Characters per line:	Знаци на ред:
 	Lines per page:	Редове на страница:
 	Moved from	Преместено от
@@ -2658,3 +2655,9 @@
 	Baseline	Базова линия
 	Snap to grid when document grid is defined	Прилепване към мрежата, когато е зададена мрежа на документа
 	Automatically adjust right indent when document grid is defined	Автоматично регулиране на десния отстъп, когато е зададена мрежа на документа
+	Text direction:	Посока на текста:
+	Specify line grid only	Само мрежа от редове
+	Specify line and character grid	Мрежа от редове и знаци
+	Text snaps to character grid	Текстът се подравнява по мрежата от знаци
+	Pitch:	Стъпка:
+	Use default pitch	Стъпка по подразбиране

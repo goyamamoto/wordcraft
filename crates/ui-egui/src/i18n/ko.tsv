@@ -1577,9 +1577,6 @@
 	Select a picture, shape, chart or table to describe it.	설명할 그림, 도형, 차트 또는 표를 선택하세요.
 	Document Grid	문서 눈금
 	No grid	눈금 없음
-	Lines only	선만
-	Lines and characters	선 및 문자
-	Text snaps to characters	텍스트를 문자에 맞춤
 	Characters per line:	줄당 문자 수:
 	Lines per page:	페이지당 줄 수:
 	Moved from	이동한 위치(시작)
@@ -2525,3 +2522,9 @@ preview	Title	제목
 	Baseline	기준선
 	Snap to grid when document grid is defined	문서 눈금이 정의된 경우 눈금에 맞춤
 	Automatically adjust right indent when document grid is defined	문서 눈금이 정의된 경우 오른쪽 들여쓰기 자동 조정
+	Text direction:	텍스트 방향:
+	Specify line grid only	줄 눈금만 지정
+	Specify line and character grid	줄 및 문자 눈금 지정
+	Text snaps to character grid	문자 눈금에 텍스트 맞춤
+	Pitch:	간격:
+	Use default pitch	기본 간격 사용
