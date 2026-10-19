@@ -40,6 +40,12 @@ pub enum ProofLang {
     /// flagged as English misspellings. Hyphenation keeps using the English patterns, as before
     /// languages were told apart.
     Other,
+    /// English (Japan), `en-JP`: the Latin language of Word's Japanese Normal.dotm, which Word for
+    /// Mac has no tools for at all — no spelling or grammar marks and no automatic hyphenation
+    /// (`sp3` and `hy1` probes, 2026-10-19: "Thsi is a tset." is clean and a narrow English
+    /// paragraph breaks only between words, where the same text as English (US) or (UK) has both
+    /// words marked and `in-ternationalization`, `representa-tion` hyphenated).
+    NoTools,
 }
 
 impl ProofLang {
@@ -48,11 +54,17 @@ impl ProofLang {
         [ProofLang::En, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Hr, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs];
 
     /// The proofing language of a BCP 47 tag (`pl-PL`, `en_GB`, `PL`…). Only the primary subtag
-    /// counts. No tag (or an empty one) is English, WordCraft's default editing language.
+    /// counts, except that `en-JP` — English (Japan), the Latin language of Word's Japanese
+    /// Normal.dotm — is [`ProofLang::NoTools`]. No tag (or an empty one) is English, WordCraft's
+    /// default editing language.
     pub fn from_tag(tag: Option<&str>) -> ProofLang {
         let Some(tag) = tag.map(str::trim).filter(|t| !t.is_empty()) else { return ProofLang::En };
-        let primary = tag.split(['-', '_']).next().unwrap_or("");
-        if primary.eq_ignore_ascii_case("en") || primary.eq_ignore_ascii_case("eng") {
+        let mut parts = tag.split(['-', '_']);
+        let primary = parts.next().unwrap_or("");
+        let region = parts.next().unwrap_or("");
+        if (primary.eq_ignore_ascii_case("en") || primary.eq_ignore_ascii_case("eng")) && region.eq_ignore_ascii_case("jp") {
+            ProofLang::NoTools
+        } else if primary.eq_ignore_ascii_case("en") || primary.eq_ignore_ascii_case("eng") {
             ProofLang::En
         } else if primary.eq_ignore_ascii_case("pl") || primary.eq_ignore_ascii_case("pol") {
             ProofLang::Pl
@@ -87,7 +99,7 @@ impl ProofLang {
             ProofLang::Tr => "tr",
             ProofLang::Ru => "ru",
             ProofLang::Cs => "cs",
-            ProofLang::Other => "",
+            ProofLang::Other | ProofLang::NoTools => "",
         }
     }
 
@@ -183,6 +195,10 @@ mod tests {
         for t in ["fr-FR", "de", "x-none", "ja-JP", "plx", "bgx", "trx", "csx", "e", "-"] {
             assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::Other, "{t}");
         }
+        for t in ["en-JP", "en_jp", "EN-jp", "eng-JP"] {
+            assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::NoTools, "{t}");
+        }
+        assert!(!ProofLang::NoTools.is_proofed());
         assert_eq!(ProofLang::from_tag(None), ProofLang::En);
         assert_eq!(ProofLang::from_tag(Some("")), ProofLang::En);
         assert_eq!(ProofLang::from_tag(Some("  ")), ProofLang::En);
