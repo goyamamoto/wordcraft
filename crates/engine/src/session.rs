@@ -119,6 +119,10 @@ pub struct ViewState {
     /// Mac with Japanese editing shows them; see [`Session::crop_marks`].
     #[serde(default)]
     pub crop_marks: Option<bool>,
+    /// Text boundaries (Word › Preferences › View › Text boundaries; 文字列表示範囲枠): a dotted
+    /// box around every paragraph's slot in its column, on screen only; off until chosen, as in Word.
+    #[serde(default)]
+    pub text_boundaries: bool,
     /// View › Show › Gridlines: the drawing grid over the page's text area (on screen only).
     pub gridlines: bool,
     /// Table Layout › View Gridlines: outlines of table cells (on screen only); on by default, as in Word.
@@ -222,6 +226,7 @@ impl Default for ViewState {
             marks: false,
             ruler: true,
             crop_marks: None,
+            text_boundaries: false,
             gridlines: false,
             table_gridlines: true,
             nav_pane: false,
