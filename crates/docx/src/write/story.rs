@@ -1475,7 +1475,9 @@ fn sectpr_body(w: &mut W, s: &SectionProps) {
         if s.title_page {
             w.empty("w:titlePg", &[]);
         }
-        if s.text_direction.is_turned() || s.text_direction_set {
+        if s.text_direction == wordcraft_doc::props::TextDirection::Down && s.stack_left_to_right {
+            w.val("w:textDirection", "tbRlV");
+        } else if s.text_direction.is_turned() || s.text_direction_set {
             w.val("w:textDirection", s.text_direction.ooxml());
         }
         if s.rtl {

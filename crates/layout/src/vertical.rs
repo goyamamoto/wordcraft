@@ -47,10 +47,71 @@ fn origin(turn: TextDirection, w: f32, h: f32) -> (f32, f32) {
     }
 }
 
+/// Mirror an unturned page's text area top to bottom, line by line, so that once turned its
+/// lines stack from the real page's left edge to the right (`tbRlV`, see
+/// [`SectionProps::stack_left_to_right`]). Each line keeps its own layout — the side its ruby,
+/// underlines and emphasis marks are on — and moves to the mirror image of its place; a
+/// paragraph's space before and after swap sides with it. A text box's text moves with its box.
+fn stack_left_to_right(page: &mut Page) {
+    let (t, b) = (page.body.y, page.body.bottom());
+    let flip = |y: f32, h: f32| t + b - y - h;
+    // How far each text box moves: its text follows it rather than being mirrored line by line.
+    let mut boxes: Vec<(u32, f32)> = Vec::new();
+    for it in &page.items {
+        if let Placed::Object { rect, text_box: Some(id), .. } = it {
+            boxes.push((*id, flip(rect.y, rect.h) - rect.y));
+        }
+    }
+    let mut out = Vec::with_capacity(page.items.len());
+    for it in std::mem::take(&mut page.items) {
+        match it {
+            Placed::Lines { story: StoryRef::Part(id), .. } if boxes.iter().any(|(b, _)| *b == id) => {
+                let mut it = it;
+                if let Some((_, dy)) = boxes.iter().find(|(b, _)| matches!(&it, Placed::Lines { story: StoryRef::Part(i), .. } if i == b)) {
+                    it.translate(0.0, *dy);
+                }
+                out.push(it);
+            }
+            Placed::Lines { story, path, para, l0, l1, x, y, turn, slot } if !turn.is_turned() => {
+                let Some(first_top) = para.lines.get(l0).map(|l| l.top) else { continue };
+                for k in l0..l1 {
+                    let Some(line) = para.lines.get(k) else { break };
+                    let top = y + (line.top - first_top);
+                    // The space before goes with the first line, after with the last; mirrored,
+                    // each ends up on the other side of its line.
+                    let slot =
+                        crate::Slot { w: slot.w, before: if k + 1 == l1 { slot.after } else { 0.0 }, after: if k == l0 { slot.before } else { 0.0 } };
+                    out.push(Placed::Lines {
+                        story,
+                        path: path.clone(),
+                        para: para.clone(),
+                        l0: k,
+                        l1: k + 1,
+                        x,
+                        y: flip(top, line.height),
+                        turn,
+                        slot,
+                    });
+                }
+            }
+            mut it => {
+                if let Some(r) = bounds(&it) {
+                    it.translate(0.0, flip(r.y, r.h) - r.y);
+                }
+                out.push(it);
+            }
+        }
+    }
+    page.items = out;
+}
+
 /// Turn a page laid out unturned (see [`unturned_sect`]) onto the real `phys` page.
 pub(crate) fn turn_page(page: &mut Page, turn: TextDirection, phys: &SectionProps) {
     if !turn.is_turned() {
         return;
+    }
+    if turn == TextDirection::Down && phys.stack_left_to_right {
+        stack_left_to_right(page);
     }
     let (ox, oy) = origin(turn, phys.page_w, phys.page_h);
     page.w = phys.page_w;
