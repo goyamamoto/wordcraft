@@ -1414,9 +1414,6 @@ impl<'a> Builder<'a> {
         if let Some(p) = cur {
             segs.push((seg_start, text.len(), p));
         }
-        let no_kern = [wordcraft_fonts::feature_value(b"kern", 0)];
-        let vert = [wordcraft_fonts::feature_value(b"vert", 1)];
-        let vert_no_kern = [wordcraft_fonts::feature_value(b"vert", 1), wordcraft_fonts::feature_value(b"kern", 0)];
         for (a, b, key) in segs {
             let Some(sub) = text.get(a..b) else { continue };
             // Vertical sections: East Asian text takes the font's vertical forms.
@@ -1475,17 +1472,11 @@ impl<'a> Builder<'a> {
                     c
                 }
             };
-            // The shaper kerns by default; Word kerns only when Kerning for fonts covers the size.
-            let features: &[wordcraft_fonts::Feature] = match (vertical, rc.kerned()) {
-                (true, true) => &vert,
-                (true, false) => &vert_no_kern,
-                (false, true) => &[],
-                (false, false) => &no_kern,
-            };
+            let features = shaping_features(rc, &st.face, vertical);
             let shaped = if use_levels {
-                wordcraft_fonts::shape_run(&st.face, shape_text, features, map, key.rtl)
+                wordcraft_fonts::shape_run(&st.face, shape_text, &features, map, key.rtl)
             } else {
-                wordcraft_fonts::shape(&st.face, shape_text, features, map)
+                wordcraft_fonts::shape(&st.face, shape_text, &features, map)
             };
             let k = st.size / st.face.upem.max(1.0) as f32;
             let hscale = rc.scale / 100.0;
@@ -4096,6 +4087,49 @@ pub fn proof_text(p: &wordcraft_doc::Paragraph) -> String {
         }
     }
     out
+}
+
+/// The OpenType features a run is shaped with, as Word for Mac shapes it (its PDFs read with 13
+/// fonts, `kn1`–`kn5` probes, 2026-10-19). A run that asks for no OpenType feature
+/// (`w14:ligatures` and the rest unset: every document that never touched Font › Advanced) goes
+/// down Word's legacy text path: no ligatures or contextual forms, and Kerning for fonts takes
+/// the pairs of the font's `kern` table only (Times New Roman, Arial, Calibri, Aptos and
+/// Helvetica Neue kern; 游明朝, Hiragino, Toppan Bunkyu and Source Sans 3, whose pairs are in
+/// `GPOS`, don't). A run that asks for one is shaped by OpenType: GSUB ligatures of the kinds
+/// asked for, number forms, spacing and stylistic sets, and `GPOS` kerning (the `kern` table where
+/// `GPOS` has no `kern` feature, as Times New Roman's; nothing for a font with no OpenType layout
+/// at all, as Helvetica Neue, which Word hands to the system's AAT shaper). Vertical East Asian
+/// text takes the font's vertical forms either way.
+fn shaping_features(rc: &ResolvedChar, face: &wordcraft_fonts::FontFace, vertical: bool) -> Vec<wordcraft_fonts::Feature> {
+    let on = |tag: &[u8; 4], on: bool| wordcraft_fonts::feature_value(tag, u32::from(on));
+    let opentype = rc.opentype();
+    let kern = rc.kerned() && if opentype { face.has_gpos_kern() || (face.has_gpos() && face.has_kern_table()) } else { face.has_kern_table() };
+    let lig = rc.ligatures;
+    let mut f = vec![
+        on(b"kern", kern),
+        on(b"liga", lig.standard()),
+        on(b"clig", lig.contextual()),
+        on(b"calt", rc.cntxt_alts),
+        on(b"hlig", lig.historical()),
+        on(b"dlig", lig.discretionary()),
+    ];
+    match rc.num_form {
+        wordcraft_doc::props::NumForm::Default => {}
+        wordcraft_doc::props::NumForm::Lining => f.push(on(b"lnum", true)),
+        wordcraft_doc::props::NumForm::OldStyle => f.push(on(b"onum", true)),
+    }
+    match rc.num_spacing {
+        wordcraft_doc::props::NumSpacing::Default => {}
+        wordcraft_doc::props::NumSpacing::Proportional => f.push(on(b"pnum", true)),
+        wordcraft_doc::props::NumSpacing::Tabular => f.push(on(b"tnum", true)),
+    }
+    for set in rc.stylistic_sets.iter().filter(|s| (1..=20).contains(*s)) {
+        f.push(on(&[b's', b's', b'0' + set / 10, b'0' + set % 10], true));
+    }
+    if vertical {
+        f.push(on(b"vert", true));
+    }
+    f
 }
 
 #[cfg(test)]
