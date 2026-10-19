@@ -889,7 +889,7 @@ pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
             match name.as_str() {
                 "DATE" | "TIME" | "CREATEDATE" | "SAVEDATE" | "PRINTDATE" => {
                     let pic = date_picture(instr).unwrap_or_else(|| if name == "TIME" { "h:mm am/pm".into() } else { "M/d/yyyy".into() });
-                    updates.push((k, super::insert::format_date(&pic)));
+                    updates.push((k, super::insert::format_date_in(&pic, field_lang(&s.doc, p, k).as_deref())));
                 }
                 "REF" | "PAGEREF" => {
                     let target = instr.split_whitespace().nth(1).unwrap_or("");
@@ -921,6 +921,13 @@ pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
     update_toc(s)
 }
 
+/// The text language (`w:lang/@w:val`) of the `k`th object of paragraph `p`: a DATE field's
+/// names (weekday, month, AM/PM) follow it.
+fn field_lang(doc: &wordcraft_doc::Document, p: &wordcraft_doc::Paragraph, k: usize) -> Option<String> {
+    let off = p.object_offsets().get(k).copied()?;
+    doc.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(off)).lang
+}
+
 /// Refresh every unlocked `DATE` and `TIME` field to now, as Word does whenever it shows,
 /// prints or exports a document: a letter written from a template carries today's date, not the
 /// date the template was last saved (#1672).
@@ -943,7 +950,7 @@ pub fn refresh_date_fields(doc: &mut wordcraft_doc::Document) {
                 }
                 // Word's default picture when the code carries no `\@` switch.
                 let pic = date_picture(instr).unwrap_or_else(|| if name == "TIME" { "h:mm am/pm".into() } else { "M/d/yyyy".into() });
-                updates.push((k, super::insert::format_date(&pic)));
+                updates.push((k, super::insert::format_date_in(&pic, field_lang(doc, p, k).as_deref())));
             }
             if updates.is_empty() {
                 continue;
