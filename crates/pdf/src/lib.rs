@@ -818,7 +818,9 @@ impl Exporter<'_> {
                     let idx = self.entry(*story, path, para);
                     for d in &draws {
                         match d {
-                            Draw::Glyphs { .. } | Draw::Turned { .. } => self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d)),
+                            Draw::Glyphs { .. } | Draw::Turned { .. } | Draw::Scaled { .. } => {
+                                self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d))
+                            }
                             Draw::Image { alt, .. } => self.tagged(s, Role::Figure, Some(alt), |me, s| me.draw(s, d)),
                             // A rotated inline picture.
                             Draw::Rotated { items, .. } if items.iter().any(|i| matches!(i, Draw::Image { .. })) => {
@@ -1096,6 +1098,19 @@ impl Exporter<'_> {
                     return;
                 }
                 let [a, b, c, d, e, f] = spin.matrix(*cx, *cy);
+                s.push_transform(&Transform::from_row(a, b, c, d, e, f));
+                for it in items {
+                    self.draw(s, it);
+                }
+                s.pop();
+            }
+            Draw::Scaled { x, sx, items } => {
+                let Some([a, b, c, d, e, f]) = Draw::scale_matrix(*x, *sx) else {
+                    for it in items {
+                        self.draw(s, it);
+                    }
+                    return;
+                };
                 s.push_transform(&Transform::from_row(a, b, c, d, e, f));
                 for it in items {
                     self.draw(s, it);

@@ -736,3 +736,31 @@ fn vertical_em_squares_follow_their_fonts_win_metrics_as_word_for_mac_places_the
         );
     }
 }
+
+/// Word for Mac (`hw2`, 2026-10-19; 24 pt, no grid): 縦AaWi1 ｱ行 in MS Mincho and MS Gothic — the
+/// lying A starts 6 pt (the automatic space) after 縦's em, then every character 12 pt further,
+/// the space and the half-width ｱ too, and 行 stands 12 pt after ｱ: pens at 30, 42, …, 102, 114.
+#[test]
+fn half_width_characters_lie_half_an_em_apart_along_a_column_as_word_for_mac_sets_them() {
+    for font in ["MS Mincho", "MS Gothic"] {
+        let r = wordcraft_fonts::word::resolve(font, false, false);
+        if !r.face.covers('縦') {
+            continue;
+        }
+        let chr = CharProps { font: Some(font.into()), font_ea: Some(font.into()), size: Some(24.0), ..Default::default() };
+        let mut d = Document::from_text("");
+        d.body.clear();
+        let mut para = Paragraph::with_text("縦AaWi1 ｱ行", chr);
+        para.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+        d.body.push(wordcraft_doc::para_block(para));
+        d.last_section.text_direction = TextDirection::Down;
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+        let line = &para.lines[0];
+        let lefts: Vec<f32> = (0..para.clusters.len()).map(|k| line.cl_left(k).unwrap() - line.cl_left(0).unwrap()).collect();
+        let want = [0.0, 30.0, 42.0, 54.0, 66.0, 78.0, 90.0, 102.0, 114.0];
+        for (k, w) in want.iter().enumerate() {
+            assert!((lefts[k] - w).abs() < 0.1, "{font}: cluster {k} at {} along the column (Word {w}); {lefts:?}", lefts[k]);
+        }
+    }
+}
