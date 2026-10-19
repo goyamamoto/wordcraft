@@ -122,6 +122,10 @@ fn core_breaks(core: &[char], lang: ProofLang) -> (Vec<usize>, Source) {
     if lang == ProofLang::Pl {
         return core_breaks_pl(core);
     }
+    // English (Japan) has no hyphenation dictionary in Word: its words never break.
+    if lang == ProofLang::NoTools {
+        return (vec![], Source::None);
+    }
     // Bulgarian words follow the Bulgarian syllable rules; Latin-script words in a Bulgarian run
     // (`WordCraft`, `email`) are hyphenated as English, as in any other language.
     if lang == ProofLang::Bg && core.iter().all(|&c| crate::bg::is_letter(c)) {
@@ -460,6 +464,18 @@ mod tests {
 
     fn h(w: &str) -> String {
         hyphenate_word(w, &Limits::default())
+    }
+
+    /// English (Japan) — Word's Japanese template's Latin language — has no hyphenation
+    /// dictionary in Word (`hy1` probe, 2026-10-19): a narrow en-JP paragraph breaks only between
+    /// words, where the same text in English (US) or (UK) breaks `in-ternationalization` and
+    /// `representa-tion`.
+    #[test]
+    fn english_japan_never_hyphenates() {
+        let lim = Limits::default();
+        assert_eq!(hyphenate_word_in("internationalization", &lim, ProofLang::NoTools), "internationalization");
+        assert_eq!(hyphenate_word_in("representation", &lim, ProofLang::NoTools), "representation");
+        assert_ne!(hyphenate_word_in("internationalization", &lim, ProofLang::En), "internationalization");
     }
 
     #[test]

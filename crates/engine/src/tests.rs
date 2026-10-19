@@ -7647,9 +7647,20 @@ fn a_japanese_region_starts_from_words_japanese_normal_template() {
     s.system_region = wordcraft_geom::Region::from_tag("ja-JP");
     let d = s.blank_document();
     let chr = &d.styles.default_chr;
-    assert_eq!((chr.size, chr.size_cs, chr.lang_ea.as_deref()), (Some(10.5), Some(12.0), Some("ja-JP")));
+    assert_eq!((chr.size, chr.size_cs, chr.lang.as_deref(), chr.lang_ea.as_deref()), (Some(10.5), Some(12.0), Some("en-JP"), Some("ja-JP")));
     let para = &d.styles.default_para;
     assert_eq!((para.line_spacing, para.space_after, para.widow_control), (Some(LineSpacing::Multiple(1.0)), Some(0.0), Some(false)));
+    // English (Japan) has no proofing tools: Word marks nothing in a new Japanese document
+    // (`sp3` probe, 2026-10-19), where the same text in a US English document is marked.
+    for (region, issues) in [("ja-JP", 0), ("en-US", 2)] {
+        let mut t = Session::new(wordcraft_doc::Document::new());
+        t.system_region = wordcraft_geom::Region::from_tag(region);
+        let d = t.blank_document();
+        t.set_document(d);
+        t.run("text.insert", &json!({"text": "Thsi is a tset."})).unwrap();
+        let v = t.run("review.issues", &json!({})).unwrap();
+        assert_eq!(v.as_array().map_or(0, Vec::len), issues, "{region}: {v}");
+    }
     assert_eq!(d.settings.theme_font_lang_ea.as_deref(), Some("ja-JP"));
     assert_eq!(d.settings.punct_compression, wordcraft_doc::east_asian::PunctCompression::CompressPunctuation);
     assert_eq!(d.settings.default_tab, 42.0);

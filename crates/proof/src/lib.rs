@@ -505,22 +505,36 @@ fn damerau(a: &[char], b: &str) -> usize {
     prev.get(m).copied().unwrap_or(9)
 }
 
-/// Words in `text`: (byte start, byte end).
+/// An East Asian character — kana, kanji, Hangul, their punctuation and the full-width forms —
+/// which bounds a word as a space does: Word for Mac checks `abc` in `テストabc` and `thsi` in
+/// `を使うthsi文章` as words of their own, and never the full-width `ａｂｃ` of `ａｂｃdef` (`sp3`
+/// probe, 2026-10-19, English (US) runs).
+fn east_asian(c: char) -> bool {
+    matches!(c as u32,
+        0x1100..=0x11FF | 0x2E80..=0x2FDF | 0x2FF0..=0x303F | 0x3040..=0x31FF | 0x3200..=0x33FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xA960..=0xA97F | 0xAC00..=0xD7FF | 0xF900..=0xFAFF | 0xFE30..=0xFE4F | 0xFF00..=0xFFEF | 0x20000..=0x3FFFF)
+}
+
+/// Words in `text`: (byte start, byte end). Latin and East Asian text are words of their own,
+/// however they touch.
 pub fn words(text: &str) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
-    let mut start: Option<usize> = None;
+    let mut start: Option<(usize, bool)> = None;
     let is_w = |c: char| c.is_alphanumeric() || c == '\'' || c == '’' || c == '-';
     for (i, c) in text.char_indices() {
         match (start, is_w(c)) {
-            (None, true) => start = Some(i),
-            (Some(s), false) => {
+            (None, true) => start = Some((i, east_asian(c))),
+            (Some((s, _)), false) => {
                 out.push((s, i));
                 start = None;
+            }
+            (Some((s, ea)), true) if ea != east_asian(c) => {
+                out.push((s, i));
+                start = Some((i, !ea));
             }
             _ => {}
         }
     }
-    if let Some(s) = start {
+    if let Some((s, _)) = start {
         out.push((s, text.len()));
     }
     // Trim surrounding apostrophes/hyphens.
@@ -619,7 +633,7 @@ pub fn is_correct_in_with(word: &str, lang: ProofLang, opts: &Options) -> bool {
         ProofLang::Tr => accepted_by_options(word, opts) || tr::is_correct(word),
         ProofLang::Ru => accepted_by_options(word, opts) || ru::is_correct(word),
         ProofLang::Cs => accepted_by_options(word, opts) || cs::is_correct(word),
-        ProofLang::Bg | ProofLang::Other => true,
+        ProofLang::Bg | ProofLang::Other | ProofLang::NoTools => true,
     }
 }
 
@@ -634,7 +648,7 @@ pub fn suggest_in(word: &str, max: usize, lang: ProofLang) -> Vec<String> {
         ProofLang::Tr => tr::suggest(word, max),
         ProofLang::Ru => ru::suggest(word, max),
         ProofLang::Cs => cs::suggest(word, max),
-        ProofLang::Bg | ProofLang::Other => Vec::new(),
+        ProofLang::Bg | ProofLang::Other | ProofLang::NoTools => Vec::new(),
     }
 }
 
@@ -651,7 +665,7 @@ pub fn check_grammar_in(text: &str, lang: ProofLang) -> Vec<Issue> {
         ProofLang::Tr => tr::grammar::check(text),
         ProofLang::Ru => ru::grammar::check(text),
         ProofLang::Cs => cs::grammar::check(text),
-        ProofLang::Bg | ProofLang::Other => Vec::new(),
+        ProofLang::Bg | ProofLang::Other | ProofLang::NoTools => Vec::new(),
     }
 }
 
@@ -824,6 +838,18 @@ fn starts_consonant_sound(w: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// Word for Mac (`sp3` probe, 2026-10-19, English (US) runs in a Japanese document) marks
+    /// `abc` after テスト and before it, `thsi` between を使う and 文章 and `fnot`, never テスト,
+    /// を使う, the full-width ａｂｃ or `def`: Latin words end where East Asian text starts.
+    #[test]
+    fn latin_words_end_at_east_asian_text() {
+        let text = "テストabc abcテスト ａｂｃdef Wordを使うthsi文章です。fnot";
+        let ws: Vec<&str> = words(text).into_iter().filter_map(|(a, b)| text.get(a..b)).collect();
+        assert_eq!(ws, ["テスト", "abc", "abc", "テスト", "ａｂｃ", "def", "Word", "を使う", "thsi", "文章です", "fnot"]);
+        let flagged: Vec<&str> = check_spelling(text).into_iter().filter_map(|i| text.get(i.start..i.end)).collect();
+        assert_eq!(flagged, ["abc", "abc", "thsi", "fnot"]);
+    }
+
     #[test]
     fn missing_dictionary_is_named_only_for_hunspell_languages_without_one() {
         assert_eq!(dictionary_needed(ProofLang::Pl, false), Some("pl_PL"));

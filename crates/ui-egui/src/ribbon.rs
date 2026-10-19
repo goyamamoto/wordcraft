@@ -559,7 +559,7 @@ pub(crate) fn language_name(tag: Option<&str>) -> String {
 
 /// The English name of a region subtag the language list has no entry for (else the subtag).
 fn region_name(code: &str) -> String {
-    const REGIONS: [(&str, &str); 62] = [
+    const REGIONS: [(&str, &str); 63] = [
         ("AE", "U.A.E."),
         ("AO", "Angola"),
         ("AR", "Argentina"),
@@ -592,6 +592,7 @@ fn region_name(code: &str) -> String {
         ("IQ", "Iraq"),
         ("IT", "Italy"),
         ("JM", "Jamaica"),
+        ("JP", "Japan"),
         ("JO", "Jordan"),
         ("KW", "Kuwait"),
         ("KZ", "Kazakhstan"),
@@ -3048,8 +3049,8 @@ mod tests {
         assert_eq!(resolve_tab("Home", &["Home"]), "Home");
     }
 
-    /// Word's status bar says Japanese after 漢字 and English (United States) after abc in the
-    /// same Japanese document.
+    /// Word's status bar says Japanese after 漢字 and English (Japan) — the Japanese template's
+    /// Latin language, `en-JP` (`sp3` probe, 2026-10-19) — after abc in the same Japanese document.
     #[test]
     fn status_bar_names_japanese_after_east_asian_text() {
         let doc = wordcraft_engine::blank_document(&wordcraft_engine::Region::from_tag("ja-JP"));
@@ -3057,7 +3058,7 @@ mod tests {
         app.run("text.insert", json!({"text": "漢字"})).unwrap();
         assert_eq!(caret_language(&app), "Japanese");
         app.run("text.insert", json!({"text": "abc"})).unwrap();
-        assert_eq!(caret_language(&app), "English (United States)");
+        assert_eq!(caret_language(&app), "English (Japan)");
         // At the start of the paragraph the character after the caret decides.
         app.run("caret.docStart", json!({})).unwrap();
         assert_eq!(caret_language(&app), "Japanese");
