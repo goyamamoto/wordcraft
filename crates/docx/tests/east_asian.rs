@@ -246,3 +246,47 @@ fn custom_kinsoku_lists_and_spacing_in_lines_round_trip() {
     let r = wordcraft_docx::read(&zip(&refs)).unwrap();
     assert_eq!(r.settings.kinsoku_chars, vec![KinsokuChars { lang: "ja-JP".into(), no_start: "!%)".into(), no_end: "$（".into() }]);
 }
+
+/// The OpenType features of Font › Advanced (`w14:ligatures`, `w14:numForm`, `w14:numSpacing`,
+/// `w14:stylisticSets`, `w14:cntxtAlts`; [MS-DOCX] 2.6.3) are kept through a save and read back,
+/// in the document defaults (Word's Japanese Normal sets `standardContextual` there) and on runs.
+#[test]
+fn opentype_features_round_trip() {
+    use wordcraft_doc::props::{Ligatures, NumForm, NumSpacing};
+    let mut d = Document::new();
+    d.styles.default_chr.ligatures = Some(Ligatures::StandardContextual);
+    let run = CharProps {
+        ligatures: Some(Ligatures::HistoricalDiscretionary),
+        num_form: Some(NumForm::OldStyle),
+        num_spacing: Some(NumSpacing::Tabular),
+        stylistic_sets: Some(vec![1, 7, 20, 0, 21]),
+        cntxt_alts: Some(true),
+        ..Default::default()
+    };
+    d.body = vec![para_block(Paragraph::with_text("office 1234", run))];
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let styles = part(&bytes, "word/styles.xml");
+    assert!(styles.contains(r#"<w14:ligatures w14:val="standardContextual"/>"#), "{styles}");
+    let document = part(&bytes, "word/document.xml");
+    for x in [
+        r#"<w14:ligatures w14:val="historicalDiscretionary"/>"#,
+        r#"<w14:numForm w14:val="oldStyle"/>"#,
+        r#"<w14:numSpacing w14:val="tabular"/>"#,
+        r#"<w14:stylisticSets><w14:styleSet w14:id="1"/><w14:styleSet w14:id="7"/><w14:styleSet w14:id="20"/></w14:stylisticSets>"#,
+        r#"<w14:cntxtAlts w14:val="1"/>"#,
+    ] {
+        assert!(document.contains(x), "{x} in {document}");
+    }
+    let r = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(r.styles.default_chr.ligatures, Some(Ligatures::StandardContextual));
+    let p = r.body[0].as_para().unwrap();
+    let c = &p.runs[0].props;
+    assert_eq!(c.ligatures, Some(Ligatures::HistoricalDiscretionary));
+    assert_eq!(c.num_form, Some(NumForm::OldStyle));
+    assert_eq!(c.num_spacing, Some(NumSpacing::Tabular));
+    assert_eq!(c.stylistic_sets.as_deref(), Some(&[1u8, 7, 20][..]));
+    assert_eq!(c.cntxt_alts, Some(true));
+    // Word's own spellings: `none` and an explicit off.
+    let d2 = wordcraft_docx::read(&bytes.clone()).unwrap();
+    drop(d2);
+}

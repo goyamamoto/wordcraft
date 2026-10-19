@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use wordcraft_doc::para::cap_alt;
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CellProps, CharProps, CombineBrackets, EastAsianLayout, EmphasisMark, FitText, HeightRule, Highlight,
-    LineSpacing, NumRef, ParaProps, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextColor, TextDirection,
-    Underline, VAlign, VMerge, VertAlign,
+    Ligatures, LineSpacing, NumForm, NumRef, NumSpacing, ParaProps, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps,
+    TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::{
     Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, MAX_CHAR_SPACE, MAX_GRID_PITCH, NotePos, NoteProps, NoteRestart, NumFormat,
@@ -271,6 +271,19 @@ impl PropCtx {
                     c.lang = k.attr("w:val").filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string);
                     c.lang_bidi = k.attr("w:bidi").filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string);
                     c.lang_ea = k.attr("w:eastAsia").filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string);
+                }
+                "w14:ligatures" => c.ligatures = k.attr("w14:val").and_then(Ligatures::from_ooxml),
+                "w14:numForm" => c.num_form = k.attr("w14:val").and_then(NumForm::from_ooxml),
+                "w14:numSpacing" => c.num_spacing = k.attr("w14:val").and_then(NumSpacing::from_ooxml),
+                "w14:cntxtAlts" => c.cntxt_alts = Some(k.attr("w14:val").is_none_or(|v| !matches!(v.trim(), "0" | "false" | "off"))),
+                "w14:stylisticSets" => {
+                    let sets: Vec<u8> = k
+                        .children("w14:styleSet")
+                        .filter_map(|st| st.attr("w14:id")?.trim().parse::<u8>().ok())
+                        .filter(|id| (1..=20).contains(id))
+                        .take(20)
+                        .collect();
+                    c.stylistic_sets = Some(sets);
                 }
                 n if n.starts_with("w14:") => {
                     let fx = c.text_effects.get_or_insert_with(Default::default);

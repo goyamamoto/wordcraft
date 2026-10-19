@@ -515,6 +515,22 @@ pub struct CharProps {
     /// Kerning for fonts at or above this size (points); 0 = off.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kern: Option<f32>,
+    /// OpenType ligatures (Font › Advanced › OpenType Features; `w14:ligatures`). Unset = none:
+    /// the run is shaped by Word's legacy text path (see [`Ligatures`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ligatures: Option<Ligatures>,
+    /// OpenType number forms (`w14:numForm`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub num_form: Option<NumForm>,
+    /// OpenType number spacing (`w14:numSpacing`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub num_spacing: Option<NumSpacing>,
+    /// OpenType stylistic sets 1–20 (`w14:stylisticSets`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stylistic_sets: Option<Vec<u8>>,
+    /// Use Contextual Alternates (`w14:cntxtAlts`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cntxt_alts: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outline: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -638,7 +654,7 @@ impl CharProps {
     /// overlaid on `base`.
     pub fn minus(mut self, base: &CharProps) -> CharProps {
         drop_same_fields!(self, base; style, font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
-            shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, em, fit_text,
+            shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, ligatures, num_form, num_spacing, stylistic_sets, cntxt_alts, outline, shadow, emboss, engrave, em, fit_text,
             east_asian_layout, lang, no_proof, rtl, cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, link, ins, del);
         self
     }
@@ -649,7 +665,7 @@ impl CharProps {
     /// format both scripts must set both values explicitly.
     pub fn overlay(&mut self, patch: &CharProps) {
         overlay_fields!(self, patch; style, font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
-            shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, em, fit_text,
+            shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, ligatures, num_form, num_spacing, stylistic_sets, cntxt_alts, outline, shadow, emboss, engrave, em, fit_text,
             east_asian_layout, lang, no_proof, rtl, cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, link, ins, del, fmt_change);
         if let Some(p) = &patch.text_effects {
             self.text_effects.get_or_insert_with(Default::default).overlay(p);
@@ -694,6 +710,135 @@ impl Align {
             Align::Right if rtl => Align::Left,
             a => a,
         }
+    }
+}
+
+/// OpenType ligatures a run asks for (Font › Advanced › OpenType Features › Ligatures,
+/// `w14:ligatures`). Word for Mac shapes a run that asks for no OpenType feature at all — the
+/// default of every document that never set one — by its legacy text path: no ligatures or
+/// contextual forms, and Kerning for fonts takes the pairs of the font's `kern` table only. A
+/// run that asks for one is shaped by OpenType: GSUB ligatures of the kinds asked for, GPOS
+/// kerning (measured 2026-10-19, `kn1`–`kn5` probes; see `layout::para::shaping_features`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum Ligatures {
+    #[default]
+    None,
+    Standard,
+    Contextual,
+    Historical,
+    Discretionary,
+    StandardContextual,
+    StandardHistorical,
+    StandardDiscretionary,
+    ContextualHistorical,
+    ContextualDiscretionary,
+    HistoricalDiscretionary,
+    All,
+}
+
+impl Ligatures {
+    /// Every kind, in the Font dialog's order.
+    pub const ALL: [Ligatures; 12] = [
+        Ligatures::None,
+        Ligatures::Standard,
+        Ligatures::Contextual,
+        Ligatures::Historical,
+        Ligatures::Discretionary,
+        Ligatures::StandardContextual,
+        Ligatures::StandardHistorical,
+        Ligatures::StandardDiscretionary,
+        Ligatures::ContextualHistorical,
+        Ligatures::ContextualDiscretionary,
+        Ligatures::HistoricalDiscretionary,
+        Ligatures::All,
+    ];
+    /// The `ST_Ligatures` value ([MS-DOCX] 2.6.3).
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            Ligatures::None => "none",
+            Ligatures::Standard => "standard",
+            Ligatures::Contextual => "contextual",
+            Ligatures::Historical => "historical",
+            Ligatures::Discretionary => "discretionary",
+            Ligatures::StandardContextual => "standardContextual",
+            Ligatures::StandardHistorical => "standardHistorical",
+            Ligatures::StandardDiscretionary => "standardDiscretionary",
+            Ligatures::ContextualHistorical => "contextualHistorical",
+            Ligatures::ContextualDiscretionary => "contextualDiscretionary",
+            Ligatures::HistoricalDiscretionary => "historicalDiscretionary",
+            Ligatures::All => "all",
+        }
+    }
+    pub fn from_ooxml(s: &str) -> Option<Ligatures> {
+        let s = s.trim();
+        Ligatures::ALL.iter().copied().find(|l| l.ooxml().eq_ignore_ascii_case(s))
+    }
+    /// Standard ligatures (`liga`: fi, fl, ffi…).
+    pub fn standard(self) -> bool {
+        use Ligatures::*;
+        matches!(self, Standard | StandardContextual | StandardHistorical | StandardDiscretionary | All)
+    }
+    /// Contextual ligatures (`clig`).
+    pub fn contextual(self) -> bool {
+        use Ligatures::*;
+        matches!(self, Contextual | StandardContextual | ContextualHistorical | ContextualDiscretionary | All)
+    }
+    /// Historical ligatures (`hlig`).
+    pub fn historical(self) -> bool {
+        use Ligatures::*;
+        matches!(self, Historical | StandardHistorical | ContextualHistorical | HistoricalDiscretionary | All)
+    }
+    /// Discretionary ligatures (`dlig`).
+    pub fn discretionary(self) -> bool {
+        use Ligatures::*;
+        matches!(self, Discretionary | StandardDiscretionary | ContextualDiscretionary | HistoricalDiscretionary | All)
+    }
+}
+
+/// OpenType number forms (`w14:numForm`): lining (`lnum`) or old-style (`onum`) figures.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum NumForm {
+    #[default]
+    Default,
+    Lining,
+    OldStyle,
+}
+
+impl NumForm {
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            NumForm::Default => "default",
+            NumForm::Lining => "lining",
+            NumForm::OldStyle => "oldStyle",
+        }
+    }
+    pub fn from_ooxml(s: &str) -> Option<NumForm> {
+        [NumForm::Default, NumForm::Lining, NumForm::OldStyle].into_iter().find(|f| f.ooxml().eq_ignore_ascii_case(s.trim()))
+    }
+}
+
+/// OpenType number spacing (`w14:numSpacing`): proportional (`pnum`) or tabular (`tnum`) figures.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum NumSpacing {
+    #[default]
+    Default,
+    Proportional,
+    Tabular,
+}
+
+impl NumSpacing {
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            NumSpacing::Default => "default",
+            NumSpacing::Proportional => "proportional",
+            NumSpacing::Tabular => "tabular",
+        }
+    }
+    pub fn from_ooxml(s: &str) -> Option<NumSpacing> {
+        [NumSpacing::Default, NumSpacing::Proportional, NumSpacing::Tabular].into_iter().find(|f| f.ooxml().eq_ignore_ascii_case(s.trim()))
     }
 }
 
@@ -1365,6 +1510,29 @@ pub struct CellProps {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn opentype_feature_names_round_trip() {
+        use super::{Ligatures, NumForm, NumSpacing};
+        for l in Ligatures::ALL {
+            assert_eq!(Ligatures::from_ooxml(l.ooxml()), Some(l));
+            assert_eq!(serde_json::to_value(l).unwrap(), serde_json::Value::String(l.ooxml().to_string()), "{l:?} serialises as its OOXML name");
+        }
+        assert_eq!(Ligatures::from_ooxml(" StandardContextual "), Some(Ligatures::StandardContextual));
+        assert_eq!(Ligatures::from_ooxml("ligatures"), None);
+        let kinds = |l: Ligatures| (l.standard(), l.contextual(), l.historical(), l.discretionary());
+        assert_eq!(kinds(Ligatures::None), (false, false, false, false));
+        assert_eq!(kinds(Ligatures::StandardContextual), (true, true, false, false));
+        assert_eq!(kinds(Ligatures::HistoricalDiscretionary), (false, false, true, true));
+        assert_eq!(kinds(Ligatures::All), (true, true, true, true));
+        for f in [NumForm::Default, NumForm::Lining, NumForm::OldStyle] {
+            assert_eq!(NumForm::from_ooxml(f.ooxml()), Some(f));
+        }
+        for f in [NumSpacing::Default, NumSpacing::Proportional, NumSpacing::Tabular] {
+            assert_eq!(NumSpacing::from_ooxml(f.ooxml()), Some(f));
+        }
+        assert_eq!(NumForm::ooxml(NumForm::OldStyle), "oldStyle");
+    }
+
     use super::*;
 
     #[test]
