@@ -500,6 +500,82 @@ fn vertical_underlines_strikethroughs_and_marks_sit_as_word_for_mac_draws_them()
 /// (the 12-pt 28.08); Toppan's 19.92 / 22.32 and 37.2 / 28.08; Songti's 32.88 / 32.88 and
 /// 45.84 / 37.2 — every column 46.8 wide (1.3 × 36), Songti's 65.52 (1.82 × 36).
 #[test]
+fn words_korean_fonts_stack_by_name_in_vertical_columns_as_word_for_mac_does() {
+    // Word for Mac (kr3, kr5, vt3; 24 pt, no grid), whatever faces stand in: Malgun Gothic's
+    // Hangul 25.5 pt apart with each baseline 22.01 below its pen (the lying 1 after 글 at 31.88:
+    // a 6.375 space, a quarter of the pitch) and its columns 41.52 apart; Batang, GulimChe and MS
+    // Mincho an em apart, 20.62/20.57 below the pen, the 1 at 30.0, columns 31.2 apart.
+    // (family, text, baselines along the column, the lying 1's pen).
+    let cases: Vec<(&str, &str, Vec<f32>, Option<f32>)> = vec![
+        ("Malgun Gothic", "한국어행", vec![22.01, 47.51, 73.01, 98.51], None),
+        ("Malgun Gothic", "글123행", vec![22.01], Some(31.875)),
+        ("Batang", "한국어행", vec![20.62, 44.62, 68.62, 92.62], None),
+        ("Batang", "글123행", vec![20.62], Some(30.0)),
+        ("GulimChe", "한국어행", vec![20.62, 44.62, 68.62, 92.62], None),
+        ("MS Mincho", "縦書き行", vec![20.57, 44.57, 68.57, 92.57], None),
+    ];
+    if !wordcraft_fonts::word::resolve("Batang", false, false).face.covers('한')
+        || !wordcraft_fonts::word::resolve("MS Mincho", false, false).face.covers('縦')
+    {
+        return;
+    }
+    let mut d = Document::from_text("");
+    d.body.clear();
+    for (family, text, ..) in &cases {
+        let chr = CharProps {
+            font: Some((*family).into()),
+            font_ea: Some((*family).into()),
+            size: Some(24.0),
+            lang_ea: Some("ko-KR".into()),
+            ..Default::default()
+        };
+        let mut para = Paragraph::with_text(text, chr);
+        para.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+        para.props.space_before = Some(0.0);
+        para.props.space_after = Some(0.0);
+        d.body.push(wordcraft_doc::para_block(para));
+    }
+    d.last_section.text_direction = TextDirection::Down;
+    let l = lay(&d);
+    let draws = display::page_display(&d, &l.pages[0], &Default::default());
+    let turned: Vec<(f32, &Vec<display::Draw>)> =
+        draws.iter().filter_map(|x| if let display::Draw::Turned { x, items, .. } = x { Some((*x, items)) } else { None }).collect();
+    assert_eq!(turned.len(), cases.len(), "one turned column per paragraph");
+    let near = |a: f32, b: f32| (a - b).abs() < 0.3;
+    // Columns 41.52 apart for Malgun Gothic (its 1.73-em line), 31.2 for the others.
+    let pitch = |i: usize| (turned[i + 1].0 - turned[i].0).abs();
+    assert!(near(pitch(0), 41.52) && near(pitch(2), 31.2), "column pitches {} {}", pitch(0), pitch(2));
+    for ((_, items), (family, text, baselines, one)) in turned.iter().zip(cases.iter()) {
+        let mut stood: Vec<f32> = Vec::new();
+        let mut lying: Vec<(String, f32)> = Vec::new();
+        for x in items.iter() {
+            match x {
+                display::Draw::Rotated { cx, cy, items, .. } => {
+                    if let Some(display::Draw::Glyphs { glyphs, .. }) = items.first()
+                        && let Some(g) = glyphs.first()
+                    {
+                        stood.push(cx + (g.2 - cy));
+                    }
+                }
+                display::Draw::Glyphs { text, glyphs, .. } => {
+                    if let Some(g) = glyphs.first() {
+                        lying.push((text.clone(), g.1));
+                    }
+                }
+                _ => {}
+            }
+        }
+        for (i, want) in baselines.iter().enumerate() {
+            assert!(stood.get(i).is_some_and(|b| near(*b, *want)), "{family} {text}: baselines {stood:?} (Word {baselines:?})");
+        }
+        if let Some(one) = one {
+            let got = lying.iter().find(|(t, _)| t.starts_with('1')).map(|x| x.1);
+            assert!(got.is_some_and(|x| near(x, *one)), "{family} {text}: 1 at {got:?} (Word {one})");
+        }
+    }
+}
+
+#[test]
 fn vertical_columns_hang_glyphs_from_their_vertical_origins_as_word_for_mac_does() {
     // Measured in Word for Mac (vt6/vt7, 2026-10-19; 24 pt, no grid): an upright glyph's baseline
     // sits its vertical origin below the column's pen (VORG, else yMax + top side bearing), the

@@ -793,7 +793,7 @@ fn hangul_a_fonts_lack_falls_back_as_word_for_mac_does() {
     // the East Asian font beside Aptos too) and Times New Roman text is drawn in Batang; in
     // Hiragino Sans, 游ゴシック, Arial and Aptos text in Malgun Gothic — here the installed
     // Korean faces standing in for them (AppleMyungjo and AppleGothic on a Mac).
-    let (Some(serif), Some(sans)) =
+    let (Some((serif, _)), Some((sans, _))) =
         (wordcraft_fonts::word::hangul_fallback(true, false, false), wordcraft_fonts::word::hangul_fallback(false, false, false))
     else {
         return;
@@ -825,6 +825,51 @@ fn hangul_a_fonts_lack_falls_back_as_word_for_mac_does() {
         let han = para.clusters.iter().find(|c| text.get(c.start..c.end) == Some("한")).expect("한");
         let face = para.styles[han.style as usize].face;
         assert_eq!(face.family, expect.family, "{font} + {ea:?}");
+    }
+}
+
+#[test]
+fn words_korean_fonts_lay_out_by_name_as_word_for_mac_does() {
+    // Word for Mac (kr1, kr6, ha1/ha2, 2026-10-19; 24 pt, no grid): 한국어 테스트 ABC 123 한글 in
+    // Malgun Gothic advances an em per syllable (어 at 48) on 41.52-pt lines with the first
+    // baseline 30.96 below the top; Batang and GulimChe on 31.2-pt lines, the baseline 24.22
+    // down; MS Mincho's 0.9976-em box gives 31.13-pt lines (62.16 at 48); and a fallback Hangul
+    // word counts its font toward the line: A한국어B in Arial runs 41.52-pt lines, in Times New
+    // Roman 31.2 — whatever faces stand in for Word's fonts here.
+    if !wordcraft_fonts::word::resolve("Batang", false, false).face.covers('한') {
+        return;
+    }
+    let cases: [(&str, &str, f32, f32, Option<(usize, f32)>); 6] = [
+        ("Malgun Gothic", "한국어 테스트 ABC 123 한글", 41.52, 30.90, Some(("한국".len(), 48.0))),
+        ("Batang", "한국어 테스트", 31.2, 24.22, Some(("한국".len(), 48.0))),
+        ("GulimChe", "한국어 테스트", 31.2, 24.22, Some(("한".len(), 24.0))),
+        ("MS Mincho", "日本語の行", 31.13, 24.16, Some(("日本".len(), 48.0))),
+        ("Arial", "A한국어B", 41.52, 30.90, None),
+        ("Times New Roman", "A한국어B", 31.2, 24.22, None),
+    ];
+    for (font, text, height, baseline, at) in cases {
+        if !wordcraft_fonts::word::is_cjk_family(font) && wordcraft_fonts::word::resolve(font, false, false).substituted {
+            continue;
+        }
+        let chr =
+            CharProps { font: Some(font.into()), font_ea: Some(font.into()), size: Some(24.0), lang_ea: Some("ko-KR".into()), ..Default::default() };
+        let mut d = Document::from_text("");
+        d.body.clear();
+        let mut para = Paragraph::with_text(text, chr);
+        para.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+        para.props.space_before = Some(0.0);
+        para.props.space_after = Some(0.0);
+        d.body.push(wordcraft_doc::para_block(para));
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+        let line = &para.lines[0];
+        assert!((line.height - height).abs() < 0.05, "{font} {text}: line {} (Word {height})", line.height);
+        assert!((line.baseline - line.top - baseline).abs() < 0.1, "{font} {text}: baseline {} (Word {baseline})", line.baseline - line.top);
+        if let Some((start, x)) = at {
+            let k = para.clusters.iter().position(|c| c.start == start).unwrap();
+            let got = line.cl_left(k).unwrap() - line.cl_left(0).unwrap();
+            assert!((got - x).abs() < 0.05, "{font} {text}: the cluster at {start} starts {got} (Word {x})");
+        }
     }
 }
 
@@ -8640,7 +8685,7 @@ fn hiragino_lines_sit_on_the_grid_as_word_for_mac_lays_them() {
 }
 
 /// Word lays its own Yu Mincho and Yu Gothic out with their Office builds' line metrics — a
-/// 1.43 em line, the baseline 1.051 em below its top — whatever face stands in for them here
+/// 1.43 em line, the baseline 1.045 em below its top — whatever face stands in for them here
 /// (the macOS 游明朝体 is a 1.5 em font): measured in Word for Mac at 10.5 pt, lines 15.0 pt
 /// apart with the first baseline 11.04 pt below the top margin.
 #[test]
@@ -8654,9 +8699,9 @@ fn words_yu_fonts_keep_words_line_metrics_whatever_face_draws_them() {
         let p = first_para(&l);
         let c = p.clusters.iter().find(|c| c.kind == crate::para::ClKind::Text).unwrap();
         let st = &p.styles[c.style as usize];
-        assert!((st.ascent - 11.0355).abs() < 0.01 && (st.descent - 3.9795).abs() < 0.01, "{font}: {} {}", st.ascent, st.descent);
+        assert!((st.ascent - 10.9725).abs() < 0.01 && (st.descent - 4.0425).abs() < 0.01, "{font}: {} {}", st.ascent, st.descent);
         let line = &p.lines[0];
-        assert!((line.height - 15.015).abs() < 0.01 && (line.baseline - line.top - 11.0355).abs() < 0.01, "{font}: {line:?}");
+        assert!((line.height - 15.015).abs() < 0.01 && (line.baseline - line.top - 10.9725).abs() < 0.01, "{font}: {line:?}");
     }
     // Other Japanese fonts keep their own metrics.
     let Some(d) = ja_doc(&[(

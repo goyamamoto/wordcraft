@@ -951,7 +951,7 @@ fn lines(
                     text_bg,
                 };
                 if pl.vertical {
-                    stand_up(item, Some(base - st.shift - dy - st.v_centre), out);
+                    stand_up(item, Some(base - st.shift - dy - st.v_centre), st.named.map(|n| n.v_origin as f32), out);
                 } else {
                     out.push(item);
                 }
@@ -1236,7 +1236,7 @@ fn lines(
                     text_bg: st.rc.highlight.or(st.rc.shading),
                 };
                 if pl.vertical {
-                    stand_up(item, Some(y - st.v_centre), out);
+                    stand_up(item, Some(y - st.v_centre), st.named.map(|n| n.v_origin as f32), out);
                 } else {
                     out.push(item);
                 }
@@ -2092,7 +2092,7 @@ fn strike_draws(double: bool, x0: f32, x1: f32, geo: &DecoGeo, color: Rgb, alpha
 fn upright_east_asian(items: Vec<Draw>) -> Vec<Draw> {
     let mut out = Vec::with_capacity(items.len());
     for d in items {
-        stand_up(d, None, &mut out);
+        stand_up(d, None, None, &mut out);
     }
     out
 }
@@ -2103,7 +2103,10 @@ fn upright_east_asian(items: Vec<Draw>) -> Vec<Draw> {
 /// size, as Word lays a vertical column out; without it the run lies on a horizontal baseline
 /// turned onto its side, and each em square stands about its own centre, 0.38 em above that
 /// baseline. Other draws pass through.
-fn stand_up(d: Draw, centre: Option<f32>, out: &mut Vec<Draw>) {
+///
+/// `origin_em`: where Word hangs the glyphs of one of its own table fonts named for this run
+/// (`StyleRun::named`), in em below the pen, in place of the face's own vertical origins.
+fn stand_up(d: Draw, centre: Option<f32>, origin_em: Option<f32>, out: &mut Vec<Draw>) {
     let Draw::Glyphs { face, size, mut glyphs, color, alpha, synth_bold, synth_italic, text, link, ranges, text_bg } = d else {
         out.push(d);
         return;
@@ -2155,7 +2158,7 @@ fn stand_up(d: Draw, centre: Option<f32>, out: &mut Vec<Draw>) {
                 // line across the column, the last one too (vt6/vt7, 2026-10-19).
                 let k_em = size / face.upem.max(1.0) as f32;
                 let hadv = (face.advance(gid) as f32 * k_em).clamp(0.0, size * 4.0);
-                let origin = (face.vertical_origin(gid) as f32 * k_em).clamp(-size * 4.0, size * 4.0);
+                let origin = origin_em.map_or_else(|| face.vertical_origin(gid) as f32 * k_em, |o| o * size).clamp(-size * 4.0, size * 4.0);
                 let lift = origin - hadv / 2.0;
                 let (cx, cy) = (gx + hadv / 2.0, centre.unwrap_or(base - lift));
                 let mut g = piece(k, k + 1);
