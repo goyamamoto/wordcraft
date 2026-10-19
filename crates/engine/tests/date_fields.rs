@@ -76,8 +76,9 @@ fn unlocked_date_and_time_fields_are_refreshed_on_open() {
 fn a_date_field_with_no_picture_uses_words_default() {
     let d = open_body(&format!("<w:p>{}</w:p><w:p>{}</w:p>", field("DATE", "2020-01-01", false), field("TIME", "00:00", false)));
     let got = fields(&d);
-    assert_eq!(got[0].1, wordcraft_engine::cmd::insert::format_date("M/d/yyyy"));
-    assert_eq!(got[1].1, wordcraft_engine::cmd::insert::format_date("h:mm am/pm"));
+    // Word for Mac's US English defaults: the short date `10/19/26` and `8:57 PM` (`dt3` probe).
+    assert_eq!(got[0].1, wordcraft_engine::cmd::insert::format_date("M/d/yy"));
+    assert_eq!(got[1].1, wordcraft_engine::cmd::insert::format_date("h:mm AM/PM"));
 }
 
 #[test]
