@@ -16,6 +16,14 @@ list (author, source, license) is in ATTRIBUTION.md.
   https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md (BIZ UDPGothic, BIZ UDMincho,
   Shippori Mincho), under the SIL Open Font License 1.1. Their licence texts ship with the
   packages as OFL-<family>.txt. Builds without CRAFT_FONTS_DIR do not include them.
+- Japanese dictionary (packages only: dict/lindera-ipadic, read by wordcraft-jaseg for Japanese
+  words) — lindera's prebuilt IPADIC (https://github.com/lindera/lindera, release v6.2.0,
+  lindera-ipadic-6.2.0.zip, SHA-256 5ed4bba6b429030b0387df67d40d5751d35dedef0306f4bac6d957cad5f04b72),
+  built from mecab-ipadic 2.7.0, Copyright 2000-2007 Nara Institute of Science and Technology
+  (NAIST), with entries from ICOT Free Software. Redistributed unmodified under its licence, which
+  permits use, reproduction and distribution provided the copyright notice, the licence and its
+  NO WARRANTY section accompany it: they ship in dict/lindera-ipadic/NOTICE.txt. Not in this
+  repository; the packaging scripts fetch it (packaging/env.sh: copy_ja_dict).
 - English word list (assets/hyphenation/en-us.dic) — derived from the Moby Hyphenator II list by
   Grady Ward, public domain (Project Gutenberg eBook #3204). The hyphenation patterns
   (assets/hyphenation/en-us.pat) were trained from it and are released as CC0-1.0.

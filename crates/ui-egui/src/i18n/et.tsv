@@ -222,6 +222,7 @@
 	Document Text	Dokumendi tekst
 	Document Title	Dokumendi pealkiri
 	Documents you open will show up here.	Avatud dokumendid kuvatakse siin.
+	Don't show again	Ära enam näita
 	Dot-dash	Punkt-kriipsjoon
 	Dot-dot-dash	Punkt-punkt-kriips
 	Dotted	Punktiir
@@ -303,6 +304,7 @@
 	Formatting exceptions	Vormindamise erandid
 	Formula	Valem
 	General	Üldine
+	Get Aptos from Microsoft	Hangi Aptos Microsoftilt
 	Go To	Mine
 	Go To (⌘⌥G)	Mine (⌘⌥G)
 	Go To…	Mine…
@@ -826,6 +828,7 @@
 	Thesaurus	Sünonüümisõnastik
 	These marks show even when Show/Hide ¶ is off.	Need märgid on nähtavad ka siis, kui Kuva/peida ¶ on välja lülitatud.
 	Thick	Paks
+	This document uses the Aptos font, which isn't installed. Lines and pages may break differently from Word.	See dokument kasutab fonti Aptos, mis pole installitud. Rea- ja leheküljepiirid võivad Wordist erineda.
 	Three	Kolm
 	Tight	Tihe
 	TOC Heading	Sisukorra pealkiri

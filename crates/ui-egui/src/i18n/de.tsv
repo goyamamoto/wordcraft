@@ -84,6 +84,7 @@
 	Compress punctuation at the start of a line	Satzzeichen am Zeilenanfang komprimieren
 	Crop marks	Schnittmarken
 	Dark page (white text on black)	Dunkle Seite (weißer Text auf Schwarz)
+	Don't show again	Nicht mehr anzeigen
 	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	Ziehen Sie ein Rechteck, um eine Tabelle zu zeichnen, oder eine Linie über Zellen, um sie zu teilen. Esc beendet.
 	Draw Table	Tabelle zeichnen
 	Define New Multilevel List	Neue mehrstufige Liste definieren
@@ -159,6 +160,7 @@
 	Page Border	Seitenrahmen
 	Apply to:	Übernehmen für:
 	Whole document	Gesamtes Dokument
+	This document uses the Aptos font, which isn't installed. Lines and pages may break differently from Word.	Dieses Dokument verwendet die Schriftart Aptos, die nicht installiert ist. Zeilen- und Seitenumbrüche können von Word abweichen.
 	This section	Dieser Abschnitt
 	Fill	Füllung
 	Setting:	Einstellung:
@@ -378,6 +380,7 @@
 	Formatting at Selection	Formatierung an der Auswahl
 	Formula	Formel
 	General	Allgemein
+	Get Aptos from Microsoft	Aptos bei Microsoft herunterladen
 	Go To	Gehe zu
 	Go to	Gehe zu
 	Go To (⌘⌥G)	Gehe zu (⌘⌥G)

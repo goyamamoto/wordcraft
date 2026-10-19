@@ -171,6 +171,7 @@
 	Page Border	페이지 테두리
 	Apply to:	적용 대상:
 	These marks show even when Show/Hide ¶ is off.	이 기호는 표시/숨기기 ¶가 꺼져 있어도 표시됩니다.
+	This document uses the Aptos font, which isn't installed. Lines and pages may break differently from Word.	이 문서는 설치되지 않은 Aptos 글꼴을 사용합니다. 줄과 페이지 나누기가 Word와 다를 수 있습니다.
 	Title Bar	제목 표시줄
 	Typing replaces selected text	입력한 텍스트로 선택한 텍스트 바꾸기
 	Update fields before printing	인쇄하기 전에 필드 업데이트
@@ -182,6 +183,7 @@
 	3-D	3차원
 	Custom	사용자 지정
 	Style:	스타일:
+	Don't show again	다시 표시 안 함
 	Dot dash	파선
 	Triple	삼중선
 	Between	사이
@@ -427,6 +429,7 @@
 	Formatting at Selection	선택 영역의 서식
 	Formula	수식
 	General	일반
+	Get Aptos from Microsoft	Microsoft에서 Aptos 받기
 	Go To	이동
 	Go to	이동
 	Go To (⌘⌥G)	이동(⌘⌥G)

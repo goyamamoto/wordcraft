@@ -186,6 +186,7 @@
 	Page Border	Sidkantlinje
 	Apply to:	Använd på:
 	These marks show even when Show/Hide ¶ is off.	De här tecknen visas även när Visa/dölj ¶ är avstängt.
+	This document uses the Aptos font, which isn't installed. Lines and pages may break differently from Word.	Det här dokumentet använder teckensnittet Aptos, som inte är installerat. Rad- och sidbrytningar kan skilja sig från Word.
 	Title Bar	Namnlist
 	Typing replaces selected text	Det du skriver ersätter markerad text
 	Update fields before printing	Uppdatera fält före utskrift
@@ -197,6 +198,7 @@
 	3-D	3D
 	Custom	Anpassad
 	Style:	Stil:
+	Don't show again	Visa inte igen
 	Dot dash	Punkt-streck
 	Triple	Trippel
 	Between	Mellan
@@ -429,6 +431,7 @@
 	Formatting at Selection	Formatering vid markeringen
 	Formula	Formel
 	General	Allmänt
+	Get Aptos from Microsoft	Hämta Aptos från Microsoft
 	Go To	Gå till
 	Go To (⌘⌥G)	Gå till (⌘⌥G)
 	Go To…	Gå till…

@@ -1,6 +1,6 @@
 # Typing parity with Word
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-19 · **Change:** trivial (IME: a selection gives way to the composition, and on macOS the input method reconverts committed text; previously trivial: IME composition inline in the document, as Word draws it; previously trivial: Change Case: Word's Japanese Half-width, Full-width, Hiragana and Katakana kinds; previously trivial: Shift+Delete cuts the selection on every platform, #1669; previously trivial: Select All then Delete removes a table the document starts with, #1198; previously trivial: Alt+numpad character codes, #961; previously trivial: Down and Up from a line start beside a table go into it, #1007; previously trivial: sample-text formulas on Enter, #1067; previously trivial: Track Changes: Accept All after a tracked delete from a paragraph end keeps the next paragraph; Reject All after typing into an empty paragraph keeps it (#864); previously minor: Correct TWo INitial CApitals, cAPS LOCK and table-cell capitals, #544; previously trivial: complex-script caret and Backspace, #604; Move Paragraph Up/Down, Promote/Demote, Go Back and Alt+X keys, #343) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-20 · **Change:** trivial (Aptos: a document asking for it points to Microsoft's free download; previously trivial: IME: a selection gives way to the composition, and on macOS the input method reconverts committed text; previously trivial: IME composition inline in the document, as Word draws it; previously trivial: Change Case: Word's Japanese Half-width, Full-width, Hiragana and Katakana kinds; previously trivial: Shift+Delete cuts the selection on every platform, #1669; previously trivial: Select All then Delete removes a table the document starts with, #1198; previously trivial: Alt+numpad character codes, #961; previously trivial: Down and Up from a line start beside a table go into it, #1007; previously trivial: sample-text formulas on Enter, #1067; previously trivial: Track Changes: Accept All after a tracked delete from a paragraph end keeps the next paragraph; Reject All after typing into an empty paragraph keeps it (#864); previously minor: Correct TWo INitial CApitals, cAPS LOCK and table-cell capitals, #544; previously trivial: complex-script caret and Backspace, #604; Move Paragraph Up/Down, Promote/Demote, Go Back and Alt+X keys, #343) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 What Word does when you type, observed black-box (same keystrokes typed into Word and
 WordCraft, results read back paragraph by paragraph) and pinned by tests in
@@ -188,7 +188,9 @@ Word.
 ## Known gaps
 
 - Word's body font Aptos isn't installed outside Office; our substitute (Carlito, else Helvetica
-  Neue) is wider, so lines wrap earlier than in Word. Needs a metric-matched open substitute.
+  Neue) is wider, so lines wrap earlier than in Word. No open font has its widths: a document that
+  asks for Aptos shows a bar pointing to Microsoft's free download, and with Aptos installed lines
+  wrap as in Word (2026-10-20).
 - Moving paragraphs with Track Changes on isn't recorded as a tracked move; whole table rows
   don't move yet (a selection across cells is refused). Go Back's places aren't mapped through
   later edits (they are clamped to the document).
@@ -210,6 +212,7 @@ Word.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | trivial | Aptos: no open font has its widths; a document asking for it without it installed shows a bar pointing to Microsoft's free download (`chrome::aptos_notice`) |
 | 2026-10-19 | trivial | IME: a selection within one paragraph gives way to the composition and comes back if it is dismissed; on macOS the input method reads the caret's paragraph and the selection and reconverts committed text (再変換) as in Word for Mac (`crates/ui-egui/src/ime.rs`, `vendor/winit`) |
 | 2026-10-18 | trivial | Japanese: the IME composition is drawn inline in the document, underlined, in the typing font, as Word draws it; provisional until committed |
 | 2026-10-18 | trivial | Change Case: Word's Japanese kinds Half-width, Full-width, Hiragana and Katakana, character for character as Word for Mac converts them (sound marks included) |

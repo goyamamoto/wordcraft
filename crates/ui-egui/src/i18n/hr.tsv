@@ -583,6 +583,7 @@
 	Czech	Češki
 	DO NOT COPY	NE KOPIRAJ
 	DOI	DOI
+	Don't show again	Ne prikazuj ponovno
 	DRAFT	NACRT
 	Danish	Danski
 	Dark	Tamno
@@ -919,6 +920,7 @@
 	Function	Funkcija
 	Functions	Funkcije
 	GB/T 7714	GB/T 7714
+	Get Aptos from Microsoft	Preuzmi Aptos od Microsofta
 	GOST (name sort)	GOST (sortiranje po imenu)
 	GOST (title sort)	GOST (sortiranje po naslovu)
 	Gallery	Galerija
@@ -2166,6 +2168,7 @@ template	Letter	Pismo
 	Synonyms	Sinonimi
 	System	Sustav
 	TC entry fields	Polja stavki TC
+	This document uses the Aptos font, which isn't installed. Lines and pages may break differently from Word.	Ovaj dokument koristi font Aptos koji nije instaliran. Prijelomi redaka i stranica mogu se razlikovati od Worda.
 	TOA Heading	Naslov popisa pravnih izvora
 	TOC Heading	Naslov sadržaja
 	TOC {n}	Sadržaj {n}
