@@ -2574,7 +2574,11 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
     let (col_x, w) = crate::table_ruler::text_area(app, layout, pi).unwrap_or((page.body.x, page.body.w));
     // Where the paragraph starts, from the page's start edge (the right edge when right-to-left).
     let start = if rtl { page.w - (col_x + w) } else { col_x };
-    if let Some(rp) = rp {
+    // In vertical text (縦書き) Word for Mac's rulers show the page's margins and graduations but
+    // no indent markers and no tab stops (its window observed with the rulers on, a tbRl section
+    // beside a horizontal one, 2026-10-20): the paragraph's markers are left out there.
+    let down = wordcraft_engine::cmd::page::text_direction_at(&app.session) == wordcraft_doc::props::TextDirection::Down;
+    if let Some(rp) = rp.filter(|_| !down) {
         // Indents and tabs are measured from the paragraph's start edge: the right margin of a
         // right-to-left paragraph, where the start-indent markers sit.
         let px = |s: f32| sx(start + s);
@@ -4806,6 +4810,54 @@ mod tests {
 
     /// Tab stops on the ruler: the corner selector picks the kind, a click sets a stop, dragging
     /// moves it, dragging it off clears it, and each gesture is one undo step.
+    /// In vertical text Word for Mac's horizontal ruler has no indent markers and no tab stops,
+    /// so a click on it sets no tab there; back in horizontal text the same click sets one.
+    #[test]
+    fn rulers_show_no_paragraph_markers_in_vertical_text() {
+        use egui::{Event, PointerButton};
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("text.insert", json!({"text": "縦書きの段落"})).unwrap();
+        a.run("view.ruler", json!({"value": true})).unwrap();
+        a.run("view.commentsPane", json!({"value": false})).unwrap();
+        a.run("layout.textDirection", json!({"value": "down"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+        let tabs = |h: &egui_kittest::Harness<'_, WordApp>| {
+            let s = &h.state().session;
+            s.doc.styles.resolve_para(&s.doc.para_at(&s.sel.focus).expect("a paragraph").props).tabs.len()
+        };
+        let click_ruler = |h: &mut egui_kittest::Harness<'_, WordApp>| {
+            let area = h.state().canvas.canvas_rect.expect("the canvas is laid out");
+            let page = h.state_mut().session.layout().pages[0].clone();
+            let x = page_to_screen(h.state_mut(), 0, page.body.x + page.body.w / 2.0, 0.0).expect("on screen").x;
+            let at = pos2(x, area.min.y - 7.0);
+            h.event(Event::PointerMoved(at));
+            h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
+            h.step();
+            h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
+            for _ in 0..40 {
+                h.step();
+            }
+        };
+        click_ruler(&mut h);
+        assert_eq!(tabs(&h), 0, "no tab stop set from the ruler in vertical text");
+        h.state_mut().run("layout.textDirection", json!({"value": "horizontal"})).unwrap();
+        for _ in 0..6 {
+            h.step();
+        }
+        click_ruler(&mut h);
+        assert_eq!(tabs(&h), 1, "in horizontal text the click sets a tab stop");
+    }
+
     #[test]
     fn ruler_tab_stops_are_set_moved_and_cleared_with_the_pointer() {
         use egui::{Event, PointerButton};
