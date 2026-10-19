@@ -192,12 +192,36 @@ impl LayoutOptions {
     }
 }
 
+/// The room a piece of a paragraph takes in its column beyond its lines: the column's width
+/// (indents are inside it) and the space before and after the paragraph applied on this page —
+/// `before` on the piece holding its first line, `after` on the one holding its last. Word's
+/// text boundaries box this slot.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Slot {
+    pub w: f32,
+    pub before: f32,
+    pub after: f32,
+}
+
+impl Slot {
+    /// The slot of the lines before a split: the space after stays with the lines after it.
+    fn head(self) -> Slot {
+        Slot { after: 0.0, ..self }
+    }
+
+    /// The slot of the lines after a split: the space before stayed with the lines before it.
+    fn tail(self) -> Slot {
+        Slot { before: 0.0, ..self }
+    }
+}
+
 /// Something placed on a page (page coordinates, points, y down).
 #[derive(Clone, Debug)]
 pub enum Placed {
     /// Lines `l0..l1` of a paragraph; `y` is the top of line `l0`; `x` the column's left edge.
     /// Turned lines (a table cell's text direction) run as `turn` says from the page point
-    /// (`x`, `y`): see [`turn_point`].
+    /// (`x`, `y`): see [`turn_point`]. `slot` is the paragraph's room in its column (in the
+    /// frame's coordinates for turned lines).
     Lines {
         story: StoryRef,
         path: Path,
@@ -207,6 +231,7 @@ pub enum Placed {
         x: f32,
         y: f32,
         turn: TextDirection,
+        slot: Slot,
     },
     Fill {
         rect: Rect,
@@ -1089,7 +1114,7 @@ fn layout_box(
                     };
                     let float = frame_float(&fr);
                     let r = float_rect(frame, (0.0, width), y, fw, h, &float);
-                    push_para(&mut items, story, &path, &pf, 0, pf.lines.len(), r.x, r.y, fw);
+                    push_para(&mut items, story, &path, &pf, 0, pf.lines.len(), r.x, r.y, fw, Slot { w: fw, before: 0.0, after: 0.0 });
                     excl.extend(wrap_area(r, &float, None));
                     float_tables.push(r);
                     continue;
@@ -1128,7 +1153,8 @@ fn layout_box(
                 } else if i > 0 && before > 0.0 && prev_after > 0.0 && !ctx.doc.settings.sum_paragraph_spacing {
                     before = (before - prev_after).max(0.0);
                 }
-                y += if i == 0 { before } else { before.max(0.0) };
+                let before = if i == 0 { before } else { before.max(0.0) };
+                y += before;
                 // Floating objects anchored here: place them, then wrap the text around them.
                 // One left out of the layout (hidden, or deleted in the final text) takes no room.
                 let mut floats = HashMap::new();
@@ -1148,7 +1174,9 @@ fn layout_box(
                     pl = ctx.para_labelled(p, width, table, &rel, label);
                 }
                 let lead = pl.lines.first().map_or(0.0, |l| l.top.max(0.0));
-                push_para(&mut items, story, &path, &pl, 0, pl.lines.len(), 0.0, y + lead, width);
+                // Automatic space after: none after the last paragraph of a cell or box.
+                let after = if pl.rp.after_auto && i + 1 == blocks.len() { 0.0 } else { pl.rp.space_after };
+                push_para(&mut items, story, &path, &pl, 0, pl.lines.len(), 0.0, y + lead, width, Slot { w: width, before, after });
                 // Pictures, shapes and text boxes: drawn, their areas and text boxes' text.
                 if !p.objects.is_empty() {
                     let at = ObjFrame { page: frame, col: (0.0, width), para_y: y, table_chr: table.map(|t| &t.chr) };
@@ -1158,8 +1186,6 @@ fn layout_box(
                     items.splice(at..at, back);
                     items.extend(front);
                 }
-                // Automatic space after: none after the last paragraph of a cell or box.
-                let after = if pl.rp.after_auto && i + 1 == blocks.len() { 0.0 } else { pl.rp.space_after };
                 y += pl.height + after;
                 prev_after = after;
                 prev_after_auto = pl.rp.after_auto;
@@ -1348,7 +1374,7 @@ fn fit_box(items: Vec<Placed>, height: f32) -> Vec<Placed> {
             continue;
         }
         match it {
-            Placed::Lines { story, path, para, l0, l1, x, y, turn } => {
+            Placed::Lines { story, path, para, l0, l1, x, y, turn, slot } => {
                 let Some(first) = para.lines.get(l0) else { continue };
                 let mut end = l0;
                 for k in l0..l1 {
@@ -1360,7 +1386,8 @@ fn fit_box(items: Vec<Placed>, height: f32) -> Vec<Placed> {
                     kept_line = true;
                 }
                 if end > l0 {
-                    out.push(Placed::Lines { story, path, para, l0, l1: end, x, y, turn });
+                    let slot = if end == l1 { slot } else { slot.head() };
+                    out.push(Placed::Lines { story, path, para, l0, l1: end, x, y, turn, slot });
                 }
             }
             Placed::Fill { rect, color } if rect.y < limit => {
@@ -1386,7 +1413,18 @@ fn fit_box(items: Vec<Placed>, height: f32) -> Vec<Placed> {
 }
 
 /// Paragraph lines plus their shading and borders.
-fn push_para(items: &mut Vec<Placed>, story: StoryRef, path: &[u32], pl: &Arc<ParaLayout>, l0: usize, l1: usize, x: f32, y: f32, width: f32) {
+fn push_para(
+    items: &mut Vec<Placed>,
+    story: StoryRef,
+    path: &[u32],
+    pl: &Arc<ParaLayout>,
+    l0: usize,
+    l1: usize,
+    x: f32,
+    y: f32,
+    width: f32,
+    slot: Slot,
+) {
     let (Some(first), Some(last)) = (pl.lines.get(l0), l1.checked_sub(1).and_then(|k| pl.lines.get(k))) else {
         return;
     };
@@ -1400,7 +1438,7 @@ fn push_para(items: &mut Vec<Placed>, story: StoryRef, path: &[u32], pl: &Arc<Pa
         let pad = pl.rp.borders.as_ref().map(|b| b.left.map(|l| l.space).unwrap_or(4.0)).unwrap_or(0.0);
         items.push(Placed::Fill { rect: Rect::new(left - pad, y, right - left + pad * 2.0, h), color: c });
     }
-    items.push(Placed::Lines { story, path: Path(path.to_vec()), para: pl.clone(), l0, l1, x, y, turn: TextDirection::Horizontal });
+    items.push(Placed::Lines { story, path: Path(path.to_vec()), para: pl.clone(), l0, l1, x, y, turn: TextDirection::Horizontal, slot });
     if let Some(b) = &pl.rp.borders {
         let sp = |o: &Option<Border>| o.map(|b| b.space).unwrap_or(0.0);
         let (lx, rx) = (left - sp(&b.left), right + sp(&b.right));
@@ -1656,17 +1694,19 @@ impl NoteBox {
                 continue;
             }
             match it {
-                Placed::Lines { story, path, para, l0, l1, x, y, turn } => {
+                Placed::Lines { story, path, para, l0, l1, x, y, turn, slot } => {
                     let Some(first) = para.lines.get(l0) else { continue };
                     let ft = first.top;
                     // The first line that ends below the cut starts the tail.
                     let k = (l0..l1).find(|&k| para.lines.get(k).is_none_or(|l| y + l.top - ft + l.height > cut + 0.01)).unwrap_or(l1);
                     let ky = para.lines.get(k).map_or(y, |l| y + l.top - ft);
                     if k > l0 {
-                        head.push(Placed::Lines { story, path: path.clone(), para: para.clone(), l0, l1: k, x, y, turn });
+                        let slot = if k == l1 { slot } else { slot.head() };
+                        head.push(Placed::Lines { story, path: path.clone(), para: para.clone(), l0, l1: k, x, y, turn, slot });
                     }
                     if k < l1 {
-                        tail.push(Placed::Lines { story, path, para, l0: k, l1, x, y: ky, turn });
+                        let slot = if k == l0 { slot } else { slot.tail() };
+                        tail.push(Placed::Lines { story, path, para, l0: k, l1, x, y: ky, turn, slot });
                     }
                 }
                 Placed::Fill { rect, color } => {
@@ -3458,7 +3498,14 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
             pb.bottom = pb.body_floor().max(placed_bottom).min(pb.orig_bottom);
         }
         let mut items = Vec::new();
-        push_para(&mut items, StoryRef::Body, &[block as u32], &pl, l0, l1, x, y, width);
+        // The paragraph's slot: its space before with its first line, its space after with its
+        // last — none when its mark stays with its page break (see `space_after` below).
+        let slot = Slot {
+            w: width,
+            before: if l0 == 0 { applied_before } else { 0.0 },
+            after: if l1 == n && !mark_with_break { pl.rp.space_after } else { 0.0 },
+        };
+        push_para(&mut items, StoryRef::Body, &[block as u32], &pl, l0, l1, x, y, width, slot);
         // Pictures, shapes and text boxes in these lines (web view: floats placed by this piece).
         let at = ObjFrame {
             page: Some(PageFrame { sect: pb.sect, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror }),
@@ -3492,6 +3539,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
                     x: pb.sect.margin_left + pb.sect.gutter - dist - w,
                     y: ly,
                     turn: TextDirection::Horizontal,
+                    slot: Slot::default(),
                 });
             }
         }
@@ -3600,7 +3648,18 @@ fn place_outline_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     let l1 = if o.view.first_line_only && level >= outline::BODY { n.min(1) } else { n };
     let y = pb.y + pl.lines.first().map(|f| f.top.max(0.0)).unwrap_or(0.0);
     let mut items = Vec::new();
-    push_para(&mut items, StoryRef::Body, &[block as u32], &pl, 0, l1, x, y, width);
+    push_para(
+        &mut items,
+        StoryRef::Body,
+        &[block as u32],
+        &pl,
+        0,
+        l1,
+        x,
+        y,
+        width,
+        Slot { w: width, before: pl.rp.space_before.max(0.0), after: pl.rp.space_after.max(0.0) },
+    );
     let at = ObjFrame {
         page: Some(PageFrame { sect: pb.sect, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror }),
         col: (x, width),

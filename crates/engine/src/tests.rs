@@ -4124,6 +4124,18 @@ fn table_style_parts_format_every_table_using_the_style() {
 /// region by default — Word for Mac with Japanese editing shows them (2026-10-19) — and off
 /// elsewhere; `view.cropMarks` chooses for good, touching neither the document nor the undo stack.
 #[test]
+fn text_boundaries_are_off_until_chosen() {
+    let mut t = s();
+    assert!(!t.view.text_boundaries, "off in a new document, as in Word");
+    let undo = t.undo_labels();
+    assert_eq!(run(&mut t, "view.textBoundaries", json!({}))["value"], true);
+    assert!(t.view.text_boundaries);
+    assert_eq!(run(&mut t, "view.textBoundaries", json!({"value": false}))["value"], false);
+    assert!(!t.view.text_boundaries);
+    assert_eq!(t.undo_labels(), undo, "a view setting, not an edit");
+}
+
+#[test]
 fn crop_marks_follow_the_region_until_chosen() {
     use wordcraft_geom::Region;
     let mut t = s();
