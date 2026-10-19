@@ -557,6 +557,8 @@ fn parity_markdown(p: &Value) -> String {
 }
 
 fn main() -> ExitCode {
+    // Japanese words as Word for Mac breaks them, when a dictionary is installed.
+    wordcraft_doc::set_japanese_word_breaker(wordcraft_jaseg::word_ends);
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     match run(&args) {
         Ok(()) | Err(Failure::StdoutClosed) => ExitCode::SUCCESS,

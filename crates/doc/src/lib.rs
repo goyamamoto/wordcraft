@@ -54,7 +54,7 @@ use serde::{Deserialize, Serialize};
 pub use control::{ContentControl, ControlKind, ControlLock, ControlRange, ControlWrap};
 pub use fields::FieldRange;
 pub use numbering::{ListKind, Numbering};
-pub use para::{InlineObject, Paragraph, Run};
+pub use para::{InlineObject, JapaneseWordBreaker, Paragraph, Run, set_japanese_word_breaker};
 pub use props::{Align, CharProps, ParaProps, Rgb, TextColor};
 pub use section::SectionProps;
 pub use styles::{Style, StyleKind, StyleSheet};
