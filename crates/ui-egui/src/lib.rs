@@ -2993,11 +2993,13 @@ mod tests {
             let events = if n % 8 == 0 { vec![wheel(-1.0, linux_ctrl)] } else { Vec::new() };
             frame(&mut a, events);
             let now = under(&a);
-            // Across, the place can only be kept while the pages stay one per row: in rows they
-            // fit the window side by side and there is nothing to scroll sideways.
+            // Across, the place can only be kept while there is something to scroll sideways: not
+            // once the pages reflow into rows that fit the window, nor once the one page is
+            // narrower than the window and centred in it (on a Mac, where pages stay one per row).
             // Within a couple of screen pixels.
             let off = (now - at) * a.canvas.scale;
-            let across = a.canvas.cols > cols || off.x.abs() < 2.0;
+            let fits = a.canvas.viewport.is_some_and(|vp| a.canvas.page_rects[page].width() <= vp.width());
+            let across = a.canvas.cols > cols || fits || off.x.abs() < 2.0;
             assert!(
                 across && off.y.abs() < 2.0,
                 "frame {n} at {:.0}%: {now:?} on page {page}, was {at:?}",
@@ -3005,7 +3007,11 @@ mod tests {
             );
         }
         assert!(a.canvas.scale < before * 0.6, "zoomed out: {before} -> {}", a.canvas.scale);
-        assert!(a.canvas.cols > cols, "the pages reflowed into rows on the way");
+        if canvas::PAGES_FLOW_SIDE_BY_SIDE {
+            assert!(a.canvas.cols > cols, "the pages reflowed into rows on the way");
+        } else {
+            assert_eq!(a.canvas.cols, cols, "one page per row on a Mac");
+        }
     }
 
     /// Issue #67: View › Zoom In from a fit mode zoomed *out*: Page Width showed 163% but Zoom In
@@ -3144,7 +3150,7 @@ mod tests {
         assert!((a.canvas.scroll_offset.x - initial_scroll).abs() < 0.5);
         assert!(a.session.sel.is_collapsed());
         // An explicit caret move outside the visible columns must still reveal its destination.
-        a.run("caret.set", json!({"pos": wordcraft_doc::Pos::body(0, 5000)})).unwrap();
+        a.run("caret.set", json!({"pos": wordcraft_doc::Pos::body(0, 14000)})).unwrap();
         frame(&mut a, vec![], screen);
         assert!(a.canvas.scroll_offset.x > initial_scroll + a.session.view.read_width * a.canvas.scale);
         a.run("caret.set", json!({"pos": wordcraft_doc::Pos::body(0, 0)})).unwrap();
@@ -3771,9 +3777,22 @@ mod tests {
         for _ in 0..3 {
             frame(&mut a);
         }
+        if !canvas::PAGES_FLOW_SIDE_BY_SIDE {
+            // Word for Mac keeps one page per row at every zoom; Multiple Pages sets them side by side.
+            assert_eq!(a.canvas.cols, 1, "30% on a Mac: still one page per row");
+            a.run("view.multiplePages", json!({})).unwrap();
+            for _ in 0..3 {
+                frame(&mut a);
+            }
+            let rects = a.canvas.page_rects.clone();
+            assert!(a.canvas.cols >= 2, "Multiple Pages: pages side by side: {rects:?}");
+            assert!((rects[1].top() - rects[0].top()).abs() < 1.0 && rects[1].left() > rects[0].right(), "{rects:?}");
+        } else {
+            let rects = a.canvas.page_rects.clone();
+            assert_eq!(a.canvas.cols, 4, "30%: all four pages fit across: {rects:?}");
+            assert!((rects[3].top() - rects[0].top()).abs() < 1.0 && rects[3].left() > rects[2].right(), "{rects:?}");
+        }
         let rects = a.canvas.page_rects.clone();
-        assert_eq!(a.canvas.cols, 4, "30%: all four pages fit across: {rects:?}");
-        assert!((rects[3].top() - rects[0].top()).abs() < 1.0 && rects[3].left() > rects[2].right(), "{rects:?}");
         // A click inside the last page's text puts the caret on that page.
         let p = canvas::page_to_screen(&mut a, 3, 100.0, 80.0).unwrap();
         assert!(rects[3].contains(p), "{p:?} in {:?}", rects[3]);
@@ -3812,11 +3831,19 @@ mod tests {
         }
         assert_eq!(a.canvas.cols, 1, "30% after One Page: still one page per row");
         a.run("view.multiplePages", json!({})).unwrap();
-        a.run("view.zoom", json!({"value": 30})).unwrap();
-        for _ in 0..3 {
-            frame(&mut a);
+        if canvas::PAGES_FLOW_SIDE_BY_SIDE {
+            a.run("view.zoom", json!({"value": 30})).unwrap();
+            for _ in 0..3 {
+                frame(&mut a);
+            }
+            assert_eq!(a.canvas.cols, 4, "30% after Multiple Pages: all four pages fit across");
+        } else {
+            // On a Mac pages sit side by side only in Multiple Pages itself, as in Word for Mac.
+            for _ in 0..3 {
+                frame(&mut a);
+            }
+            assert!(a.canvas.cols >= 2, "Multiple Pages: side by side");
         }
-        assert_eq!(a.canvas.cols, 4, "30% after Multiple Pages: all four pages fit across");
     }
 
     #[test]
