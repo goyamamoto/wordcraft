@@ -3769,6 +3769,96 @@ fn lines_with_tabs_never_shrink() {
     }
 }
 
+/// Word's `w:doNotExpandShiftReturn` (`cp`, `cp2`, `cp3` probes in Word for Mac, 2026-10-19):
+/// without it a justified line ending with a manual line break is spread to the right edge like
+/// a wrapped line (a Latin line's leftover in its spaces: "Short line" puts "line" at the edge);
+/// with it — Word's Japanese template sets it — the line keeps its spacing. A line ending with a
+/// page break is never spread. Distributed text spreads its break lines either way, the
+/// characters sharing the room (not the break: 均等割り付け 91.2 pt apart on a 468 pt line).
+#[test]
+fn manual_line_breaks_expand_justified_lines_unless_the_document_says_not() {
+    let long = "The second line of this justified paragraph goes on long enough to wrap at the right margin of the page and then some more.";
+    let first = |text: &str, align: Align, flag: bool| -> (Vec<f32>, f32) {
+        let mut d = Document::new();
+        let mut p = wordcraft_doc::Paragraph::with_text(text, CharProps::default());
+        p.props.align = Some(align);
+        d.body = vec![wordcraft_doc::para_block(p)];
+        d.settings.do_not_expand_shift_return = flag;
+        let l = lay(&d);
+        let para = first_para(&l);
+        let line = &para.lines[0];
+        ((line.c0..line.c1).filter_map(|k| line.cl_left(k)).collect(), line.right)
+    };
+    let text = format!("Short line\n{long}");
+    let (kept, right) = first(&text, Align::Justify, true);
+    let (spread, _) = first(&text, Align::Justify, false);
+    assert_eq!(kept.len(), spread.len(), "the same clusters");
+    assert!(kept[10] < right / 2.0, "the natural line is short: {}", kept[10]);
+    assert!((spread[10] - right).abs() < 0.01, "spread to the right edge {right}: {}", spread[10]);
+    assert_eq!(&spread[..6], &kept[..6], "Short stays put");
+    assert!((spread[6] - kept[6] - (right - kept[10])).abs() < 0.01, "the leftover all in the one space");
+    // A page break ends the line without spreading it, with or without the flag.
+    let page = format!("Short line\u{000C}{long}");
+    assert_eq!(first(&page, Align::Justify, false).0[..10], first(&page, Align::Justify, true).0[..10]);
+    assert!(first(&page, Align::Justify, false).0[10] < right / 2.0);
+    // Distributed text: the letters share the line, the last one's box ending at the edge.
+    for flag in [false, true] {
+        let (xs, right) = first("abcdef\nxy", Align::Distribute, flag);
+        let mut d = Document::new();
+        d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("abcdef\nxy", CharProps::default()))];
+        let advs: Vec<f32> = first_para(&lay(&d)).clusters[..6].iter().map(|c| c.adv).collect();
+        let gaps: Vec<f32> = (0..5).map(|k| xs[k + 1] - (xs[k] + advs[k])).collect();
+        assert!(gaps.iter().all(|g| (g - gaps[0]).abs() < 0.01), "equal gaps {gaps:?}");
+        assert!((xs[5] + advs[5] - right).abs() < 0.01, "f's box ends at the edge: {} + {} vs {right}", xs[5], advs[5]);
+    }
+}
+
+/// Word's `w:ulTrailSpace` (`cp`, `cp3` probes, 2026-10-19): with it an underline runs under
+/// the spaces before a line break (276 pt where the text ends at 240), at the end of the
+/// paragraph (204 where the text ends at 168) and under the space a line wraps at, no further
+/// than the right edge (540 where the text ends at 536.24); without it the underline stops at
+/// the text (240, 168, 536.16).
+#[test]
+fn underlines_run_under_trailing_spaces_only_with_ul_trail_space() {
+    use wordcraft_doc::props::Underline;
+    let probe = |text: &str, flag: bool| -> (Vec<(f32, f32, f32)>, f32, f32, f32) {
+        let mut d = Document::new();
+        let chr = CharProps { underline: Some(Underline::Single), size: Some(24.0), ..Default::default() };
+        d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, chr))];
+        d.settings.ul_trail_space = flag;
+        let l = lay(&d);
+        let para = first_para(&l);
+        let line = &para.lines[0];
+        let mut content = line.c1;
+        while content > line.c0 && matches!(para.clusters[content - 1].kind, para::ClKind::Space | para::ClKind::Marker | para::ClKind::LineBreak) {
+            content -= 1;
+        }
+        let x = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { x, .. } = it { Some(*x) } else { None }).unwrap();
+        let text_end = x + line.cl_right(content - 1).unwrap();
+        let spaces_end = x + line.cl_right(line.c1 - 1).unwrap();
+        let mut uls: Vec<(f32, f32, f32)> = display::page_display(&d, &l.pages[0], &display::DisplayOptions::default())
+            .into_iter()
+            .filter_map(|i| if let display::Draw::Line { x0, y0, x1, .. } = i { Some((x0, x1, y0)) } else { None })
+            .collect();
+        uls.sort_by(|a, b| a.2.total_cmp(&b.2));
+        (uls, text_end, spaces_end, x + line.right)
+    };
+    for text in ["under   \nnext", "end   "] {
+        let (uls, text_end, spaces_end, _) = probe(text, false);
+        assert!((uls[0].1 - text_end).abs() < 0.01, "{text:?} without the flag: underline to {} = text end {text_end}", uls[0].1);
+        let (uls, _, spaces_end2, _) = probe(text, true);
+        assert!(spaces_end2 > text_end + 10.0 && (spaces_end - spaces_end2).abs() < 0.01);
+        assert!((uls[0].1 - spaces_end).abs() < 0.01, "{text:?} with the flag: underline to {} = spaces' end {spaces_end}", uls[0].1);
+    }
+    // The space a line wraps at: underlined with the flag, but never past the right edge.
+    let text = "underlined words that wrap at a space in the first line of this paragraph and go on and on";
+    let (uls, text_end, spaces_end, right) = probe(text, false);
+    assert!((uls[0].1 - text_end).abs() < 0.01, "{} vs {text_end}", uls[0].1);
+    let (uls, _, _, _) = probe(text, true);
+    assert!((uls[0].1 - spaces_end.min(right)).abs() < 0.01, "underline to {} (space to {spaces_end}, edge {right})", uls[0].1);
+    assert!(uls[0].1 > text_end + 1.0);
+}
+
 pub(super) fn rect_shape(w: f32, h: f32, float: wordcraft_doc::para::Float) -> InlineObject {
     InlineObject::Shape {
         kind: wordcraft_doc::para::ShapeKind::Rectangle,
@@ -8326,6 +8416,86 @@ fn character_spacing_counts_twice_on_east_asian_characters_as_in_word() {
     let latin = (x(&l, 7) - x(&l, 6)) - (x(&lp, 7) - x(&lp, 6));
     assert!((kanji - 20.0).abs() < 0.1, "an East Asian character advances 2 × 10 pt more: {kanji}");
     assert!((latin - 10.0).abs() < 0.1, "a Latin letter 10 pt more: {latin}");
+}
+
+/// Justified Japanese lines without a character grid, as Word for Mac spreads them (`cp2` probes,
+/// Yu Mincho 12 pt on a 468 pt line, no grid and the line grid alike, 2026-10-19): the leftover
+/// goes in shares, one between two characters one of which is East Asian, one on each side of a
+/// space next to one, one plus a twelfth of the size for a space between two Latin words. A
+/// wrapped line of 35 kana ends at the edge; so does a line ending with a manual line break
+/// unless `w:doNotExpandShiftReturn` is set (これは短い行です 65.14 pt apart); a trailing
+/// compressed 。 ends the line with its whole em at the edge.
+#[test]
+fn japanese_justified_lines_share_the_leftover_as_word_for_mac_does() {
+    // Kerned as Word's Japanese Normal kerns (the font narrows a 。 before the break to 10.3 pt).
+    let chr = wordcraft_doc::CharProps { size: Some(12.0), kern: Some(1.0), ..Default::default() };
+    let long = "二行目はこの段落の続きで、両端揃えの設定のまま右端まで折り返されるくらい長く書き続けます。さらに続けます。";
+    let first_with = |text: &str, flag: bool, align: Align| -> Option<(Vec<f32>, Vec<f32>, f32)> {
+        let mut d = ja_doc(&[(text, chr.clone())])?;
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.align = Some(align)).unwrap();
+        d.settings.punct_compression = wordcraft_doc::east_asian::PunctCompression::CompressPunctuation;
+        d.settings.do_not_expand_shift_return = flag;
+        let l = lay(&d);
+        let para = first_para(&l);
+        let line = &para.lines[0];
+        let xs = (line.c0..line.c1).filter_map(|k| line.cl_left(k)).collect();
+        let widths = (line.c0..line.c1).map(|k| line.cl_right(k).unwrap() - line.cl_left(k).unwrap()).collect();
+        Some((xs, widths, line.right))
+    };
+    let first = |text: &str, flag: bool| first_with(text, flag, Align::Justify);
+    // A line of eight kana before the break: spread evenly, the last ending at the edge.
+    let Some((xs, _, right)) = first(&format!("これは短い行です\n{long}"), false) else { return };
+    assert!((right - 468.0).abs() < 0.01, "{right}");
+    for (k, x) in xs.iter().take(8).enumerate() {
+        assert!((x - k as f32 * 456.0 / 7.0).abs() < 0.01, "{k}: {x}");
+    }
+    let (kept, _, _) = first(&format!("これは短い行です\n{long}"), true).unwrap();
+    for (k, x) in kept.iter().take(8).enumerate() {
+        assert!((x - k as f32 * 12.0).abs() < 0.01, "with the flag {k}: {x}");
+    }
+    // A trailing 。 shares the leftover at the line's kerned width and ends at the edge.
+    let (xs, _, _) = first(&format!("これは短い行です。\n{long}"), false).unwrap();
+    let (kept, widths, _) = first(&format!("これは短い行です。\n{long}"), true).unwrap();
+    let natural_end = kept[8] + widths[8];
+    let share = (468.0 - natural_end) / 8.0;
+    // (Yu Mincho's kerning narrows す before 。 where Word narrows the 。: the same line end.)
+    assert!(natural_end < 107.0, "す。 kerned: {natural_end}");
+    assert!((xs[1] - (12.0 + share)).abs() < 0.01, "れ at {} for a share of {share}", xs[1]);
+    assert!((xs[8] - 456.0).abs() < 0.01, "。 at {}", xs[8]);
+    // A space between kana: a share on each side of it.
+    let (xs, _, _) = first(&format!("あいう えお\n{long}"), false).unwrap();
+    let (kept, widths, _) = first(&format!("あいう えお\n{long}"), true).unwrap();
+    let share = (468.0 - (kept[5] + widths[5])) / 5.0;
+    assert!((share - 80.4).abs() < 0.3, "Word's 80.4 pt share: {share}");
+    assert!((xs[1] - (12.0 + share)).abs() < 0.01, "い at {} for a share of {share}", xs[1]);
+    assert!((xs[4] - (kept[4] + 4.0 * share)).abs() < 0.01, "え after four shares of {share} (Word: 363.6): {} (natural {})", xs[4], kept[4]);
+    assert!((xs[5] - 456.0).abs() < 0.01, "お at {}", xs[5]);
+    // Mixed: 短|い|行 ␣ with ␣ Latin ␣ 終|わ|り — shares 1, 1, 2, 1 + 1 pt, 1, 1, 1.
+    let text = format!("短い行 with Latin 終わり\n{long}");
+    let (xs, _, _) = first(&text, false).unwrap();
+    let (kept, widths, _) = first(&text, true).unwrap();
+    // Clusters: 短0 い1 行2 ␣3 w4 i5 t6 h7 ␣8 L9 a10 t11 i12 n13 ␣14 終15 わ16 り17.
+    let slack = 468.0 - (kept[17] + widths[17]);
+    let share = (slack - 1.0) / 8.0;
+    assert!((share - 41.1).abs() < 0.3, "Word's 41.1 pt share: {share}");
+    let at = |k: usize, shares: f32, bonus: f32| (xs[k] - (kept[k] + shares * share + bonus)).abs() < 0.01;
+    assert!(at(1, 1.0, 0.0) && at(2, 2.0, 0.0), "い, 行 one share apart: {:?} vs {:?} ({share})", &xs[..3], &kept[..3]);
+    assert!(at(4, 4.0, 0.0), "w after two shares for 行 ␣ with: {} vs {} ({share})", xs[4], kept[4]);
+    assert!(at(9, 5.0, 1.0), "L a share and a twelfth of 12 pt after with ␣ Latin: {} vs {}", xs[9], kept[9]);
+    assert!(at(15, 6.0, 1.0), "終 a share after Latin ␣: {} vs {}", xs[15], kept[15]);
+    assert!((xs[17] - 456.0).abs() < 0.01, "り at {}", xs[17]);
+    // A wrapped line of 35 kana and the space it wraps at: spread evenly to the edge (the
+    // font's kerning between some kana adds to the leftover, in Word too: 1.45 pt a gap).
+    let kana = "あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめも";
+    let text = format!("{kana} Supercalifragilisticexpialidocious and more text to fill the second line.");
+    let (xs, _, _) = first(&text, true).unwrap();
+    let (kept, widths, _) = first_with(&text, true, Align::Left).unwrap();
+    assert_eq!(xs.len(), 36, "35 kana and the space: {}", xs.len());
+    let share = (468.0 - (kept[34] + widths[34])) / 34.0;
+    assert!((share - 1.45).abs() < 0.02, "Word's 1.45 pt: {share}");
+    for (k, x) in xs.iter().take(35).enumerate() {
+        assert!((x - (kept[k] + k as f32 * share)).abs() < 0.01, "{k}: {x} vs {}", kept[k]);
+    }
 }
 
 #[test]

@@ -531,6 +531,34 @@ pub struct Settings {
     /// Keep contextual paragraph spacing inside legacy table cells (`allowSpaceOfSameStyleInTable`).
     /// Word ignores the layout override in compatibility mode 15, but the flag still round-trips.
     pub allow_space_of_same_style_in_table: bool,
+    /// `w:doNotExpandShiftReturn`: a justified line ending with a manual line break keeps its
+    /// natural spacing. Without it Word spreads such a line to the right edge like a wrapped one.
+    /// Word's Japanese Normal template sets it (and the five switches after it); its English one
+    /// sets none of them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub do_not_expand_shift_return: bool,
+    /// `w:ulTrailSpace`: an underline runs under the spaces at the end of a line (before a line
+    /// break, at the end of the paragraph, and the space a line wraps at, up to the right edge).
+    /// Without it the underline stops at the last character.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ul_trail_space: bool,
+    /// `w:spaceForUL`: room for underlines in the line height; no observable effect in Word for
+    /// Mac, kept for the file.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub space_for_ul: bool,
+    /// `w:balanceSingleByteDoubleByteWidth`: kept for the file (not laid out).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub balance_single_byte_double_byte_width: bool,
+    /// `w:doNotLeaveBackslashAlone`: kept for the file (typing a backslash as a yen sign is not
+    /// done).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub do_not_leave_backslash_alone: bool,
+    /// `w:adjustLineHeightInTable`: kept for the file (not laid out).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub adjust_line_height_in_table: bool,
+    /// `w:useFELayout`: Word's East Asian layout code; kept for the file.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub use_fe_layout: bool,
     /// Drawing grid spacing in points, across and down (View › Gridlines); ECMA-376's default is 1/8 inch.
     pub grid_h: f32,
     pub grid_v: f32,
@@ -673,6 +701,13 @@ impl Default for Settings {
             roman_fonts: Vec::new(),
             sum_paragraph_spacing: false,
             allow_space_of_same_style_in_table: false,
+            do_not_expand_shift_return: false,
+            ul_trail_space: false,
+            space_for_ul: false,
+            balance_single_byte_double_byte_width: false,
+            do_not_leave_backslash_alone: false,
+            adjust_line_height_in_table: false,
+            use_fe_layout: false,
             grid_h: DEFAULT_GRID,
             grid_v: DEFAULT_GRID,
             math: None,
