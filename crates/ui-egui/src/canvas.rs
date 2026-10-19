@@ -3001,6 +3001,8 @@ fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_render::Rende
     // Ink Replay draws the ink itself, stroke by stroke, over pages without it.
     opts.display.hide_ink = app.session.view.hide_ink || app.session.view.draw.replay;
     opts.display.revisions = app.session.prefs.markup.clone();
+    // Word's Japanese editing marks (↵ paragraph, ↓ line break) with Japanese editing.
+    opts.display.japanese_marks = wordcraft_engine::cmd::para::japanese_lists(&app.session);
     opts.dark = app.session.view.dark_mode;
     opts.dark_paper = wordcraft_render::DARK_PAPER;
     opts.display.dim_header = !dim_body;
@@ -3075,6 +3077,20 @@ mod tests {
     /// What `page_image` replaced: the raster un-premultiplied, for egui to premultiply again.
     fn by_straight_alpha(img: &wordcraft_render::Rendered) -> egui::ColorImage {
         egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.to_straight())
+    }
+
+    /// A document whose default East Asian language is Japanese is drawn with Word's Japanese
+    /// editing marks (↵ paragraph marks, ↓ line breaks); otherwise only a Japanese region does.
+    #[test]
+    fn japanese_editing_turns_on_words_japanese_marks() {
+        let mut doc = wordcraft_doc::Document::from_text("x");
+        doc.styles.default_chr.lang_ea = Some("ja-JP".into());
+        let a = WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
+        assert!(page_render_options(&a, false).display.japanese_marks);
+        let mut doc = wordcraft_doc::Document::from_text("x");
+        doc.styles.default_chr.lang_ea = Some("en-US".into());
+        let a = WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
+        assert_eq!(page_render_options(&a, false).display.japanese_marks, a.session.region().language.eq_ignore_ascii_case("ja"));
     }
 
     #[test]

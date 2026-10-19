@@ -477,7 +477,7 @@ impl Default for RenderOptions {
         RenderOptions {
             display: DisplayOptions::default(),
             paper: Rgb::WHITE,
-            mark_color: Rgb(0x2B, 0x57, 0x9A),
+            mark_color: Rgb(0x6A, 0xAD, 0xF9),
             text_darkening: false,
             dark: false,
             dark_paper: DARK_PAPER,
@@ -832,6 +832,33 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             ctx.set_paint(color(opts.ink(mark.unwrap_or(opts.mark_color)), 0.9));
             ctx.set_transform(view * Affine::translate((*x as f64, *baseline as f64)) * Affine::scale(k));
             ctx.fill_path(&o);
+        }
+        Draw::MarkLines { lines, fills, width, color: mark } => {
+            ctx.set_transform(view);
+            ctx.set_paint(color(opts.ink(mark.unwrap_or(opts.mark_color)), 1.0));
+            let w = if width.is_finite() { f64::from(width.clamp(0.1, 100.0)) } else { 1.0 };
+            ctx.set_stroke(kurbo::Stroke::new(w).with_join(kurbo::Join::Miter).with_caps(kurbo::Cap::Butt));
+            for pts in lines {
+                let mut p = BezPath::new();
+                for (i, (px, py)) in pts.iter().enumerate() {
+                    if !px.is_finite() || !py.is_finite() {
+                        continue;
+                    }
+                    if i == 0 { p.move_to((f64::from(*px), f64::from(*py))) } else { p.line_to((f64::from(*px), f64::from(*py))) }
+                }
+                ctx.stroke_path(&p);
+            }
+            for pts in fills {
+                let mut p = BezPath::new();
+                for (i, (px, py)) in pts.iter().enumerate() {
+                    if !px.is_finite() || !py.is_finite() {
+                        continue;
+                    }
+                    if i == 0 { p.move_to((f64::from(*px), f64::from(*py))) } else { p.line_to((f64::from(*px), f64::from(*py))) }
+                }
+                p.close_path();
+                ctx.fill_path(&p);
+            }
         }
         Draw::MarkBox { rect, color: c } => {
             ctx.set_transform(view);
