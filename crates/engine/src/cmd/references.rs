@@ -823,8 +823,11 @@ pub fn update_seq(s: &mut Session) -> Result<(), CmdError> {
                     } else if !f.has('c') {
                         n.0 = n.0.saturating_add(1);
                     }
-                    let fmt = wordcraft_layout::fields::format_switch(instr).unwrap_or_default();
-                    updates.push((k, if f.has('h') { String::new() } else { fmt.format(n.0) }));
+                    let text = match wordcraft_layout::fields::format_switch(instr) {
+                        Some(fmt) => fmt.format_int(n.0).unwrap_or_else(|| wordcraft_doc::field_format::NOT_REPRESENTABLE.to_string()),
+                        None => n.0.to_string(),
+                    };
+                    updates.push((k, if f.has('h') { String::new() } else { text }));
                 }
                 "STYLEREF" => {
                     let ix = styles.get_or_insert_with(|| wordcraft_layout::styleref::StyleIndex::build(&s.doc));
@@ -868,18 +871,18 @@ pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
         let mut updates: Vec<(usize, String)> = Vec::new();
         for (k, o) in p.objects.iter().enumerate() {
             let InlineObject::Field { instr, locked: false, .. } = o else { continue };
-            // A table formula reads the cells around its own cell again.
+            // A table formula reads the cells around its own cell again; a formula in the body
+            // (`{ = 12 \* DBNum2 }`) has no cells to read.
             if instr.trim_start().starts_with('=') {
-                if let Some((tp, r, c)) = path.cell()
-                    && let Some(t) = s.doc.table(StoryRef::Body, &tp)
-                {
-                    let default_lang = super::default_lang(s);
-                    let text = match super::table_formula::evaluate_field_with(t, Some(&s.doc), default_lang.as_deref(), r, c, instr) {
-                        Ok(text) => text,
-                        Err(e) => format!("!{e}"),
-                    };
-                    updates.push((k, text));
-                }
+                let default_lang = super::default_lang(s);
+                let in_cell = path.cell().and_then(|(tp, r, c)| s.doc.table(StoryRef::Body, &tp).map(|t| (t, r, c)));
+                let empty = wordcraft_doc::table::Table::default();
+                let (t, r, c) = in_cell.unwrap_or((&empty, 0, 0));
+                let text = match super::table_formula::evaluate_field_with(t, Some(&s.doc), default_lang.as_deref(), r, c, instr) {
+                    Ok(text) => text,
+                    Err(e) => format!("!{e}"),
+                };
+                updates.push((k, text));
                 continue;
             }
             let name = wordcraft_layout::fields::field_name(instr);
