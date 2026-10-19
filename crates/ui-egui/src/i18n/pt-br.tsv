@@ -2286,3 +2286,16 @@
 	Text snaps to character grid	Alinhar texto à grade de caracteres
 	Pitch:	Passo:
 	Use default pitch	Usar passo padrão
+	Page Number Format	Formato do número de página
+	Number format:	Formato do número:
+	Include chapter number	Incluir número do capítulo
+	Chapter starts with style:	O capítulo começa com o estilo:
+	Use separator:	Usar separador:
+	Examples:	Exemplos:
+	Page numbering	Numeração de páginas
+	Continue from previous section	Continuar da seção anterior
+	- (hyphen)	- (hífen)
+	. (period)	. (ponto)
+	: (colon)	: (dois-pontos)
+	— (em dash)	— (travessão)
+	– (en dash)	– (meia-risca)

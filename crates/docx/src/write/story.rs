@@ -1428,10 +1428,18 @@ fn sectpr_body(w: &mut W, s: &SectionProps) {
             let refs: Vec<(&str, &str)> = a.iter().map(|(k, v)| (*k, v.as_str())).collect();
             w.empty("w:lnNumType", &refs);
         }
-        if s.page_num_set || s.page_num_start.is_some() || s.page_num_format != wordcraft_doc::section::NumFormat::Decimal {
+        if s.page_num_set
+            || s.page_num_start.is_some()
+            || s.page_num_format != wordcraft_doc::section::NumFormat::Decimal
+            || s.page_num_chapter.is_some()
+        {
             let mut a = vec![("w:fmt", s.page_num_format.ooxml().to_string())];
             if let Some(st) = s.page_num_start {
                 a.push(("w:start", st.to_string()));
+            }
+            if let Some(c) = s.page_num_chapter {
+                a.push(("w:chapStyle", c.level.clamp(1, 9).to_string()));
+                a.push(("w:chapSep", c.sep.ooxml().to_string()));
             }
             let refs: Vec<(&str, &str)> = a.iter().map(|(k, v)| (*k, v.as_str())).collect();
             w.empty("w:pgNumType", &refs);

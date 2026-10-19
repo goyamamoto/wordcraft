@@ -696,6 +696,63 @@ impl DocGrid {
     }
 }
 
+/// The separator between a chapter number and the page number (Format Page Numbers › Use
+/// separator; `w:pgNumType/@w:chapSep`, ECMA-376 §17.18.6 ST_ChapterSep).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum ChapterSep {
+    #[default]
+    Hyphen,
+    Period,
+    Colon,
+    EmDash,
+    EnDash,
+}
+
+impl ChapterSep {
+    pub const ALL: [ChapterSep; 5] = [ChapterSep::Hyphen, ChapterSep::Period, ChapterSep::Colon, ChapterSep::EmDash, ChapterSep::EnDash];
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            ChapterSep::Hyphen => "hyphen",
+            ChapterSep::Period => "period",
+            ChapterSep::Colon => "colon",
+            ChapterSep::EmDash => "emDash",
+            ChapterSep::EnDash => "enDash",
+        }
+    }
+    pub fn from_ooxml(s: &str) -> Option<ChapterSep> {
+        ChapterSep::ALL.into_iter().find(|c| c.ooxml() == s)
+    }
+    /// The character Word puts between the numbers (`1-1`, `1.1`, `1:1`, `1—1`, `1–1`).
+    pub fn text(self) -> &'static str {
+        match self {
+            ChapterSep::Hyphen => "-",
+            ChapterSep::Period => ".",
+            ChapterSep::Colon => ":",
+            ChapterSep::EmDash => "\u{2014}",
+            ChapterSep::EnDash => "\u{2013}",
+        }
+    }
+}
+
+/// Chapter numbers in the section's page numbers (Format Page Numbers › Include chapter number;
+/// `w:pgNumType/@w:chapStyle` and `@w:chapSep`). A PAGE field shows the number of the latest
+/// `Heading {level}` paragraph — numbered through its style, as Word requires — then the
+/// separator, then the page number (`1-1`); see `wordcraft_layout::styleref::StyleIndex::chapters`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterNumbers {
+    /// The heading level whose number is the chapter number: 1–9 (`Heading 1`…`Heading 9`).
+    pub level: u8,
+    pub sep: ChapterSep,
+}
+
+impl Default for ChapterNumbers {
+    fn default() -> Self {
+        ChapterNumbers { level: 1, sep: ChapterSep::Hyphen }
+    }
+}
+
 /// Page setup and section-level settings.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -721,8 +778,11 @@ pub struct SectionProps {
     pub title_page: bool,
     pub page_num_start: Option<u32>,
     pub page_num_format: NumFormat,
+    /// Chapter numbers before the page numbers (`1-1`), or none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_num_chapter: Option<ChapterNumbers>,
     /// The file carries a `w:pgNumType` element that sets nothing else (no start, decimal
-    /// format), so saving writes it back rather than dropping it.
+    /// format, no chapter numbers), so saving writes it back rather than dropping it.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub page_num_set: bool,
     pub line_numbers: Option<LineNumbering>,
@@ -774,6 +834,7 @@ impl Default for SectionProps {
             title_page: false,
             page_num_start: None,
             page_num_format: NumFormat::Decimal,
+            page_num_chapter: None,
             page_num_set: false,
             line_numbers: None,
             valign: PageVAlign::Top,

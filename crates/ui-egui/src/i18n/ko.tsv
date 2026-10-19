@@ -2528,3 +2528,16 @@ preview	Title	제목
 	Text snaps to character grid	문자 눈금에 텍스트 맞춤
 	Pitch:	간격:
 	Use default pitch	기본 간격 사용
+	Page Number Format	페이지 번호 서식
+	Number format:	번호 서식:
+	Include chapter number	장 번호 포함
+	Chapter starts with style:	장 시작 스타일:
+	Use separator:	구분 기호:
+	Examples:	예:
+	Page numbering	페이지 번호 매기기
+	Continue from previous section	이전 구역에 이어서
+	- (hyphen)	- (하이픈)
+	. (period)	. (마침표)
+	: (colon)	: (콜론)
+	— (em dash)	— (전각 대시)
+	– (en dash)	– (반각 대시)

@@ -729,7 +729,14 @@ pub fn sectpr(e: &El) -> (SectionProps, Vec<HfRef>) {
                 if let Some(f) = k.attr("w:fmt") {
                     s.page_num_format = NumFormat::from_ooxml(f);
                 }
-                s.page_num_set = s.page_num_start.is_none() && s.page_num_format == NumFormat::Decimal;
+                // Chapter numbers: the heading level (1–9), with Word's hyphen when no separator
+                // is given.
+                s.page_num_chapter =
+                    k.attr("w:chapStyle").and_then(u32_of).filter(|l| (1..=9).contains(l)).map(|l| wordcraft_doc::section::ChapterNumbers {
+                        level: l as u8,
+                        sep: k.attr("w:chapSep").and_then(wordcraft_doc::section::ChapterSep::from_ooxml).unwrap_or_default(),
+                    });
+                s.page_num_set = s.page_num_start.is_none() && s.page_num_format == NumFormat::Decimal && s.page_num_chapter.is_none();
             }
             "w:lnNumType" => {
                 let mut l = LineNumbering::default();

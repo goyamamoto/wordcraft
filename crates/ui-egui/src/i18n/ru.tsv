@@ -2670,3 +2670,16 @@ preview	Title	Пример
 	Text snaps to character grid	Текст по сетке знаков
 	Pitch:	Шаг:
 	Use default pitch	Шаг по умолчанию
+	Page Number Format	Формат номера страницы
+	Number format:	Формат номера:
+	Include chapter number	Включить номер главы
+	Chapter starts with style:	Начинается со стиля:
+	Use separator:	Разделитель:
+	Examples:	Примеры:
+	Page numbering	Нумерация страниц
+	Continue from previous section	Продолжить предыдущий раздел
+	- (hyphen)	- (дефис)
+	. (period)	. (точка)
+	: (colon)	: (двоеточие)
+	— (em dash)	— (длинное тире)
+	– (en dash)	– (короткое тире)

@@ -2672,3 +2672,16 @@ preview	Title	Naslov
 	Text snaps to character grid	Tekst se poravnava s rešetkom znakova
 	Pitch:	Korak:
 	Use default pitch	Koristi zadani korak
+	Page Number Format	Oblik broja stranice
+	Number format:	Oblik broja:
+	Include chapter number	Uključi broj poglavlja
+	Chapter starts with style:	Poglavlje počinje stilom:
+	Use separator:	Razdjelnik:
+	Examples:	Primjeri:
+	Page numbering	Numeriranje stranica
+	Continue from previous section	Nastavi iz prethodnog odjeljka
+	- (hyphen)	- (spojnica)
+	. (period)	. (točka)
+	: (colon)	: (dvotočka)
+	— (em dash)	— (dugačka crtica)
+	– (en dash)	– (crtica)

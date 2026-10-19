@@ -2661,3 +2661,16 @@
 	Text snaps to character grid	Текстът се подравнява по мрежата от знаци
 	Pitch:	Стъпка:
 	Use default pitch	Стъпка по подразбиране
+	Page Number Format	Формат на номера на страницата
+	Number format:	Формат на числата:
+	Include chapter number	Включване на номера на главата
+	Chapter starts with style:	Главата започва със стил:
+	Use separator:	Разделител:
+	Examples:	Примери:
+	Page numbering	Номериране на страниците
+	Continue from previous section	Продължаване от предишния раздел
+	- (hyphen)	- (тире)
+	. (period)	. (точка)
+	: (colon)	: (двоеточие)
+	— (em dash)	— (дълго тире)
+	– (en dash)	– (късо тире)

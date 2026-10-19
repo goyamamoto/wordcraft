@@ -2639,3 +2639,16 @@ preview	Title	Título
 	Text snaps to character grid	Ajustar texto a la cuadrícula de caracteres
 	Pitch:	Paso:
 	Use default pitch	Usar paso predeterminado
+	Page Number Format	Formato de número de página
+	Number format:	Formato de número:
+	Include chapter number	Incluir número de capítulo
+	Chapter starts with style:	El capítulo empieza con el estilo:
+	Use separator:	Usar separador:
+	Examples:	Ejemplos:
+	Page numbering	Numeración de páginas
+	Continue from previous section	Continuar desde la sección anterior
+	- (hyphen)	- (guion)
+	. (period)	. (punto)
+	: (colon)	: (dos puntos)
+	— (em dash)	— (raya)
+	– (en dash)	– (semirraya)
