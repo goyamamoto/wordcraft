@@ -98,6 +98,11 @@ pub struct CanvasState {
     /// What the input method may read this frame (the caret's paragraph and the selection), set
     /// while the document has the keyboard; the desktop app reports it to the platform (`ime`).
     pub ime_surrounding: Option<crate::ime::ImeSurrounding>,
+    /// The IME position last reported. While the document has the keyboard the position is
+    /// reported every frame — this one when the caret can't be placed in a frame — since a frame
+    /// without one turns the input method off (egui), which dropped the rest of a conversion
+    /// whose first clause had just been committed.
+    pub ime_rect: Option<Rect>,
     /// The range of `ime_surrounding` (UTF-16 code units) the input method asked to replace with
     /// the composition arriving in this frame's `Preedit` (reconversion of committed text).
     pub ime_replace: Option<std::ops::Range<usize>>,
@@ -235,6 +240,7 @@ impl Default for CanvasState {
             render_ms: 0.0,
             ime_preedit: String::new(),
             ime_surrounding: None,
+            ime_rect: None,
             ime_replace: None,
             ime_faces: Vec::new(),
             want_focus: true,
@@ -1440,6 +1446,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         }
         // Caret.
         let focused = resp.has_focus() || app.canvas.focused;
+        // The IME stays allowed while the document has the keyboard: the last position stands in
+        // until the caret's is known this frame (see `ime_rect`).
+        if focused && let Some(r) = app.canvas.ime_rect {
+            ui.ctx().output_mut(|o| {
+                o.ime = Some(egui::output::IMEOutput { rect: r, cursor_rect: r, purpose: Default::default(), should_interrupt_composition: false });
+            });
+        }
         // Editing an equation: shade it and draw the caret inside it.
         let mut math_caret = false;
         if let Some(m) = app.session.math.clone()
@@ -1468,6 +1481,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 if focused {
                     ui.ctx().request_repaint_after(std::time::Duration::from_millis(530 - (since as u64 % 530)));
                     let cr = Rect::from_min_max(pos2(x, y0), pos2(x + 1.0, y1));
+                    app.canvas.ime_rect = Some(cr);
                     ui.ctx().output_mut(|o| {
                         o.ime = Some(egui::output::IMEOutput {
                             rect: cr,
@@ -1510,6 +1524,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             // IME candidate window placement, and what the input method may read (`ime`).
             let cr = Rect::from_min_max(pos2(x, y0), pos2(x + 1.0, y1));
             if focused {
+                app.canvas.ime_rect = Some(cr);
                 ui.ctx().output_mut(|o| {
                     o.ime =
                         Some(egui::output::IMEOutput { rect: cr, cursor_rect: cr, purpose: Default::default(), should_interrupt_composition: false });
@@ -4869,6 +4884,64 @@ mod tests {
         }
         click_ruler(&mut h);
         assert_eq!(tabs(&h), 1, "in horizontal text the click sets a tab stop");
+    }
+
+    /// Committing the first clause of a multi-clause conversion: the input method commits it and
+    /// marks the rest again (`insertText:` then `setMarkedText:`, the events in one frame or the
+    /// next), and later commits the rest. Every clause reaches the document, and the input
+    /// method stays allowed (the IME position is reported every frame) so its remaining marked
+    /// text isn't dropped.
+    #[test]
+    fn committing_the_first_clause_keeps_the_rest_of_the_composition() {
+        use egui::{Event, ImeEvent};
+        let a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..8 {
+            h.step();
+        }
+        let text = |h: &egui_kittest::Harness<'_, WordApp>| h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+        let ime_allowed = |h: &egui_kittest::Harness<'_, WordApp>| h.output().platform_output.ime.is_some();
+        assert!(ime_allowed(&h));
+        h.event(Event::Ime(ImeEvent::Preedit { text: "きょうはいいてんき".into(), active_range_chars: Some(0..9) }));
+        h.step();
+        h.event(Event::Ime(ImeEvent::Preedit { text: "今日はいい天気".into(), active_range_chars: Some(0..3) }));
+        h.step();
+        assert!(ime_allowed(&h));
+        // The first clause committed and the rest marked again, in the same frame.
+        h.event(Event::Ime(ImeEvent::Preedit { text: String::new(), active_range_chars: None }));
+        h.event(Event::Ime(ImeEvent::Commit("今日は".into())));
+        h.event(Event::Ime(ImeEvent::Preedit { text: "いい天気".into(), active_range_chars: Some(0..2) }));
+        for _ in 0..3 {
+            h.step();
+            assert!(ime_allowed(&h), "the input method stays allowed while the rest is marked");
+        }
+        assert_eq!(text(&h), "今日はいい天気", "the first clause committed, the rest composing in place");
+        assert!(h.state().session.composition().is_some(), "the rest is still a composition");
+        h.event(Event::Ime(ImeEvent::Preedit { text: String::new(), active_range_chars: None }));
+        h.event(Event::Ime(ImeEvent::Commit("いい天気".into())));
+        h.step();
+        assert_eq!(text(&h), "今日はいい天気");
+        // The same with the rest marked a frame later.
+        h.event(Event::Ime(ImeEvent::Preedit { text: "あしたははれ".into(), active_range_chars: Some(0..3) }));
+        h.step();
+        h.event(Event::Ime(ImeEvent::Preedit { text: String::new(), active_range_chars: None }));
+        h.event(Event::Ime(ImeEvent::Commit("明日は".into())));
+        h.step();
+        assert!(ime_allowed(&h));
+        h.event(Event::Ime(ImeEvent::Preedit { text: "晴れ".into(), active_range_chars: Some(0..2) }));
+        h.step();
+        assert!(ime_allowed(&h));
+        h.event(Event::Ime(ImeEvent::Preedit { text: String::new(), active_range_chars: None }));
+        h.event(Event::Ime(ImeEvent::Commit("晴れ".into())));
+        h.step();
+        assert_eq!(text(&h), "今日はいい天気明日は晴れ");
     }
 
     #[test]
