@@ -18,6 +18,12 @@ pub use user::{FONT_FILE_EXTS, FontFormat, Installed, MAX_FONT_FILE_BYTES, UserF
 /// The family used when a requested family is unknown (the UI sans).
 pub const FALLBACK_FAMILY: &str = "Source Sans 3";
 
+/// How far a synthetic italic leans: the horizontal shift per unit of height above the baseline
+/// (the glyph turned about its baseline). Word for Mac slants the faces it has no italic for —
+/// 游明朝, 游ゴシック, ＭＳ 明朝, the Hiragino families, Osaka, Latin and East Asian glyphs alike,
+/// at every size — by 0.3398 (its PDFs' text matrices, 2026-10-20), about 18.8°.
+pub const SYNTHETIC_ITALIC_SLANT: f32 = 0.3398;
+
 /// The bundled fonts (OFL), as font file bytes. Japanese fonts are not bundled: they come from
 /// the optional craft-fonts build input ([`crate::japanese_document_fonts`]).
 pub fn bundled() -> &'static [&'static [u8]] {
