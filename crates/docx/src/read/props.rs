@@ -748,6 +748,7 @@ pub fn sectpr(e: &El) -> (SectionProps, Vec<HfRef>) {
             "w:textDirection" => {
                 s.text_direction = wordcraft_doc::props::TextDirection::from_ooxml(k.attr("w:val").unwrap_or(""));
                 s.text_direction_set = k.attr("w:val") == Some("lrTb");
+                s.stack_left_to_right = matches!(k.attr("w:val"), Some("tbRlV" | "rlV"));
             }
             "w:pgNumType" => {
                 s.page_num_start = k.attr("w:start").and_then(u32_of);
