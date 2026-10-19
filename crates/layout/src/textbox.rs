@@ -265,11 +265,12 @@ fn from_y(items: Vec<Placed>, top: f32) -> Vec<Placed> {
             continue;
         }
         match it {
-            Placed::Lines { story, path, para, l0, l1, x, y, turn } => {
+            Placed::Lines { story, path, para, l0, l1, x, y, turn, slot } => {
                 let Some(first) = para.lines.get(l0) else { continue };
                 let Some(k) = (l0..l1).find(|k| para.lines.get(*k).is_some_and(|l| y + l.top - first.top >= lim)) else { continue };
                 let ky = para.lines.get(k).map_or(y, |l| y + l.top - first.top);
-                out.push(Placed::Lines { story, path, para, l0: k, l1, x, y: ky, turn });
+                let slot = if k == l0 { slot } else { slot.tail() };
+                out.push(Placed::Lines { story, path, para, l0: k, l1, x, y: ky, turn, slot });
             }
             Placed::Fill { rect, color } if rect.bottom() > lim => {
                 let y0 = rect.y.max(top);

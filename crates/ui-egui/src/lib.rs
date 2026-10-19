@@ -2382,6 +2382,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "view.marks"
             | "view.ruler"
             | "view.cropMarks"
+            | "view.textBoundaries"
             | "view.numeral"
             | "ui.tab"
             | "ui.backstage"

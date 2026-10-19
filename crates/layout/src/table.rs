@@ -863,7 +863,7 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
                 continue;
             }
             match it {
-                Placed::Lines { story, path, para, l0, l1, x, y, turn } => {
+                Placed::Lines { story, path, para, l0, l1, x, y, turn, slot } => {
                     let base = para.lines.get(*l0).map(|l| l.top).unwrap_or(0.0);
                     if split > *l0 {
                         a.push(Placed::Lines {
@@ -875,6 +875,7 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
                             x: *x,
                             y: *y,
                             turn: *turn,
+                            slot: if split == *l1 { *slot } else { slot.head() },
                         });
                     }
                     if split < *l1 {
@@ -888,6 +889,7 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
                             x: *x,
                             y: top - shift,
                             turn: *turn,
+                            slot: if split == *l0 { *slot } else { slot.tail() },
                         });
                     }
                 }

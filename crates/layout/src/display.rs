@@ -671,7 +671,7 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, alpha: f32, outer
             spun(*spin, *rect, vec![Draw::Clip { rect: *rect, items: inner }], out)
         }
         Placed::Cell { .. } | Placed::Object { .. } => {}
-        Placed::Lines { story, path, para, l0, l1, x, y, turn } if turn.is_turned() => {
+        Placed::Lines { story, path, para, l0, l1, x, y, turn, .. } if turn.is_turned() => {
             let mut items = Vec::new();
             lines(doc, *story, path, para, *l0, *l1, 0.0, 0.0, opts, alpha, &mut items);
             // Link areas are axis-aligned page rectangles: turned text gets none.

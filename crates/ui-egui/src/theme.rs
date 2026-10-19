@@ -272,6 +272,9 @@ pub struct Tokens {
     pub crop_handle: Color32,
     /// Crop marks at the corners of the text area (Word's grey, measured 2026-10-19).
     pub crop_mark: Color32,
+    /// Text boundaries: the dots of the boxes around paragraphs (Word's dark grey, measured
+    /// 2026-10-19; the dark theme's is a guess).
+    pub text_boundary: Color32,
     pub crop_dim: Color32,
     pub menu: Color32,
     pub blue: Color32,
@@ -316,6 +319,7 @@ impl Tokens {
             guide: Color32::from_rgb(0xC0, 0x28, 0x8C),
             crop_handle: Color32::BLACK,
             crop_mark: Color32::from_gray(0xAA),
+            text_boundary: Color32::from_gray(0x37),
             crop_dim: Color32::from_rgba_unmultiplied(0x30, 0x30, 0x30, 0xE0),
             menu: Color32::WHITE,
             blue: Color32::from_rgb(0x2F, 0x6F, 0xD0),
@@ -361,6 +365,7 @@ impl Tokens {
             guide: Color32::from_rgb(0xE0, 0x4C, 0xB0),
             crop_handle: Color32::BLACK,
             crop_mark: Color32::from_gray(0xAA),
+            text_boundary: Color32::from_gray(0xC8),
             crop_dim: Color32::from_rgba_unmultiplied(0x30, 0x30, 0x30, 0xE0),
             menu: Color32::from_rgb(0x2B, 0x2B, 0x2B),
             blue: Color32::from_rgb(0x6C, 0x9B, 0xEA),

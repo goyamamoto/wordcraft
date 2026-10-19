@@ -161,7 +161,7 @@ fn hf_text_at(p: &Page, id: u32, x: f32, y: f32) -> bool {
 pub fn page_lines(page: &Page, story: StoryRef) -> Vec<LineHit<'_>> {
     let mut v = Vec::new();
     for it in items_of(page, story) {
-        if let Placed::Lines { story: s, path, para, l0, l1, x, y, turn } = it {
+        if let Placed::Lines { story: s, path, para, l0, l1, x, y, turn, .. } = it {
             if *s != story || turn.is_turned() {
                 continue;
             }
@@ -211,7 +211,7 @@ fn between(a: &Path, b: &Path, l: &Path) -> bool {
 /// (x, y), if there is turned text there.
 fn turned_hit(page: &Page, story: StoryRef, x: f32, y: f32) -> Option<Pos> {
     items_of(page, story).find_map(|it| {
-        let Placed::Lines { story: s, path, para, l0, l1, x: ox, y: oy, turn } = it else { return None };
+        let Placed::Lines { story: s, path, para, l0, l1, x: ox, y: oy, turn, .. } = it else { return None };
         if *s != story || !it.turned_bounds()?.expand(2.0).contains(Point::new(x, y)) {
             return None;
         }
