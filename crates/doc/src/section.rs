@@ -116,6 +116,47 @@ pub enum NumFormat {
 }
 
 impl NumFormat {
+    /// A Chinese, Japanese or Korean number format: full-width and enclosed digits, kana, kanji
+    /// and Hangul counting. Word draws such a number in the run's East Asian font even where its
+    /// characters (①, ⒈, ⑴) would take the Latin font in text (measured in Word for Mac with
+    /// Japanese editing, 2026-10-19).
+    pub fn east_asian(self) -> bool {
+        use NumFormat::*;
+        matches!(
+            self,
+            Aiueo
+                | AiueoFullWidth
+                | ChineseCounting
+                | ChineseCountingThousand
+                | ChineseLegalSimplified
+                | Chosung
+                | DecimalEnclosedCircle
+                | DecimalEnclosedCircleChinese
+                | DecimalEnclosedFullstop
+                | DecimalEnclosedParen
+                | DecimalFullWidth
+                | DecimalFullWidth2
+                | Ganada
+                | IdeographDigital
+                | IdeographEnclosedCircle
+                | IdeographLegalTraditional
+                | IdeographTraditional
+                | IdeographZodiac
+                | IdeographZodiacTraditional
+                | Iroha
+                | IrohaFullWidth
+                | JapaneseCounting
+                | JapaneseDigitalTenThousand
+                | JapaneseLegal
+                | KoreanCounting
+                | KoreanDigital
+                | KoreanDigital2
+                | KoreanLegal
+                | TaiwaneseCounting
+                | TaiwaneseCountingThousand
+                | TaiwaneseDigital
+        )
+    }
     /// Every format, in the order ST_NumberFormat lists them (which is also the order of the
     /// binary .doc number format codes up to 0x27).
     pub const ALL: [NumFormat; 62] = [

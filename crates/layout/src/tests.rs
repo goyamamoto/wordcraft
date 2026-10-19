@@ -6667,6 +6667,75 @@ fn space_before_at_the_top_of_a_page_like_word() {
     assert!(l.caret(&Pos::body(0, "first".len() + brk.len_utf8())).is_some(), "caret after the break");
 }
 
+/// Japanese numbered lists as Word for Mac draws them (`nl1` and `tb1` probes, 10.5-pt 游明朝
+/// under the Japanese Normal, 2026-10-19): the number of an East Asian format is drawn in the
+/// run's East Asian font — ① of `decimalEnclosedCircle` in 游明朝, where ① typed in the text
+/// takes the Latin font — and a number ending exactly at the hanging indent (１． two em wide
+/// under a two-character hanging indent) puts the text at the hanging indent, not at the next
+/// default stop as a typed tab there would (１０． three em wide goes on to the 42-pt stop);
+/// and a number is never kerned (ア． two em wide where ア． in text is kerned to 1.95 em).
+/// Runs with Hiragino Mincho ProN as the East Asian font (skipped where it isn't installed).
+#[test]
+fn east_asian_number_labels_as_word_for_mac_draws_them() {
+    use wordcraft_doc::numbering::{Level, ListKind};
+    use wordcraft_doc::props::CharProps;
+    use wordcraft_doc::section::NumFormat;
+    let ea = "Hiragino Mincho ProN";
+    let r = wordcraft_fonts::word::resolve(ea, false, false);
+    if r.substituted || !"①１０．".chars().all(|c| r.face.covers(c)) {
+        return;
+    }
+    let item = |format: NumFormat, text: &str, n: usize| -> (String, f32, f32) {
+        let mut d = Document::new();
+        d.settings.default_tab = 42.0;
+        let chr = CharProps { font: Some("Source Sans 3".into()), font_ea: Some(ea.into()), size: Some(10.5), ..Default::default() };
+        d.styles.default_chr = chr.clone();
+        let id = d.numbering.add_list(ListKind::Numbered);
+        if let Some(a) = d.numbering.abstracts.first_mut() {
+            a.levels[0] = Level { format, text: text.into(), indent: 21.0, hanging: 21.0, ..Level::default() };
+        }
+        d.body = (0..n)
+            .map(|_| {
+                let mut p = wordcraft_doc::Paragraph::with_text("項目", chr.clone());
+                p.props.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 });
+                wordcraft_doc::para_block(p)
+            })
+            .collect();
+        let l = lay(&d);
+        let para = l
+            .pages
+            .iter()
+            .flat_map(|p| p.items.iter())
+            .filter_map(|it| match it {
+                Placed::Lines { story: StoryRef::Body, para, .. } => Some(para),
+                _ => None,
+            })
+            .nth(n - 1)
+            .unwrap();
+        let lab = para.label.as_ref().unwrap();
+        let family = para.styles[lab.runs[0].style as usize].face.family.clone();
+        let text_x = l.caret(&Pos::body(n - 1, 0)).unwrap().x;
+        (family, lab.width, text_x)
+    };
+    let (family, width, x) = item(NumFormat::DecimalEnclosedCircle, "%1", 1);
+    assert_eq!(family, ea, "① of an East Asian format in the East Asian font");
+    assert!((width - 10.5).abs() < 0.1, "{width}");
+    let (family, width, x1) = item(NumFormat::DecimalFullWidth, "%1．", 1);
+    assert_eq!(family, ea);
+    assert!((width - 21.0).abs() < 0.1, "{width}");
+    let (_, width10, x10) = item(NumFormat::DecimalFullWidth, "%1．", 10);
+    assert!((width10 - 31.5).abs() < 0.1, "{width10}");
+    let (family, ..) = item(NumFormat::Decimal, "%1.", 1);
+    assert_eq!(family, "Source Sans 3", "a decimal number keeps the Latin font");
+    // A number is never kerned: ア． stays two em wide whatever pairs the font holds.
+    let (_, width_a, _) = item(NumFormat::AiueoFullWidth, "%1．", 1);
+    assert!((width_a - 21.0).abs() < 0.1, "ア． unkerned: {width_a}");
+    // ① (one em) and １． (two em, exactly the hanging indent) both put the text at the hanging
+    // indent; １０． (three em) goes on to the next default stop, 21 pt further.
+    assert!((x1 - x).abs() < 0.05, "１． ends at the hanging indent and the text starts there: {x1} vs {x}");
+    assert!((x10 - x1 - 21.0).abs() < 0.05, "１０． goes on to the next default stop: {x10} vs {x1}");
+}
+
 /// Word for Mac shapes a run by two text paths, measured in its PDFs with 13 fonts (`kn1`–`kn5`
 /// probes, 2026-10-19): a run asking for no OpenType feature (`w14:ligatures` unset, the default
 /// of every document that never touched Font › Advanced) gets no ligatures and the kerning of the
