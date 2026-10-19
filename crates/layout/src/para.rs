@@ -395,6 +395,8 @@ pub struct ParaLayout {
     /// for justified and distributed paragraphs (see `break_lines`).
     pub tail_compress: Vec<u32>,
     pub tail_squeeze: Vec<u32>,
+    /// Clusters of centred marks (`LINE_END_CENTRED`), sorted.
+    pub tail_centred: Vec<u32>,
     /// Snapping to characters (`snapToChars`): what each cluster is to the cell layout, and the
     /// automatic space folded into each cluster's advance; empty otherwise (see
     /// `distribute_cells`).
@@ -958,12 +960,19 @@ const OPENING: &str = "（「『【〔〈《〘〖〝［｛";
 /// (standard kinsoku).
 const LINE_END_COMPRESS: &str = "、。，．」』）］｝】";
 /// Closing marks Word for Mac keeps at the end of a justified line at their full width where
-/// half an em would fit, the line not spread, with the option on or off (〕〉》 and ：；・ after
-/// 44 あ at 10.5 pt; 〙〗〟 by their kind).
-const LINE_END_SQUEEZE: &str = "〕〉》〙〗〟：；・";
+/// half an em would fit, the line not spread, with the option on or off (〕〉》 after 44 あ at
+/// 10.5 pt; 〙〗〟 by their kind).
+const LINE_END_SQUEEZE: &str = "〕〉》〙〗〟";
+/// Centred marks (中点類) Word for Mac keeps at the end of a justified line where half an em
+/// would fit, the line not spread, pulled back into the line by whatever of the overflow exceeds
+/// a quarter of their em, with the option on or off (`hp9` probe, 2026-10-19: after 44 あ at
+/// 10.5 pt on a 468-pt line, 4.5 pt over, ：；・ are drawn 1.88 pt back over the last あ and end
+/// 2.6 past the margin; 2.5 over, flush and 2.5 past; at 12 pt 6 over, 3 back; 6.5 over at 10.5
+/// or 8 at 14 pt, they move on with the あ before them; a left-aligned line moves them on).
+const LINE_END_CENTRED: &str = "：；・";
 
 /// How a closing mark that doesn't fit stays at the end of a line (`LINE_END_COMPRESS`).
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq)]
 enum Tail {
     No,
     /// At half its width, its glyph whole: the line's content ends half an em before its end.
@@ -973,6 +982,9 @@ enum Tail {
     Hang,
     /// At its full width, past the edge: the line is over-full and not spread.
     Squeeze,
+    /// Drawn that far back into the line, its advance shorter by as much: the line is over-full
+    /// by at most a quarter of the mark's em and not spread.
+    Pull(f32),
 }
 
 /// `cells`: the paragraph snaps to characters, where Word for Mac was measured (`cg2`/`cg9`,
@@ -2562,6 +2574,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         openings: Vec::new(),
         tail_compress: Vec::new(),
         tail_squeeze: Vec::new(),
+        tail_centred: Vec::new(),
         cell_classes,
         cell_autos,
         ea_flags,
@@ -2588,6 +2601,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         };
         pl.tail_compress = marks(LINE_END_COMPRESS);
         pl.tail_squeeze = marks(LINE_END_SQUEEZE);
+        pl.tail_centred = marks(LINE_END_CENTRED);
     }
     let auto = env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens;
     pl.hyph_after = hyphenation_points(&text, to_para, &pl, auto, env.doc.settings.hyphenate_caps, &runs);
@@ -2877,14 +2891,17 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
             let mut fits = absorbs || x + c.adv <= right_edge + shrink + 0.01 || c.kind == ClKind::Space || c.kind == ClKind::Marker;
             // (Scanned only when something doesn't fit: a long run of hidden text is markers.)
             let has_content = || (c0..j).any(|k| pl.clusters.get(k).is_some_and(|c| c.kind != ClKind::Marker));
-            // A closing mark that doesn't fit may still end the line (Word for Mac, `hp4`–`hp7`):
+            // A closing mark that doesn't fit may still end the line (Word for Mac, `hp4`–`hp9`):
             // 。、」… at half its width when that fits, else hung whole past the edge, one a line
-            // (句読点のぶら下げ); with the option off, or for 〕〉》：；・, at its full width where
-            // the half would fit. Anything else moves on with the character before it (kinsoku).
+            // (句読点のぶら下げ); with the option off, or for 〕〉》, at its full width where the
+            // half would fit; ：；・ likewise, pulled back into the line by whatever of the
+            // overflow exceeds a quarter em. Anything else moves on with the character before it
+            // (kinsoku).
             let mut tail = Tail::No;
             if !fits && tail_rule && c.kind == ClKind::Text && has_content() {
                 let compress = pl.tail_compress.binary_search(&(j as u32)).is_ok();
                 let squeeze = compress || pl.tail_squeeze.binary_search(&(j as u32)).is_ok();
+                let centred = pl.tail_centred.binary_search(&(j as u32)).is_ok();
                 let half = c.adv / 2.0;
                 let half_fits = half.is_finite() && x + half <= right_edge + 0.01;
                 tail = if compress && rp.overflow_punct {
@@ -2897,6 +2914,8 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                     }
                 } else if squeeze && half_fits {
                     Tail::Squeeze
+                } else if centred && half_fits {
+                    Tail::Pull((x + c.adv - right_edge - c.adv / 4.0).max(0.0))
                 } else {
                     Tail::No
                 };
@@ -2959,6 +2978,15 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                     x += half;
                 }
                 Tail::Hang => hung = Some(j),
+                Tail::Pull(d) => {
+                    if let Some(cl) = pl.clusters.get_mut(j) {
+                        cl.adv = (cl.adv - d).max(0.0);
+                        for g in pl.glyphs.get_mut(cl.g0 as usize..cl.g1 as usize).into_iter().flatten() {
+                            g.dx -= d;
+                        }
+                    }
+                    x += (c.adv - d).max(0.0);
+                }
                 Tail::No | Tail::Squeeze => x += c.adv,
             }
             if c.kind == ClKind::Space {
