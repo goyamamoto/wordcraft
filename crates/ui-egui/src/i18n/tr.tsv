@@ -2669,3 +2669,16 @@ preview	Title	Örnek
 	Text snaps to character grid	Metni karakter ızgarasına yasla
 	Pitch:	Aralık:
 	Use default pitch	Varsayılan aralığı kullan
+	Page Number Format	Sayfa Numarası Biçimi
+	Number format:	Sayı biçimi:
+	Include chapter number	Bölüm numarasını içer
+	Chapter starts with style:	Bölüm şu stille başlar:
+	Use separator:	Ayırıcı:
+	Examples:	Örnekler:
+	Page numbering	Sayfa numaralandırma
+	Continue from previous section	Önceki bölümden devam et
+	- (hyphen)	- (kısa çizgi)
+	. (period)	. (nokta)
+	: (colon)	: (iki nokta)
+	— (em dash)	— (uzun tire)
+	– (en dash)	– (orta tire)

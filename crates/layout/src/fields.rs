@@ -11,6 +11,10 @@ pub struct FieldCtx {
     /// Current page number (as numbered) and its format.
     pub page: u32,
     pub page_format: NumFormat,
+    /// What a PAGE field shows before the page number when the section includes chapter
+    /// numbers (`1-`: the chapter's number and the separator, see
+    /// [`crate::styleref::StyleIndex::chapters`]); none otherwise.
+    pub chapter: Option<Arc<str>>,
     /// Total pages in the document.
     pub pages: u32,
     /// Pages in the current section.
@@ -64,7 +68,9 @@ impl FieldCtx {
     }
     /// A key for caches: the parts of the context a page-dependent paragraph depends on.
     pub fn page_key(&self) -> (u32, u32, u32, u32, u64) {
-        (self.page, self.pages, self.section_pages, self.section, self.bookmarks_key)
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(&(self.bookmarks_key, self.page_format, &self.chapter), &mut h);
+        (self.page, self.pages, self.section_pages, self.section, std::hash::Hasher::finish(&h))
     }
     /// A key for caches of paragraph `p` with STYLEREF fields (0 when they show their stored
     /// result): a hash of the results its STYLEREF fields have on this page, so an edit to body
@@ -132,7 +138,7 @@ pub fn field_text_on(instr: &str, result: &str, ctx: &FieldCtx, page: u32) -> (S
     let name = field_name(instr);
     let fmt = format_switch(instr);
     match name.as_str() {
-        "PAGE" => (fmt.unwrap_or(ctx.page_format).format(page), true),
+        "PAGE" => (format!("{}{}", ctx.chapter.as_deref().unwrap_or(""), fmt.unwrap_or(ctx.page_format).format(page)), true),
         "NUMPAGES" => (fmt.unwrap_or(NumFormat::Decimal).format(ctx.pages), true),
         "SECTIONPAGES" => (fmt.unwrap_or(NumFormat::Decimal).format(ctx.section_pages), true),
         "SECTION" => (fmt.unwrap_or(NumFormat::Decimal).format(ctx.section), true),

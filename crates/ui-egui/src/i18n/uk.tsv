@@ -2286,3 +2286,16 @@
 	Text snaps to character grid	Текст за сіткою знаків
 	Pitch:	Крок:
 	Use default pitch	Крок за замовчуванням
+	Page Number Format	Формат номера сторінки
+	Number format:	Формат номера:
+	Include chapter number	Включити номер розділу
+	Chapter starts with style:	Починається зі стилю:
+	Use separator:	Розділювач:
+	Examples:	Приклади:
+	Page numbering	Нумерація сторінок
+	Continue from previous section	Продовжити з попереднього розділу
+	- (hyphen)	- (дефіс)
+	. (period)	. (крапка)
+	: (colon)	: (двокрапка)
+	— (em dash)	— (довге тире)
+	– (en dash)	– (коротке тире)

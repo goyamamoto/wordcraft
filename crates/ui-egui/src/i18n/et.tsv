@@ -2308,3 +2308,16 @@
 	Text snaps to character grid	Tekst joondub märgivõrgustikule
 	Pitch:	Samm:
 	Use default pitch	Kasuta vaikesammu
+	Page Number Format	Leheküljenumbri vorming
+	Number format:	Numbrivorming:
+	Include chapter number	Kaasa peatüki number
+	Chapter starts with style:	Peatükk algab laadiga:
+	Use separator:	Eraldaja:
+	Examples:	Näited:
+	Page numbering	Lehekülgede nummerdamine
+	Continue from previous section	Jätka eelmisest jaotisest
+	- (hyphen)	- (sidekriips)
+	. (period)	. (punkt)
+	: (colon)	: (koolon)
+	— (em dash)	— (pikk mõttekriips)
+	– (en dash)	– (mõttekriips)

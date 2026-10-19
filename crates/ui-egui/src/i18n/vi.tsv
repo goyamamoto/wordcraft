@@ -2715,3 +2715,16 @@ template	Letter	Thư
 direction	Horizontal	Ngang
 direction	Vertical	Dọc
 lines	Pitch:	Bước:
+	Page Number Format	Định dạng số trang
+	Number format:	Định dạng số:
+	Include chapter number	Bao gồm số chương
+	Chapter starts with style:	Chương bắt đầu bằng kiểu:
+	Use separator:	Dấu phân cách:
+	Examples:	Ví dụ:
+	Page numbering	Đánh số trang
+	Continue from previous section	Tiếp tục từ phần trước
+	- (hyphen)	- (gạch nối)
+	. (period)	. (dấu chấm)
+	: (colon)	: (dấu hai chấm)
+	— (em dash)	— (gạch dài)
+	– (en dash)	– (gạch ngang)

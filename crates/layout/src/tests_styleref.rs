@@ -175,3 +175,59 @@ fn body_edits_keep_styleref_headers_cached() {
     assert_eq!(shown(&edited.pages[2].header), ["The Middles", "above"]);
     assert_eq!(shown(&edited.pages[0].header), ["Beginnings", "below"]);
 }
+
+/// Page numbers that include the chapter number, as Word for Mac shows them (`ch3`–`ch6`
+/// probes, 2026-10-19): `Heading 1` numbered through its style by Word's 第１章 list (a
+/// full-width level), so a PAGE field shows the level's number, the separator and the page
+/// number — `１-1`, `１-2`, `２-3`, `２-4`: page numbers go on; a footer takes the last heading on
+/// the page (`２-1` where chapter 2 starts below chapter 1's text), a body field the chapter at
+/// its paragraph, a preface before the first chapter the first chapter's number; a period
+/// separator gives `１.1`; a heading numbered paragraph by paragraph gives no chapter number. The
+/// body's PAGE fields also show the section's number format (`ii`).
+#[test]
+fn page_numbers_include_the_chapter_number_as_word_for_mac_does() {
+    use wordcraft_doc::section::{ChapterNumbers, ChapterSep, NumFormat};
+    let paras =
+        [("Normal", "Preface", false), ("Heading1", "One", true), ("Normal", "Text", false), ("Heading1", "Two", true), ("Normal", "More", true)];
+    let mut d = doc(&paras, &["PAGE"]);
+    for i in [0, 2, 4] {
+        d.para_mut(StoryRef::Body, &Path::top(i)).unwrap().insert_object(0, field("PAGE"), &CharProps::default()).unwrap();
+    }
+    let num = d.numbering.add_list(ListKind::JaChapter);
+    d.styles.get_mut("Heading1").unwrap().para.numbering = Some(NumRef { num, level: 0 });
+    d.last_section.page_num_chapter = Some(ChapterNumbers { level: 1, sep: ChapterSep::Hyphen });
+    let body = |d: &Document| {
+        let mut c = LayoutCache::new();
+        layout(d, &mut c, &LayoutOptions::default()).pages.iter().map(|p| shown(&p.items).concat()).collect::<Vec<_>>()
+    };
+    assert_eq!(headers(&d), [vec!["１-1"], vec!["１-2"], vec!["２-3"], vec!["２-4"]]);
+    assert_eq!(body(&d), ["１-1", "１-2", "", "２-4"]);
+    d.last_section.page_num_chapter = Some(ChapterNumbers { level: 1, sep: ChapterSep::Period });
+    assert_eq!(headers(&d)[0], ["１.1"]);
+    assert_eq!(body(&d)[3], "２.4");
+    // Numbered paragraph by paragraph, not through the style: Word shows no chapter number.
+    d.styles.get_mut("Heading1").unwrap().para.numbering = None;
+    for i in [1, 3] {
+        d.para_mut(StoryRef::Body, &Path::top(i)).unwrap().props.numbering = Some(NumRef { num, level: 0 });
+    }
+    assert_eq!(headers(&d), [vec!["1"], vec!["2"], vec!["3"], vec!["4"]]);
+    // No chapter numbers: the body shows the section's format like the header does.
+    d.last_section.page_num_chapter = None;
+    d.last_section.page_num_format = NumFormat::LowerRoman;
+    assert_eq!(body(&d), ["i", "ii", "", "iv"]);
+    assert_eq!(headers(&d)[2], ["iii"]);
+
+    // Two chapters starting on one page: the footer shows the last one's number, the body
+    // fields the chapter at each paragraph.
+    let paras =
+        [("Normal", "Preface", false), ("Heading1", "One", false), ("Normal", "Text", false), ("Heading1", "Two", false), ("Normal", "More", false)];
+    let mut d = doc(&paras, &["PAGE"]);
+    for i in [0, 2, 4] {
+        d.para_mut(StoryRef::Body, &Path::top(i)).unwrap().insert_object(0, field("PAGE"), &CharProps::default()).unwrap();
+    }
+    let num = d.numbering.add_list(ListKind::JaChapter);
+    d.styles.get_mut("Heading1").unwrap().para.numbering = Some(NumRef { num, level: 0 });
+    d.last_section.page_num_chapter = Some(ChapterNumbers { level: 1, sep: ChapterSep::Hyphen });
+    assert_eq!(headers(&d), [vec!["２-1"]]);
+    assert_eq!(body(&d), ["１-1１-1２-1"]);
+}
