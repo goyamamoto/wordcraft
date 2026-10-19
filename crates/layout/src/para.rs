@@ -86,6 +86,10 @@ pub struct StyleRun {
     /// Bunkyu Mincho, none for Word's Yu fonts, MS Mincho, Songti SC), as Word for Mac places
     /// them (`wordcraft_fonts::word::vertical_em_centre`).
     pub v_centre: f32,
+    /// Word for Mac's placement of East Asian characters in one of its own table fonts named
+    /// here (Malgun Gothic, Batang, MS Mincho…), whatever face stands in
+    /// (`wordcraft_fonts::word::named_ea_metrics`).
+    pub named: Option<wordcraft_fonts::word::NamedEa>,
 }
 
 /// A positioned glyph inside its cluster.
@@ -823,7 +827,13 @@ fn auto_space(b: &mut Builder, text: &str, letters: bool, digits: bool, grid: &G
             .map_or(1.0, |(g, st)| {
                 let adv =
                     if b.env.vertical { st.face.vertical_advance(g.gid).unwrap_or_else(|| st.face.advance(g.gid)) } else { st.face.advance(g.gid) };
-                (adv / st.face.upem.max(1.0)) as f32
+                // One of Word's own table fonts by name: its pitch (Malgun Gothic 1.0625 em along
+                // a column: a 6.375-pt space at 24 pt, `kr3`).
+                match st.named {
+                    Some(n) if b.env.vertical => n.v_advance as f32,
+                    Some(wordcraft_fonts::word::NamedEa { advance: Some(a), .. }) => a as f32,
+                    _ => (adv / st.face.upem.max(1.0)) as f32,
+                }
             })
             .clamp(0.25, 4.0);
         if size.is_finite() && size > 0.0 {
@@ -1172,6 +1182,7 @@ impl<'a> Builder<'a> {
             shift: rc.baseline_shift(),
             deco: wordcraft_fonts::word::decoration_metrics(ea_family.unwrap_or(&rc.font), &face, size),
             v_centre: ((wordcraft_fonts::word::vertical_em_centre(ea_family.unwrap_or(&rc.font), &face) - (a - d) / 2.0) * k) as f32,
+            named: wordcraft_fonts::word::named_ea_metrics(ea_family.unwrap_or(&rc.font)),
         };
         // A `u32` index (like the glyph ranges) counts more distinct formats than a paragraph can
         // hold in memory, so every format keeps its own style.
@@ -1225,7 +1236,7 @@ impl<'a> Builder<'a> {
         // instead of mixing faces per character (e.g. a bundled Japanese Mincho for JIS-covered
         // ideographs beside a Simplified-Chinese sans for the rest). Whitespace and characters the
         // primary covers don't constrain the choice. `None` keeps the per-character fallback.
-        let ea_face: Option<FaceRef> = {
+        let ea_face: Option<(FaceRef, Option<&'static str>)> = {
             let ea: Vec<char> = text
                 .chars()
                 .filter(|c| crate::kinsoku::is_east_asian(*c) && !primary.covers(*c) && !c.is_whitespace() && !c.is_control() && *c != SOFT_HYPHEN)
@@ -1234,23 +1245,26 @@ impl<'a> Builder<'a> {
                 None
             } else {
                 // Word's own choice first (ＭＳ 明朝, `han_fallback`), then any face covering them all.
-                wordcraft_fonts::word::han_fallback(&ea, rc.bold, rc.italic).or_else(|| {
-                    wordcraft_fonts::FontDb::global().fallback_for_east_asian(&ea, primary.id(), rc.bold, rc.italic).map(|f| FaceRef::of(&f))
+                wordcraft_fonts::word::han_fallback(&ea, rc.bold, rc.italic).map(|f| (f, Some("MS Mincho"))).or_else(|| {
+                    wordcraft_fonts::FontDb::global().fallback_for_east_asian(&ea, primary.id(), rc.bold, rc.italic).map(|f| (FaceRef::of(&f), None))
                 })
             }
         };
         // Hangul the run's fonts lack: Word for Mac draws it in Batang when the run's East Asian
         // font (`w:eastAsia` or the theme's, else its font) is an oldstyle serif or one of Word's
         // serif CJK families, in Malgun Gothic otherwise (`hangul_fallback`, 2026-10-19).
-        let hangul: Option<FaceRef> = if text.chars().any(|c| is_hangul(c) && !primary.covers(c) && !primary_ea.is_some_and(|f| f.covers(c))) {
-            let serif = match ea_named {
-                Some(name) => wordcraft_fonts::word::is_cjk_serif_family(name) || primary_ea.is_some_and(|f| f.is_oldstyle_serif()),
-                None => wordcraft_fonts::word::is_cjk_serif_family(&rc.font) || primary.is_oldstyle_serif(),
+        let hangul: Option<(FaceRef, &'static str)> =
+            if text.chars().any(|c| is_hangul(c) && !primary.covers(c) && !primary_ea.is_some_and(|f| f.covers(c))) {
+                // The fixed-pitch ＭＳ 明朝 takes Malgun Gothic where ＭＳ Ｐ明朝 takes Batang (`kr4`).
+                let serif_name = |n: &str| wordcraft_fonts::word::is_cjk_serif_family(n) && !wordcraft_fonts::word::is_half_width_family(n);
+                let serif = match ea_named {
+                    Some(name) => serif_name(name) || primary_ea.is_some_and(|f| f.is_oldstyle_serif()),
+                    None => serif_name(&rc.font) || primary.is_oldstyle_serif(),
+                };
+                wordcraft_fonts::word::hangul_fallback(serif, rc.bold, rc.italic)
+            } else {
+                None
             };
-            wordcraft_fonts::word::hangul_fallback(serif, rc.bold, rc.italic)
-        } else {
-            None
-        };
         // Split by font coverage (fallback faces), small caps case, script formatting and direction.
         let mut seg_start = 0;
         let mut cur: Option<SegKey> = None;
@@ -1274,11 +1288,11 @@ impl<'a> Builder<'a> {
                 _ if !complex && east_asian(c) && primary_ea.is_some_and(|f| f.covers(c)) => primary_ea,
                 _ if prim.covers(dc) || c.is_whitespace() || c.is_control() || c == SOFT_HYPHEN => None,
                 // Hangul the fonts lack: Word's Korean face for the run's East Asian font.
-                _ if !complex && hangul.is_some() && is_hangul(c) => hangul,
+                _ if !complex && hangul.is_some() && is_hangul(c) => hangul.map(|h| h.0),
                 // Stay in the fallback face the word started in while it covers the letters.
                 Some(SegKey { face: Some(f), .. }) if f.covers(dc) => Some(f),
                 // The run's unified East Asian face, when one face covers the whole run.
-                _ if !complex && ea_face.is_some() && crate::kinsoku::is_east_asian(c) => ea_face,
+                _ if !complex && ea_face.is_some() && crate::kinsoku::is_east_asian(c) => ea_face.map(|e| e.0),
                 _ => {
                     let (bold, italic) = if complex { (rc.bold_cs, rc.italic_cs) } else { (rc.bold, rc.italic) };
                     wordcraft_fonts::FontDb::global().fallback_styled(dc, prim.id(), bold, italic).map(|f| FaceRef::of(&f))
@@ -1312,7 +1326,15 @@ impl<'a> Builder<'a> {
             };
             let rc = &rc;
             let small = key.small;
-            let ea_family = ea_named.filter(|_| key.face.is_some() && key.face.map(|f| f.id()) == primary_ea.map(|f| f.id()));
+            // The East Asian family this segment is laid out as: the run's East Asian font for its
+            // face, Word's fallback font (Batang, Malgun Gothic, ＭＳ 明朝) for a fallback face —
+            // by name, so Word's own metrics apply whatever face stands in.
+            let ea_family: Option<&str> = match key.face {
+                Some(f) if primary_ea.is_some_and(|p| p.id() == f.id()) => ea_named,
+                Some(f) if hangul.is_some_and(|(h, _)| h.id() == f.id()) => hangul.map(|(_, n)| n),
+                Some(f) if ea_face.is_some_and(|(e, _)| e.id() == f.id()) => ea_face.and_then(|(_, n)| n),
+                _ => None,
+            };
             let si = self.style(rc, key.face, small, ea_family);
             let Some(st) = self.styles.get(si as usize).cloned() else { continue };
             let upper = rc.caps || small;
@@ -1382,19 +1404,30 @@ impl<'a> Builder<'a> {
                 let s = shape_text.get(gs..ge).unwrap_or("");
                 let ch = s.chars().next().unwrap_or(' ');
                 let mut adv = 0.0f32;
+                let ea_char = !ch.is_whitespace() && (crate::kinsoku::is_east_asian(ch) || is_east_asian(ch) || is_hangul(ch));
                 while let Some(g) = shaped.get(gi) {
                     if g.cluster >= ge {
                         break;
                     }
-                    self.glyphs.push(Glyph { gid: g.gid, dx: adv + g.x_offset as f32 * k * hscale, dy: g.y_offset as f32 * k });
                     // Standing upright in a vertical column, a glyph moves the column on by its
                     // vertical advance — Apple SD Gothic Neo's Hangul 1.2 em (28.8 pt at 24 pt in
-                    // Word for Mac, 2026-10-19), a Japanese font's full-width glyphs an em.
-                    let x_advance = if self.env.vertical && crate::display::stands_in_vertical(ch, &st.face, g.gid) {
-                        st.face.vertical_advance(g.gid).map_or(g.x_advance as f32, |v| v as f32)
-                    } else {
-                        g.x_advance as f32
+                    // Word for Mac, 2026-10-19), a Japanese font's full-width glyphs an em. One of
+                    // Word's own table fonts named (Malgun Gothic, Batang, ＭＳ 明朝…) advances its
+                    // East Asian characters as Word does whatever face stands in (`named`): an em
+                    // across a line, the glyph centred in it; its own pitch along a column.
+                    let upem = st.face.upem.max(1.0) as f32;
+                    let standing = self.env.vertical && crate::display::stands_in_vertical(ch, &st.face, g.gid);
+                    let named = st.named.filter(|_| ea_char);
+                    let (x_advance, centre) = match (standing, named) {
+                        (true, Some(n)) => ((n.v_advance as f32 * upem).clamp(0.0, upem * 4.0), 0.0),
+                        (true, None) => (st.face.vertical_advance(g.gid).map_or(g.x_advance as f32, |v| v as f32), 0.0),
+                        (false, Some(wordcraft_fonts::word::NamedEa { advance: Some(a), .. })) => {
+                            let cell = (a as f32 * upem).clamp(0.0, upem * 4.0);
+                            (cell, (cell - g.x_advance as f32) / 2.0)
+                        }
+                        _ => (g.x_advance as f32, 0.0),
                     };
+                    self.glyphs.push(Glyph { gid: g.gid, dx: adv + (g.x_offset as f32 + centre) * k * hscale, dy: g.y_offset as f32 * k });
                     adv += x_advance * k * hscale;
                     gi += 1;
                 }

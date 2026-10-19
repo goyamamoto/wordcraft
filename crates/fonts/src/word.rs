@@ -165,6 +165,11 @@ pub fn cjk_font_names(family: &str) -> Option<(&'static str, &'static str, &'sta
         ("DFKai-SB", "標楷體", "zh-hant"),
         ("Microsoft JhengHei", "微軟正黑體", "zh-hant"),
         ("Malgun Gothic", "맑은 고딕", "ko"),
+        ("Malgun Gothic Semilight", "맑은 고딕 Semilight", "ko"),
+        ("GulimChe", "굴림체", "ko"),
+        ("DotumChe", "돋움체", "ko"),
+        ("BatangChe", "바탕체", "ko"),
+        ("GungsuhChe", "궁서체", "ko"),
         ("Batang", "바탕", "ko"),
         ("Gulim", "굴림", "ko"),
         ("Dotum", "돋움", "ko"),
@@ -402,10 +407,16 @@ fn cjk_chain(base: &str) -> Option<&'static [&'static str]> {
         | "source han serif tw" => SERIF_TC,
         "맑은 고딕"
         | "malgun gothic"
+        | "맑은 고딕 semilight"
+        | "malgun gothic semilight"
         | "굴림"
         | "gulim"
+        | "굴림체"
+        | "gulimche"
         | "돋움"
         | "dotum"
+        | "돋움체"
+        | "dotumche"
         | "apple sd gothic neo"
         | "applegothic"
         | "noto sans cjk kr"
@@ -416,8 +427,12 @@ fn cjk_chain(base: &str) -> Option<&'static [&'static str]> {
         | "nanum gothic" => SANS_KR,
         "바탕"
         | "batang"
+        | "바탕체"
+        | "batangche"
         | "궁서"
         | "gungsuh"
+        | "궁서체"
+        | "gungsuhche"
         | "applemyungjo"
         | "noto serif cjk kr"
         | "noto serif kr"
@@ -587,10 +602,22 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
 /// the run's East Asian font (`w:eastAsia`, else its font) is an oldstyle serif (OS/2 family
 /// class 1: Times New Roman, Hiragino Mincho ProN) or one of Word's serif CJK families (游明朝,
 /// [`is_cjk_serif_family`]), Malgun Gothic otherwise (Arial, Aptos, Georgia, Cambria, Courier
-/// New, Baskerville, Palatino, Hiragino Sans, 游ゴシック). Both come with Office; the Korean faces
-/// installed stand in for them — AppleMyungjo and AppleGothic on a Mac, an em per syllable across
-/// a line and along a column like Word's. `None` when no Korean face is installed.
-pub fn hangul_fallback(serif: bool, bold: bool, italic: bool) -> Option<FaceRef> {
+/// New, Baskerville, Palatino, Hiragino Sans, 游ゴシック, and the fixed-pitch ＭＳ 明朝 and ＭＳ
+/// ゴシック, where ＭＳ Ｐ明朝 takes Batang: `kr4`, `kr5`). Both come with Office and are laid out
+/// by name with Word's own metrics whatever Korean face stands in for them here (Apple SD Gothic
+/// Neo and AppleMyungjo on a Mac): an em per syllable, Batang's 1.3-em and Malgun Gothic's
+/// 1.73-em lines — which count toward the line they fall in: Arial text with a Hangul word runs
+/// 41.52-pt lines at 24 pt (`ha1`) — and their 縦書き pitch and origin ([`office_ea_box`],
+/// [`named_ea_metrics`]). The face and Word's font name; `None` when no Korean face is
+/// installed.
+pub fn hangul_fallback(serif: bool, bold: bool, italic: bool) -> Option<(FaceRef, &'static str)> {
+    let name = if serif { "Batang" } else { "Malgun Gothic" };
+    let r = resolve(name, bold, italic);
+    r.face.covers('한').then_some((r.face, name))
+}
+
+#[allow(dead_code)]
+fn hangul_fallback_lists() {
     const SERIF: &[&str] = &[
         "Batang",
         "AppleMyungjo",
@@ -615,8 +642,7 @@ pub fn hangul_fallback(serif: bool, bold: bool, italic: bool) -> Option<FaceRef>
         "Dotum",
         "Apple SD Gothic Neo",
     ];
-    let list = if serif { SERIF } else { SANS };
-    list.iter().map(|f| resolve(f, bold, italic)).find(|r| !r.substituted && r.face.covers('한')).map(|r| r.face)
+    let _ = (SERIF, SANS);
 }
 
 /// The face for the Chinese and Japanese characters a run's fonts lack: Word for Mac draws them
@@ -678,23 +704,30 @@ pub fn line_metrics(face: &crate::FontFace) -> (f64, f64) {
 /// The line metrics (ascent, descent) in font units Word lays its own Yu Mincho and Yu Gothic
 /// out with, for a document asking for one of them by its English or Japanese name (游明朝,
 /// 游ゴシック and their Demibold, Light, Medium and Bold weights): Office bundles its own builds
-/// of the Yu fonts, whose line is 1.43 em with the baseline 1.051 em below the line's top and
-/// 0.379 em above its bottom — measured in Word for Mac 16.114 on 2026-10-18 at 10.5 and 20 pt
+/// of the Yu fonts, whose line is 1.43 em with the baseline 1.045 em below the line's top and
+/// 0.385 em above its bottom — measured in Word for Mac 16.114 on 2026-10-18 at 10.5 and 20 pt
 /// with single spacing (pitches 15.0 and 28.6 pt; the first baseline 11.04 pt below the top
 /// margin; 12.48 pt below the top of an 18-pt grid line; a 20-pt line 25.0 pt below a 10.5-pt
-/// one), the same for every weight. The macOS system 游明朝体/游ゴシック体 that stand in for them
+/// one), the same for every weight, and on 2026-10-19 at 24, 48 and 96 pt (`kr4`, `kr6`: the
+/// first baseline 24.96, 50.16 and 100.32 pt below the top margin — 1.045 em, which 1.051 would
+/// miss by 0.3 pt at 48 and 0.6 at 96). The macOS system 游明朝体/游ゴシック体 that stand in for them
 /// have other metrics (hhea 0.88/0.12 with a 0.5 em gap: 1.5 em), which would put every
 /// Japanese line 0.07 em further apart than Word. `None` for other families: their faces' own
 /// metrics apply ([`line_metrics`]).
 pub fn office_line_metrics(family: &str, face: &crate::FontFace) -> Option<(f64, f64)> {
     if is_office_yu(family) {
-        return Some((1.051 * face.upem, 0.379 * face.upem));
+        return Some((YU_ASCENT * face.upem, YU_DESCENT * face.upem));
     }
-    // Word's own MS Mincho and MS Gothic (ascent 0.859 em, descent 0.141: a 1-em box) centred
-    // in Word for Mac's 1.3-em East Asian line: the baseline 1.009 em below the line's top
-    // (`lm1`–`lm3` probes, 12 and 48 pt, with and without the grid), whatever face stands in.
-    is_office_ms(family)
-        .then_some(((MS_ASCENT + (EAST_ASIAN_LINE - 1.0) / 2.0) * face.upem, (1.0 - MS_ASCENT + (EAST_ASIAN_LINE - 1.0) / 2.0) * face.upem))
+    // Word's own East Asian table fonts by name (`office_ea_box`), their box centred in Word for
+    // Mac's 1.3-times line: MS Gothic, Gulim, Dotum, Batang and Gungsuh (0.859/0.141, a 1-em
+    // box) put the baseline 1.009 em below the line's top, MS Mincho (0.857/0.1406) 1.0067 with
+    // a 1.2969-em line (124.56 pt at 96, 62.16 at 48: `lm1`–`lm3`, `kr6` probes), Malgun Gothic
+    // (1.0879/0.2429) 1.2875 em with a 1.73-em line (41.52 pt at 24, 123.60 and 166.08 at 96:
+    // `kr1`, `kr6`), whatever face stands in.
+    let (a, d) = office_ea_box(family)?;
+    let line = EAST_ASIAN_LINE * (a + d);
+    let asc = a + (line - (a + d)) / 2.0;
+    Some((asc * face.upem, (line - asc) * face.upem))
 }
 
 /// Where a 縦書き column's upright em squares are centred, in font units on the ascent side of
@@ -707,10 +740,15 @@ pub fn office_line_metrics(family: &str, face: &crate::FontFace) -> Option<(f64,
 /// difference.
 pub fn vertical_em_centre(family: &str, face: &crate::FontFace) -> f64 {
     if is_office_yu(family) {
-        return (1.051 - 0.379) / 2.0 * face.upem;
+        return (YU_ASCENT - YU_DESCENT) / 2.0 * face.upem;
     }
-    if is_office_ms(family) {
-        return (MS_ASCENT - (1.0 - MS_ASCENT)) / 2.0 * face.upem;
+    // Malgun Gothic: half its win ascent − descent (2146 − 526 at 2048 units), 0.40 em on the
+    // ascent side (`kr3`: the em squares' centre 21.36 pt from the column's top edge at 24 pt).
+    if is_office_malgun(family) {
+        return MALGUN_WIN_CENTRE * face.upem;
+    }
+    if let Some((a, d)) = office_ea_box(family) {
+        return (a - d) / 2.0 * face.upem;
     }
     let ok = |a: f64, d: f64| a > 0.0 && a + d <= face.upem * 2.0;
     let win =
@@ -722,10 +760,141 @@ pub fn vertical_em_centre(family: &str, face: &crate::FontFace) -> f64 {
 /// Word for Mac's line for an East Asian face as a multiple of its hhea ascent + descent (1.3
 /// em for the usual 1-em box; 1.82 for Songti SC's 1.4; the line gap plays no part).
 pub const EAST_ASIAN_LINE: f64 = 1.3;
-/// MS Mincho's and MS Gothic's ascent in em (their descent is the rest of the em).
-const MS_ASCENT: f64 = 0.859;
-/// The top of MS Mincho's and MS Gothic's strikethrough above the baseline, in em.
+/// Word's own Yu Mincho/Yu Gothic builds: the baseline below the line's top and above its
+/// bottom, in em (a 1.43-em line).
+const YU_ASCENT: f64 = 1.045;
+const YU_DESCENT: f64 = 0.385;
+/// MS Mincho's hhea ascent and descent in em: a 0.9976-em box (1755/288 at 2048 units), whose
+/// 1.3-times line runs 124.56 pt at 96 pt and 62.16 at 48 in Word for Mac (`kr6`, `lm3`).
+const MS_MINCHO_BOX: (f64, f64) = (0.857, 0.1406);
+/// MS Gothic's, and Gulim's, Dotum's, Batang's and Gungsuh's: a 1-em box (1760/288).
+const MS_GOTHIC_BOX: (f64, f64) = (0.859, 0.141);
+/// Malgun Gothic's (Semilight too): a 1.3308-em box, so a 1.73-em line with the baseline 1.2875
+/// em below its top (Word for Mac: 41.52 pt at 24, 83.04 at 48, 166.08 at 96 with the first
+/// baseline 30.96, 62.16 and 123.60 below the top margin; `kr1`, `kr6`, 2026-10-19).
+const MALGUN_BOX: (f64, f64) = (1.0879, 0.2429);
+/// Half Malgun Gothic's win ascent − descent, in em: where its 縦書き em squares are centred.
+const MALGUN_WIN_CENTRE: f64 = 0.3955;
+/// The top of MS Mincho's, MS Gothic's and the Korean table fonts' strikethrough above the
+/// baseline, in em (Gulim, Dotum, Batang, Gungsuh: 6.24 pt at 24, `kr2`).
 const MS_STRIKE: f32 = 0.258;
+
+/// The hhea-style box (ascent, descent in em) Word for Mac lays one of its own East Asian table
+/// fonts out with, by name, whatever face stands in here: MS Mincho, MS Gothic and the Korean
+/// fonts Office bundles (맑은 고딕, 굴림, 돋움, 바탕, 궁서 and their fixed-pitch 체 siblings).
+pub fn office_ea_box(family: &str) -> Option<(f64, f64)> {
+    if is_office_malgun(family) {
+        Some(MALGUN_BOX)
+    } else if is_office_ms_mincho(family) {
+        Some(MS_MINCHO_BOX)
+    } else if is_office_ms_gothic(family) || is_office_gulim(family) {
+        Some(MS_GOTHIC_BOX)
+    } else {
+        None
+    }
+}
+
+fn named_in(family: &str, names: &[&str]) -> bool {
+    let base = fold_cjk_name(family);
+    names.iter().any(|n| fold_cjk_name(n) == base)
+}
+
+/// Is `family` Malgun Gothic (맑은 고딕) or Malgun Gothic Semilight, Korean fonts Office bundles?
+pub fn is_office_malgun(family: &str) -> bool {
+    named_in(family, &["Malgun Gothic", "Malgun Gothic Semilight", "맑은 고딕", "맑은 고딕 Semilight"])
+}
+
+/// Is `family` one of the Windows Korean table fonts Office bundles — Gulim, Dotum, Batang,
+/// Gungsuh (굴림, 돋움, 바탕, 궁서) or their fixed-pitch 체 (Che) siblings?
+pub fn is_office_gulim(family: &str) -> bool {
+    named_in(
+        family,
+        &[
+            "Gulim",
+            "GulimChe",
+            "Dotum",
+            "DotumChe",
+            "Batang",
+            "BatangChe",
+            "Gungsuh",
+            "GungsuhChe",
+            "굴림",
+            "굴림체",
+            "돋움",
+            "돋움체",
+            "바탕",
+            "바탕체",
+            "궁서",
+            "궁서체",
+        ],
+    )
+}
+
+/// Is `family` a fixed-pitch Office East Asian font — MS Mincho, MS Gothic or a Korean 체 font —
+/// whose Latin letters are half an em (`kr4`: A, W, i, a space all 0.50 em at 24 pt in Word for
+/// Mac, where MS PMincho, MS PGothic, Gulim and Batang are proportional)? Word for Mac draws the
+/// Hangul these lack in Malgun Gothic, MS PMincho's in Batang.
+pub fn is_half_width_family(family: &str) -> bool {
+    named_in(
+        family,
+        &[
+            "MS Mincho",
+            "MS Gothic",
+            "ＭＳ 明朝",
+            "ＭＳ ゴシック",
+            "GulimChe",
+            "DotumChe",
+            "BatangChe",
+            "GungsuhChe",
+            "굴림체",
+            "돋움체",
+            "바탕체",
+            "궁서체",
+        ],
+    )
+}
+
+fn is_office_ms_mincho(family: &str) -> bool {
+    named_in(family, &["MS Mincho", "MS PMincho", "ＭＳ 明朝", "ＭＳ Ｐ明朝"])
+}
+
+fn is_office_ms_gothic(family: &str) -> bool {
+    named_in(family, &["MS Gothic", "MS PGothic", "MS UI Gothic", "ＭＳ ゴシック", "ＭＳ Ｐゴシック"])
+}
+
+/// How Word for Mac advances and hangs the East Asian characters of one of its own table fonts,
+/// by name, whatever face stands in here ([`named_ea_metrics`]), in em.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NamedEa {
+    /// Across a line: every East Asian character's advance (an em), `None` to keep the face's.
+    pub advance: Option<f64>,
+    /// Along a 縦書き column: the pitch of an upright character.
+    pub v_advance: f64,
+    /// Along a 縦書き column: an upright character's baseline below its pen.
+    pub v_origin: f64,
+}
+
+/// Word for Mac's placement of East Asian characters in its own table fonts (measured
+/// 2026-10-19 at 24 pt): MS Mincho, MS Gothic, Gulim, Dotum, Batang, Gungsuh and the 체 fonts
+/// advance an em across a line and along a column, hanging each glyph its hhea ascent (0.857 or
+/// 0.859 em) below the pen (`vt3`, `kr3`, `kr5`); Malgun Gothic's Hangul an em across a line but
+/// 1.0625 em along a column (25.5 pt), hung 0.917 em below the pen (`kr3`); Malgun Gothic
+/// Semilight an em along the column, hung 0.8975 em (`kr5`; its glyphs vary by a point). The
+/// proportional MS PMincho and MS PGothic keep the face's advances across a line (their kana
+/// are proportional). `None` for other families.
+pub fn named_ea_metrics(family: &str) -> Option<NamedEa> {
+    if is_office_malgun(family) {
+        let semilight = family.to_ascii_lowercase().contains("semilight");
+        return Some(NamedEa {
+            advance: Some(1.0),
+            v_advance: if semilight { 1.0 } else { 1.0625 },
+            v_origin: if semilight { 0.8975 } else { 0.917 },
+        });
+    }
+    let (a, _) = office_ea_box(family)?;
+    let proportional = is_office_ms(family) && !is_half_width_family(family);
+    Some(NamedEa { advance: (!proportional).then_some(1.0), v_advance: 1.0, v_origin: a })
+}
 
 /// Is `family` one of the MS Mincho / MS Gothic families Word bundles (by its English or
 /// Japanese name)?
@@ -813,14 +982,29 @@ pub fn decoration_metrics(family: &str, face: &crate::FontFace, size: f32) -> De
     // at 18, 4.56 at 48; Toppan Bunkyu Mincho the same; MS Mincho and MS Gothic (0.141) 1.68 at
     // 12, 5.28 at 48; Word's Yu fonts have their own rule above.
     let hhea_descent = face.skrifa().and_then(|f| f.hhea().ok()).map(|h| f64::from(h.descender().to_i16()).abs() / face.upem.max(1.0));
-    let descent = if is_office_ms(family) { 1.0 - MS_ASCENT } else { hhea_descent.unwrap_or(face.descent.abs() / face.upem.max(1.0)) };
-    let underline_top = if is_office_ms(family) || face.is_east_asian() { (0.7 * descent * size as f64) as f32 + 0.53 } else { (-uo * k) as f32 };
-    let underline_thickness = if is_office_ms(family) { 0.05 * size } else { (ut * k) as f32 };
+    // Word's own table fonts by name take the same rule on their descents — MS Mincho 1.68 pt at
+    // 12, Gulim, Dotum, Batang and Gungsuh 2.88 at 24, Malgun Gothic 4.56 at 24 (`kr2`) — with
+    // a 0.05-em line.
+    let office = office_ea_box(family);
+    let descent = match office {
+        Some((_, d)) => d,
+        None => hhea_descent.unwrap_or(face.descent.abs() / face.upem.max(1.0)),
+    };
+    let underline_top = if office.is_some() || face.is_east_asian() { (0.7 * descent * size as f64) as f32 + 0.53 } else { (-uo * k) as f32 };
+    let underline_thickness = if office.is_some() { 0.05 * size } else { (ut * k) as f32 };
     // MS Mincho and MS Gothic strike through 0.258 em above the baseline (the top of a 0.05-em
     // line: 3.08 pt at 12, 12.50 at 48, where Times New Roman's and Arial's tables put theirs),
     // whatever stands in for them; Hiragino (0.322), Toppan (0.276), Times (0.259) and Arial are
     // their OS/2 tables (`st1`, `st2` probes).
-    let (strike_top, strike_thickness) = if is_office_ms(family) { (MS_STRIKE * size, 0.05 * size) } else { ((so * k) as f32, (st * k) as f32) };
+    // Malgun Gothic strikes through 0.31 em above the baseline (7.44 pt at 24), its Semilight
+    // 0.23 em with a 0.06-em line (`kr2`); the Korean table fonts as MS Mincho.
+    let (strike_top, strike_thickness) = if is_office_malgun(family) {
+        if family.to_ascii_lowercase().contains("semilight") { (0.23 * size, 0.06 * size) } else { (0.31 * size, 0.05 * size) }
+    } else if office.is_some() {
+        (MS_STRIKE * size, 0.05 * size)
+    } else {
+        ((so * k) as f32, (st * k) as f32)
+    };
     Decorations { underline_top, underline_thickness, strike_top, strike_thickness }
 }
 
@@ -835,7 +1019,7 @@ mod tests {
         let em = face.get().upem;
         for name in ["游明朝", "Yu Mincho", "游ゴシック Medium", "Yu Gothic Light", "游明朝 Demibold", "Ｙｕ　Ｇｏｔｈｉｃ"] {
             let (a, d) = office_line_metrics(name, face.get()).unwrap_or_else(|| panic!("{name}"));
-            assert!((a / em - 1.051).abs() < 1e-6 && (d / em - 0.379).abs() < 1e-6, "{name}: {a} {d}");
+            assert!((a / em - 1.045).abs() < 1e-6 && (d / em - 0.385).abs() < 1e-6, "{name}: {a} {d}");
         }
         for name in ["ヒラギノ明朝 ProN", "Aptos", "Yu Gothic UI", ""] {
             assert!(office_line_metrics(name, face.get()).is_none(), "{name}");
@@ -878,14 +1062,11 @@ mod tests {
     /// `post` underline.
     #[test]
     fn hangul_fallback_is_batang_for_oldstyle_serifs_and_malgun_gothic_otherwise() {
-        if let (Some(s), Some(g)) = (hangul_fallback(true, false, false), hangul_fallback(false, false, false)) {
+        if let (Some((s, sn)), Some((g, gn))) = (hangul_fallback(true, false, false), hangul_fallback(false, false, false)) {
             assert!(s.covers('한') && g.covers('한'));
-            if !resolve("AppleMyungjo", false, false).substituted {
-                assert_eq!(s.family, "AppleMyungjo");
-            }
-            if !resolve("AppleGothic", false, false).substituted {
-                assert_eq!(g.family, "AppleGothic");
-            }
+            assert_eq!((sn, gn), ("Batang", "Malgun Gothic"));
+            assert_eq!(s.id(), resolve("Batang", false, false).face.id());
+            assert_eq!(g.id(), resolve("Malgun Gothic", false, false).face.id());
         }
         let times = resolve("Times New Roman", false, false);
         if !times.substituted {
@@ -910,6 +1091,49 @@ mod tests {
         if let Some(f) = han_fallback(&['日', '本'], false, false) {
             assert!(f.is_east_asian() && f.covers('語'));
         }
+    }
+
+    #[test]
+    fn words_korean_fonts_take_words_metrics_by_name() {
+        let face = resolve("Batang", false, false).face;
+        let f = face.get();
+        let em = f.upem;
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-4;
+        for name in ["Malgun Gothic", "맑은 고딕", "Malgun Gothic Semilight"] {
+            let (a, d) = office_line_metrics(name, f).unwrap();
+            assert!(near(a / em, 1.2875) && near((a + d) / em, 1.73), "{name}: {a} {d}");
+            assert!(near(vertical_em_centre(name, f) / em, 0.3955), "{name}");
+        }
+        for name in ["Gulim", "GulimChe", "Dotum", "돋움체", "Batang", "바탕", "Gungsuh", "궁서체", "MS Gothic", "MS PGothic"] {
+            let (a, d) = office_line_metrics(name, f).unwrap();
+            assert!(near(a / em, 1.009) && near((a + d) / em, 1.3), "{name}: {a} {d}");
+            assert!(near(vertical_em_centre(name, f) / em, 0.359), "{name}");
+        }
+        for name in ["MS Mincho", "ＭＳ Ｐ明朝"] {
+            let (a, d) = office_line_metrics(name, f).unwrap();
+            assert!(near(a / em, 0.857 + 0.15 * 0.9976) && near((a + d) / em, 1.3 * 0.9976), "{name}: {a} {d}");
+        }
+        assert!(office_line_metrics("Nanum Gothic", f).is_none() && office_line_metrics("Apple SD Gothic Neo", f).is_none());
+        // Decorations at 24 pt (`kr2`).
+        let d = decoration_metrics("Malgun Gothic", f, 24.0);
+        assert!((d.underline_top - 4.61).abs() < 0.05 && (d.underline_thickness - 1.2).abs() < 1e-3 && (d.strike_top - 7.44).abs() < 1e-3, "{d:?}");
+        let d = decoration_metrics("Malgun Gothic Semilight", f, 24.0);
+        assert!((d.strike_top - 5.52).abs() < 1e-3 && (d.strike_thickness - 1.44).abs() < 1e-3, "{d:?}");
+        let d = decoration_metrics("Batang", f, 24.0);
+        assert!((d.underline_top - 2.90).abs() < 0.02 && (d.strike_top - 6.19).abs() < 0.01, "{d:?}");
+        // Advances and vertical placement by name.
+        assert_eq!(named_ea_metrics("Malgun Gothic"), Some(NamedEa { advance: Some(1.0), v_advance: 1.0625, v_origin: 0.917 }));
+        assert_eq!(named_ea_metrics("맑은 고딕 Semilight"), Some(NamedEa { advance: Some(1.0), v_advance: 1.0, v_origin: 0.8975 }));
+        assert_eq!(named_ea_metrics("BatangChe"), Some(NamedEa { advance: Some(1.0), v_advance: 1.0, v_origin: 0.859 }));
+        assert_eq!(named_ea_metrics("ＭＳ 明朝"), Some(NamedEa { advance: Some(1.0), v_advance: 1.0, v_origin: 0.857 }));
+        assert_eq!(named_ea_metrics("MS PGothic"), Some(NamedEa { advance: None, v_advance: 1.0, v_origin: 0.859 }));
+        assert_eq!(named_ea_metrics("Arial"), None);
+        assert!(
+            is_half_width_family("MS Gothic")
+                && is_half_width_family("굴림체")
+                && !is_half_width_family("MS PMincho")
+                && !is_half_width_family("Gulim")
+        );
     }
 
     #[test]
@@ -951,12 +1175,18 @@ mod tests {
             let want = (0.7 * hd / em * 48.0) as f32 + 0.53;
             assert!((dm.underline_top - want).abs() < 1e-3 && (dm.underline_thickness - 2.4).abs() < 0.05, "{dm:?}");
         }
-        // MS Mincho by either name, whatever face stands in: 1.009 em above the baseline,
-        // 0.291 below; the underline 1.68 below at 12 pt (0.72 thick), 5.28 at 48 (2.40).
-        for name in ["MS Mincho", "ＭＳ 明朝", "MS PGothic", "ＭＳ Ｐゴシック", "MS UI Gothic"] {
+        // MS Gothic by either name, whatever face stands in: 1.009 em above the baseline,
+        // 0.291 below; MS Mincho's 0.9976-em box 1.0066 and 0.2903; the underline 1.68 below at
+        // 12 pt (0.72 thick), 5.28 at 48 (2.40).
+        for name in ["MS Gothic", "MS PGothic", "ＭＳ Ｐゴシック", "MS UI Gothic"] {
             assert!(is_office_ms(name), "{name}");
             let (a, d) = office_line_metrics(name, f).unwrap_or_else(|| panic!("{name}"));
             assert!((a / f.upem - 1.009).abs() < 1e-6 && (d / f.upem - 0.291).abs() < 1e-6, "{name}: {a} {d}");
+        }
+        for name in ["MS Mincho", "ＭＳ 明朝", "MS PMincho"] {
+            assert!(is_office_ms(name), "{name}");
+            let (a, d) = office_line_metrics(name, f).unwrap_or_else(|| panic!("{name}"));
+            assert!((a / f.upem - 1.00664).abs() < 1e-4 && ((a + d) / f.upem - 1.29688).abs() < 1e-4, "{name}: {a} {d}");
         }
         assert!(!is_office_ms("Yu Mincho") && !is_office_ms("Hiragino Mincho ProN") && !is_office_ms(""));
         let dm = decoration_metrics("MS Gothic", f, 48.0);
@@ -985,7 +1215,7 @@ mod tests {
                 assert!((c - centre).abs() < 1e-3 || name == "Osaka", "{name}: centre {c}");
             }
         }
-        assert!((vertical_em_centre("游明朝", f) / f.upem - 0.336).abs() < 1e-6);
+        assert!((vertical_em_centre("游明朝", f) / f.upem - 0.33).abs() < 1e-6);
         assert!((vertical_em_centre("MS Gothic", f) / f.upem - 0.359).abs() < 1e-6);
         let t = resolve("Times New Roman", false, false);
         if !t.substituted && !t.face.get().is_east_asian() {
