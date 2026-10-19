@@ -9191,3 +9191,145 @@ fn character_scaling_draws_the_glyphs_stretched_about_the_runs_start() {
     }
     assert_eq!(display::Draw::scale_matrix(f32::NAN, 0.5), None);
 }
+
+/// Page, column and section break marks as Word for Mac draws them (`bk1`/`bk2` probes, 10.5-pt
+/// Yu Mincho with Japanese editing, 2026-10-19): the paragraph mark after a page break shares
+/// the break's row at the right margin (its ↵ ending 0.75 pt inside it), the "Page Break" rule
+/// a 2-pt checkerboard band hanging from the baseline that runs from the text to 2.75 pt into
+/// the mark's box, its label centred; a column break's rule two rows of 1-pt dots 4 pt apart
+/// to the column's edge, its mark at the top of the next column; a section break's rule the
+/// band plus one more row 2 pt below, to the margin. A click on the mark's box after a page
+/// break puts the caret at the paragraph's end; one on the text before the break.
+#[test]
+fn break_marks_follow_word_for_mac() {
+    use wordcraft_doc::para::{COLUMN_BREAK, PAGE_BREAK};
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    let chr = CharProps {
+        size: Some(10.5),
+        font: Some("游明朝".into()),
+        font_ea: Some("游明朝".into()),
+        lang_ea: Some("ja-JP".into()),
+        ..Default::default()
+    };
+    let para = |t: &str| Paragraph::with_text(t, chr.clone());
+    let sect = |start: SectionStart, cols: u32| {
+        Box::new(SectionProps {
+            start,
+            columns: wordcraft_doc::section::Columns { count: cols, space: 21.25, ..Default::default() },
+            ..Default::default()
+        })
+    };
+    let mut d = Document::from_text("");
+    d.body.clear();
+    let mut p0 = para("現在のセクション");
+    p0.section = Some(sect(SectionStart::Continuous, 1));
+    d.body.push(wordcraft_doc::para_block(p0));
+    d.body.push(wordcraft_doc::para_block(para(&format!("二段組の一段目{COLUMN_BREAK}"))));
+    let mut p2 = para("二段目");
+    p2.section = Some(sect(SectionStart::Continuous, 2));
+    d.body.push(wordcraft_doc::para_block(p2));
+    d.body.push(wordcraft_doc::para_block(para(&format!("改ページの前{PAGE_BREAK}"))));
+    d.body.push(wordcraft_doc::para_block(para("改ページの後")));
+    d.last_section = *sect(SectionStart::NextPage, 1);
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 3);
+    let lines_of = |page: usize, k: usize| {
+        l.pages[page]
+            .items
+            .iter()
+            .filter_map(|i| if let Placed::Lines { para, x, y, .. } = i { Some((para.clone(), *x, *y)) } else { None })
+            .nth(k)
+            .unwrap()
+    };
+    // The page-break paragraph: its mark line shares the break line's row, 8.25 pt from the edge.
+    let (pb, px, py) = lines_of(1, 0);
+    assert_eq!(pb.lines.len(), 2);
+    let (l0, l1) = (&pb.lines[0], &pb.lines[1]);
+    assert_eq!(l0.end, LineEnd::PageBreak);
+    assert!(l1.beside && l1.end == LineEnd::Para && l1.top == l0.top && l1.height == l0.height && l1.baseline == l0.baseline, "{l1:?}");
+    assert!((l1.xs[0] - (468.0 - 8.25)).abs() < 0.01 && (l1.left - l1.xs[0]).abs() < 0.01 && (l1.right - 468.0).abs() < 0.01);
+    let row_y = py + l0.height / 2.0;
+    assert_eq!(l.hit(1, px + 465.0, row_y, StoryRef::Body).unwrap().off, pb.text_len, "the mark's box: the paragraph's end");
+    assert!(l.hit(1, px + 30.0, row_y, StoryRef::Body).unwrap().off < pb.text_len - 1, "the text before the break");
+    // The next paragraph starts the next page as before.
+    assert!(
+        matches!(l.pages[2].items.iter().find(|i| matches!(i, Placed::Lines { .. })), Some(Placed::Lines { para, .. }) if para.lines[0].end == LineEnd::Para)
+    );
+    let opts = display::DisplayOptions { marks: true, japanese_marks: true, ..Default::default() };
+    let items = display::page_display(&d, &l.pages[1], &opts);
+    assert!(!items.iter().any(|i| matches!(i, display::Draw::Mark { .. })), "no glyph marks");
+    let base = py + l0.baseline - l0.top;
+    let dashes: Vec<(f32, f32, f32, f32, f32)> = items
+        .iter()
+        .filter_map(|i| match i {
+            display::Draw::Line { x0, y0, x1, stroke: display::Stroke::Dashes { on, off, .. }, .. } => Some((*x0, *y0, *x1, *on, *off)),
+            _ => None,
+        })
+        .collect();
+    let labels: Vec<(f32, f32, &str)> = items
+        .iter()
+        .filter_map(|i| if let display::Draw::MarkText { x, baseline, text, .. } = i { Some((*x, *baseline, text.as_str())) } else { None })
+        .collect();
+    assert_eq!(labels.len(), 1);
+    let (lx, lbase, ltext) = labels[0];
+    assert_eq!(ltext, "Page Break");
+    assert!((lbase - base).abs() < 0.01, "the label stands on the baseline");
+    let text_end = px + l0.visual_end_x();
+    let (x0, x1) = (text_end + 1.0, px + 468.0 - 8.25 + 2.75);
+    let lw = display::mark_text_width("Page Break", 8.4);
+    assert!((lx - (x0 + x1 - lw) / 2.0).abs() < 0.01, "centred between {x0} and {x1}: {lx}");
+    // Two checkerboard rows at base + 0.5 and + 1.5 (1 on, 1 off, the lower row 1 pt behind),
+    // either side of the label, over a grey 2-pt band; nothing 4 pt down.
+    assert_eq!(dashes.len(), 4, "{dashes:?}");
+    assert!(dashes.iter().all(|d| d.3 == 1.0 && d.4 == 1.0));
+    assert!(dashes.iter().any(|d| (d.0 - x0).abs() < 0.01 && (d.1 - (base + 0.5)).abs() < 0.01));
+    assert!(dashes.iter().any(|d| (d.0 - x0 - 1.0).abs() < 0.01 && (d.1 - (base + 1.5)).abs() < 0.01));
+    assert!(dashes.iter().any(|d| (d.2 - x1).abs() < 0.01 && (d.1 - (base + 0.5)).abs() < 0.01));
+    assert!(items.iter().any(|i| matches!(i, display::Draw::Fill { rect, color, .. } if (rect.y - base).abs() < 0.01 && (rect.h - 2.0).abs() < 0.01 && *color == Rgb(0xC7, 0xC7, 0xC7))));
+    // The ↵ at the right margin: its box starts 8.25 pt inside it, its strokes' centres end
+    // 1.25 pt inside (0.75 pt of ink with the 1-pt stroke).
+    let marks: Vec<f32> = items
+        .iter()
+        .filter_map(|i| if let display::Draw::MarkLines { lines, .. } = i { lines.iter().flatten().map(|p| p.0).reduce(f32::max) } else { None })
+        .collect();
+    assert_eq!(marks.len(), 1);
+    assert!((marks[0] - (px + 468.0 - 1.25)).abs() < 0.01, "{marks:?}");
+    // Page 0: the continuous section break (three rows: the band and one 2 pt below it, to the
+    // margin) and the column break (1 on, 3 off, two rows 2 pt apart, to the column's edge), the
+    // column break's mark at the top of the next column.
+    let items = display::page_display(&d, &l.pages[0], &opts);
+    let labels: Vec<&str> =
+        items.iter().filter_map(|i| if let display::Draw::MarkText { text, .. } = i { Some(text.as_str()) } else { None }).collect();
+    assert_eq!(labels, ["Section Break (Continuous)", "Column Break", "Section Break (Next Page)"]);
+    let (s0, sx, sy) = lines_of(0, 0);
+    let sbase = sy + s0.lines[0].baseline - s0.lines[0].top;
+    let dashes: Vec<(f32, f32, f32, f32, f32)> = items
+        .iter()
+        .filter_map(|i| match i {
+            display::Draw::Line { x0, y0, x1, stroke: display::Stroke::Dashes { on, off, .. }, .. } => Some((*x0, *y0, *x1, *on, *off)),
+            _ => None,
+        })
+        .collect();
+    let sec: Vec<_> = dashes.iter().filter(|d| d.1 > sbase && d.1 < sbase + 6.0).collect();
+    assert_eq!(sec.len(), 6, "{sec:?}");
+    assert!(sec.iter().filter(|d| (d.1 - (sbase + 4.5)).abs() < 0.01).count() == 2);
+    assert!(sec.iter().any(|d| (d.2 - (sx + 468.0)).abs() < 0.01));
+    assert!(sec.iter().all(|d| d.3 == 1.0 && d.4 == 1.0));
+    let (c0, cx, cy) = lines_of(0, 1);
+    let cbase = cy + c0.lines[0].baseline - c0.lines[0].top;
+    let col: Vec<_> = dashes.iter().filter(|d| d.1 > cbase && d.1 < cbase + 3.0).collect();
+    assert_eq!(col.len(), 4, "{col:?}");
+    assert!(col.iter().all(|d| d.3 == 1.0 && d.4 == 3.0));
+    let col_right = cx + (468.0 - 21.25) / 2.0;
+    assert!(col.iter().any(|d| (d.2 - col_right).abs() < 0.01 && (d.1 - (cbase + 0.5)).abs() < 0.01));
+    assert!(col.iter().any(|d| (d.2 - col_right).abs() < 0.01 && (d.1 - (cbase + 1.5)).abs() < 0.01));
+    assert!(col.iter().any(|d| (d.1 - (cbase + 1.5)).abs() < 0.01 && (d.0 - (cx + c0.lines[0].visual_end_x() + 1.0 + 2.0)).abs() < 0.01));
+    let (_, mx, _) = lines_of(0, 2);
+    assert!((mx - (col_right + 21.25)).abs() < 0.01, "the column-break paragraph's mark line is in the next column");
+    // Hostile numbers never panic.
+    for v in [f32::NAN, f32::INFINITY, -1e9] {
+        let mut out = Vec::new();
+        display::break_mark(display::BreakRule::Section, v, v, v, v, "x", 1.0, &mut out);
+        display::break_mark(display::BreakRule::Column, v, 1e9, v, 10.0, "Column Break", 1.0, &mut out);
+    }
+}
