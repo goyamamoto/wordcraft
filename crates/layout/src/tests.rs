@@ -8256,6 +8256,31 @@ fn closing_marks_end_a_justified_line_as_word_for_mac_ends_it() {
     let l = lines_of(&format!("{a44}〉いろは"), 10.5, Align::Justify, None, None);
     assert_eq!(l.iter().map(|x| x.0).collect::<Vec<_>>(), vec![45, 3], "{l:?}");
     assert!(near(l[0].2[2].0, 462.0) && near(l[0].2[2].1, 10.5) && near(l[0].2[1].0, 451.5), "{l:?}");
+    // ：；・ (`hp9`): where half an em would fit they stay, pulled back into the line by whatever
+    // of the overflow exceeds a quarter em (4.5 pt over at 10.5 pt: drawn 1.875 back over the
+    // last あ, their advance shorter by as much, the line unspread); flush when a quarter em
+    // would do (2 pt over at 10 pt); else they move on with the あ before them (8 over at 14 pt).
+    for mark in ['：', '；', '・'] {
+        let l = lines_of(&format!("{a44}{mark}いろは"), 10.5, Align::Justify, None, None);
+        assert_eq!(l.iter().map(|x| x.0).collect::<Vec<_>>(), vec![45, 3], "{mark} {l:?}");
+        assert!(near(l[0].2[2].0, 462.0) && near(l[0].2[2].1, 10.5 - 1.875) && near(l[0].2[1].0, 451.5), "{mark} {l:?}");
+    }
+    let l = lines_of(&format!("{}：いろは", "あ".repeat(46)), 10.0, Align::Justify, None, None);
+    assert_eq!(l.iter().map(|x| x.0).collect::<Vec<_>>(), vec![47, 3], "{l:?}");
+    assert!(near(l[0].2[2].0, 460.0) && near(l[0].2[2].1, 10.0), "{l:?}");
+    let l = lines_of(&format!("{}：いろは", "あ".repeat(33)), 14.0, Align::Justify, None, None);
+    assert_eq!(l.iter().map(|x| x.0).collect::<Vec<_>>(), vec![32, 5], "{l:?}");
+    {
+        let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(10.5), ..Default::default() };
+        let mut d = Document::from_text("");
+        let mut p = wordcraft_doc::Paragraph::with_text(&format!("{a44}：いろは"), chr);
+        p.props.align = Some(Align::Justify);
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = lay(&d);
+        let pl = first_para(&l);
+        let c = &pl.clusters[44];
+        assert!(near(pl.glyphs[c.g0 as usize].dx, -1.875), "glyph dx {}", pl.glyphs[c.g0 as usize].dx);
+    }
     // Hanging off: at its full width where the half fits, unspread; else it moves on.
     let l = lines_of(&format!("{a44}。いろは"), 10.5, Align::Justify, Some(false), None);
     assert_eq!(l.iter().map(|x| x.0).collect::<Vec<_>>(), vec![45, 3], "{l:?}");
