@@ -5924,6 +5924,48 @@ fn footnotes_restart_on_each_page_and_section() {
     assert_eq!((nums[&a], nums[&b], nums[&c]), (1, 2, 5));
 }
 
+/// Tab leaders as Word for Mac draws them (`tl1` probe, 2026-10-19): the leader characters sit
+/// on a grid of their advance from the page's left edge — the first at the grid position at or
+/// after the text's end (Aptos dots 2.999 pt apart start at 89.98 after `abc` ends at 89.02:
+/// ⌈89.02 / 2.999⌉ = 30), the last the one that ends at or before the tab's text (527.89 before
+/// `12` at 528.28; exactly at a `7` starting at 533.89). Previously the first dot came half an
+/// advance later and the last stopped 1.2 advances short.
+#[test]
+fn tab_leaders_sit_on_their_advance_grid_up_to_the_tabs_text() {
+    use wordcraft_doc::props::{TabAlign, TabLeader, TabStop};
+    let mut d = Document::from_text("abc\t12\nabc\t7\nabcdef\t12");
+    let tabs = Some(vec![TabStop { pos: 467.5, align: TabAlign::Right, leader: TabLeader::Dot }]);
+    for i in 0..3 {
+        d.para_mut(StoryRef::Body, &Path::top(i)).unwrap().props.tabs = tabs.clone();
+    }
+    let l = lay(&d);
+    let items = display::page_display(&d, &l.pages[0], &Default::default());
+    // The leader dots' x positions and their advance, per line.
+    let mut leaders: Vec<(Vec<f32>, f32)> = Vec::new();
+    for it in &items {
+        if let display::Draw::Glyphs { glyphs, text, face, size, .. } = it
+            && text.is_empty()
+            && glyphs.len() > 10
+        {
+            let gid = face.glyph_for('.');
+            let adv = face.advance(gid) as f32 * size / face.upem as f32;
+            leaders.push((glyphs.iter().map(|g| g.1).collect(), adv));
+        }
+    }
+    assert_eq!(leaders.len(), 3, "{leaders:?}");
+    for (k, (xs, adv)) in leaders.iter().enumerate() {
+        let first = xs[0];
+        let last = xs[xs.len() - 1];
+        // On the grid of the advance from x = 0.
+        assert!((first / adv - (first / adv).round()).abs() < 1e-3, "line {k}: first dot {first} off the {adv} grid");
+        let tab = if k == 2 { 6 } else { 3 };
+        let text_end = l.caret(&Pos::body(k, tab)).unwrap().x;
+        let number_x = l.caret(&Pos::body(k, tab + 1)).unwrap().x;
+        assert!(first >= text_end - 1e-3 && first - text_end < *adv, "line {k}: first dot {first}, text ends {text_end}, advance {adv}");
+        assert!(last + adv <= number_x + 1e-3 && number_x - (last + adv) < *adv, "line {k}: last dot ends {}, number at {number_x}", last + adv);
+    }
+}
+
 /// Note separators lay out off the line grid, as Word for Mac's do (`fn3`/`fn4` probes,
 /// 2026-10-19: on an 18 pt grid a Normal-styled separator paragraph keeps its natural height —
 /// 12.8 pt for 10.5 pt Aptos — and starts at the bottom of the last body line's slot, the

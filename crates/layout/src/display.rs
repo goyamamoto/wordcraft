@@ -1201,11 +1201,16 @@ fn lines(
             let Some(ch) = leader.char() else { continue };
             let gid = st.face.glyph_for(ch);
             let adv = (st.face.advance(gid) as f32 * st.size / st.face.upem.max(1.0) as f32).max(1.0);
-            let (mut gx, end) = (x + a + adv * 0.5, x + b - adv * 1.2);
+            // The leader characters sit on a grid of their advance from the page's left edge, so
+            // consecutive lines line up: the first at the grid position at or after the text's
+            // end, the last the one that ends at or before the tab's text (Word for Mac, `tl1`
+            // probe, 2026-10-19: Aptos dots 2.999 pt apart from 89.98 after `abc` ends at 89.02,
+            // hyphens 3.574 apart from 89.34, underscores 4.829 from 91.76; the last dot ends
+            // exactly where a right-aligned `7` starts and 0.39 pt before `12`).
+            let (start, end) = (x + a, x + b);
+            let mut gx = (start / adv - 1e-3).ceil() * adv;
             let mut glyphs = Vec::new();
-            // Align leader dots to a grid so consecutive lines line up.
-            gx = (gx / adv).ceil() * adv;
-            while gx < end && glyphs.len() < 2000 {
+            while gx + adv <= end + 1e-3 && glyphs.len() < 2000 {
                 glyphs.push((gid, gx, base));
                 gx += adv;
             }
