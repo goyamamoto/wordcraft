@@ -15,9 +15,9 @@
 //! dismissed composition leaves the document untouched, and the commit's `text.insert` replaces
 //! the selection for good.
 
-use wordcraft_doc::Pos;
 use wordcraft_doc::edit::Fragment;
 use wordcraft_doc::props::Underline;
+use wordcraft_doc::{CharProps, Pos};
 
 use crate::{CmdError, Selection, Session};
 
@@ -40,6 +40,13 @@ pub struct Composition {
     /// The selected text the composition took the place of (a selection within one paragraph),
     /// put back at `start` when the composition goes.
     replaced: Option<Fragment>,
+    /// The formatting typing had where the composition began (the composition's own, less its
+    /// underlines): what typing has while it shows, and what the commit is typed with.
+    props: CharProps,
+    /// The paragraph mark's formatting before the composition: put back when the composition
+    /// goes, since emptying a paragraph gives its mark the deleted text's formatting — the
+    /// composition's underline would stay on the mark, and on everything typed after it.
+    mark_before: CharProps,
 }
 
 impl Session {
@@ -84,6 +91,7 @@ impl Session {
         props.fmt_change = None;
         props.ins = None;
         props.del = None;
+        let mark_before = self.doc.para_at(&start).map(|p| p.mark.clone()).unwrap_or_default();
         let n = text.chars().count();
         let active = active.map(|r| r.start.min(n)..r.end.min(n)).filter(|r| r.start < r.end);
         // Up to three runs: before the clause, the clause (thick), after it.
@@ -112,7 +120,7 @@ impl Session {
                     None => end.clone(),
                 };
                 self.sel = Selection::caret(caret);
-                self.composition = Some(Composition { start, end, text, sel_before, dirty_before, replaced });
+                self.composition = Some(Composition { start, end, text, sel_before, dirty_before, replaced, props, mark_before });
                 self.dirty = dirty_before;
                 self.bump_rev();
                 Ok(())
@@ -124,6 +132,9 @@ impl Session {
                 }
                 if let Some(frag) = &replaced {
                     let _ = self.doc.insert_fragment(&start, frag);
+                }
+                if let Ok(p) = self.doc.para_mut(start.story, &start.path) {
+                    p.mark = mark_before;
                 }
                 self.sel = sel_before;
                 self.dirty = dirty_before;
@@ -149,6 +160,18 @@ impl Session {
         if let Some(frag) = &c.replaced {
             let _ = self.doc.insert_fragment(&c.start, frag);
         }
+        if let Ok(p) = self.doc.para_mut(c.start.story, &c.start.path) {
+            p.mark = c.mark_before.clone();
+        }
+    }
+
+    /// The formatting typing has while the composition shows: what it had where the composition
+    /// began (its underlines are the composition's, not the text's — Word's Underline button
+    /// stays off while composing).
+    pub(crate) fn composition_props(&self) -> Option<&CharProps> {
+        let c = self.composition.as_ref()?;
+        let f = &self.sel.focus;
+        (f.story == c.start.story && f.path == c.start.path && f.off >= c.start.off && f.off <= c.end.off).then_some(&c.props)
     }
 
     /// A new document revision for the layout, without dirtying the document.
@@ -263,6 +286,50 @@ mod tests {
         run(&mut s, "format.bold", json!({}));
         s.set_composition("あ", None).unwrap();
         assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().props_of_char(0).bold, Some(true));
+        s.clear_composition();
+        run(&mut s, "text.insert", json!({"text": "亜"}));
+        assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().props_of_char(0).bold, Some(true));
+    }
+
+    /// A composition in an empty paragraph leaves no underline behind: emptying a paragraph gives
+    /// its mark the deleted text's formatting, so the composition's underline stayed on the mark
+    /// — a new document's first typing with the input method ended with Underline on in the
+    /// ribbon and under everything typed after. While the composition shows, typing's formatting
+    /// (the ribbon's buttons) is what it was where it began, as in Word.
+    #[test]
+    fn a_composition_leaves_no_underline_on_the_paragraph_mark() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text(""));
+        assert_eq!(run(&mut s, "format.state", json!({}))["underline"], json!(false));
+        s.set_composition("にほんご", Some(0..2)).unwrap();
+        assert_eq!(run(&mut s, "format.state", json!({}))["underline"], json!(false), "composing: the ribbon shows no underline");
+        assert_eq!(s.typing_props().underline, None);
+        s.set_composition("にほんご", None).unwrap();
+        assert_eq!(run(&mut s, "format.state", json!({}))["underline"], json!(false));
+        s.clear_composition();
+        let p = s.doc.para_at(&s.sel.focus).unwrap();
+        assert_eq!((p.text.as_str(), p.mark.underline), ("", None), "the mark is as it was");
+        run(&mut s, "text.insert", json!({"text": "日本語"}));
+        let p = s.doc.para_at(&s.sel.focus).unwrap();
+        assert_eq!(p.props_of_char(0).underline, None, "the commit is typed without underline");
+        assert_eq!(run(&mut s, "format.state", json!({}))["underline"], json!(false));
+        // Dismissed (empty marked text) in an empty paragraph: the same.
+        let mut s = Session::new(wordcraft_doc::Document::from_text(""));
+        s.set_composition("あ", None).unwrap();
+        s.set_composition("", None).unwrap();
+        assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().mark.underline, None);
+        assert_eq!(run(&mut s, "format.state", json!({}))["underline"], json!(false));
+        // A mark that was underlined stays underlined; a composition over bold pending
+        // formatting shows bold, as before, and the commit is bold.
+        let mut s = Session::new(wordcraft_doc::Document::from_text(""));
+        run(&mut s, "format.underline", json!({}));
+        s.set_composition("あ", None).unwrap();
+        assert_eq!(run(&mut s, "format.state", json!({}))["underline"], json!(true), "the text's own underline shows");
+        s.clear_composition();
+        assert_eq!(run(&mut s, "format.state", json!({}))["underline"], json!(true));
+        let mut s = Session::new(wordcraft_doc::Document::from_text(""));
+        run(&mut s, "format.bold", json!({}));
+        s.set_composition("あ", None).unwrap();
+        assert_eq!(run(&mut s, "format.state", json!({}))["bold"], json!(true));
         s.clear_composition();
         run(&mut s, "text.insert", json!({"text": "亜"}));
         assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().props_of_char(0).bold, Some(true));
