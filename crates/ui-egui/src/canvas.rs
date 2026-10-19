@@ -1186,6 +1186,26 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     }
                 }
             }
+            // Crop marks (Word › Preferences › View › Crop marks, 裁ちトンボ): an L at each corner
+            // of the text area, as Word for Mac draws them (its window observed at 50, 100 and
+            // 200 %, 2026-10-19): two bars 18 pt long in page units, one logical pixel thick,
+            // grey, lying just outside the text area along its two edges and ending at the corner.
+            if app.session.crop_marks() && app.session.view.mode == wordcraft_layout::ViewMode::Print && !app.session.view.read_mode {
+                let b = page.body;
+                let len = 18.0 * page_scale;
+                let stroke = Stroke::new(1.0, t.crop_mark);
+                let at = |x: f32, y: f32| pos2(visual_sr.min.x + x * page_scale, visual_sr.min.y + y * page_scale);
+                for (c, sx, sy) in [
+                    (at(b.x, b.y), -1.0, -1.0),
+                    (at(b.right(), b.y), 1.0, -1.0),
+                    (at(b.x, b.bottom()), -1.0, 1.0),
+                    (at(b.right(), b.bottom()), 1.0, 1.0),
+                ] {
+                    // Each bar's centre line sits half a pixel outside the edge it runs along.
+                    painter.line_segment([pos2(c.x, c.y + sy * 0.5), pos2(c.x + sx * len, c.y + sy * 0.5)], stroke);
+                    painter.line_segment([pos2(c.x + sx * 0.5, c.y), pos2(c.x + sx * 0.5, c.y + sy * len)], stroke);
+                }
+            }
             // View › Gridlines: the drawing grid over the text area (Print Layout, on screen only).
             if app.session.view.gridlines && app.session.view.mode == wordcraft_layout::ViewMode::Print && !app.session.view.read_mode {
                 let settings = &app.session.doc.settings;

@@ -270,6 +270,8 @@ pub struct Tokens {
     pub guide: Color32,
     /// Crop mode: the crop handles, and the dim over the cropped-away part of a picture.
     pub crop_handle: Color32,
+    /// Crop marks at the corners of the text area (Word's grey, measured 2026-10-19).
+    pub crop_mark: Color32,
     pub crop_dim: Color32,
     pub menu: Color32,
     pub blue: Color32,
@@ -313,6 +315,7 @@ impl Tokens {
             handle_shadow: Color32::from_rgba_unmultiplied(0, 0, 0, 0x28),
             guide: Color32::from_rgb(0xC0, 0x28, 0x8C),
             crop_handle: Color32::BLACK,
+            crop_mark: Color32::from_gray(0xAA),
             crop_dim: Color32::from_rgba_unmultiplied(0x30, 0x30, 0x30, 0xE0),
             menu: Color32::WHITE,
             blue: Color32::from_rgb(0x2F, 0x6F, 0xD0),
@@ -357,6 +360,7 @@ impl Tokens {
             handle_shadow: Color32::from_rgba_unmultiplied(0, 0, 0, 0x5A),
             guide: Color32::from_rgb(0xE0, 0x4C, 0xB0),
             crop_handle: Color32::BLACK,
+            crop_mark: Color32::from_gray(0xAA),
             crop_dim: Color32::from_rgba_unmultiplied(0x30, 0x30, 0x30, 0xE0),
             menu: Color32::from_rgb(0x2B, 0x2B, 0x2B),
             blue: Color32::from_rgb(0x6C, 0x9B, 0xEA),

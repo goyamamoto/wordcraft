@@ -2377,6 +2377,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "view.darkMode"
             | "view.marks"
             | "view.ruler"
+            | "view.cropMarks"
             | "view.numeral"
             | "ui.tab"
             | "ui.backstage"
