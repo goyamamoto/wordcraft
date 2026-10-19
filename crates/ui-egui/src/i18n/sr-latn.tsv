@@ -2287,3 +2287,16 @@
 	Text snaps to character grid	Tekst se poravnava uz mrežu znakova
 	Pitch:	Korak:
 	Use default pitch	Koristi podrazumevani korak
+	Page Number Format	Format broja strane
+	Number format:	Format broja:
+	Include chapter number	Uključi broj poglavlja
+	Chapter starts with style:	Poglavlje počinje stilom:
+	Use separator:	Razdvajač:
+	Examples:	Primeri:
+	Page numbering	Numerisanje strana
+	Continue from previous section	Nastavi iz prethodnog odeljka
+	- (hyphen)	- (crtica)
+	. (period)	. (tačka)
+	: (colon)	: (dve tačke)
+	— (em dash)	— (duga crta)
+	– (en dash)	– (crta)

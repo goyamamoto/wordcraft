@@ -2684,3 +2684,16 @@ preview	Title	Esempio
 	Text snaps to character grid	Allinea il testo alla griglia dei caratteri
 	Pitch:	Passo:
 	Use default pitch	Usa passo predefinito
+	Page Number Format	Formato numero di pagina
+	Number format:	Formato numero:
+	Include chapter number	Includi numero di capitolo
+	Chapter starts with style:	Il capitolo inizia con lo stile:
+	Use separator:	Separatore:
+	Examples:	Esempi:
+	Page numbering	Numerazione pagine
+	Continue from previous section	Continua dalla sezione precedente
+	- (hyphen)	- (trattino)
+	. (period)	. (punto)
+	: (colon)	: (due punti)
+	— (em dash)	— (lineetta lunga)
+	– (en dash)	– (lineetta breve)

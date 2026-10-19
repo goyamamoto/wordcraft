@@ -46,3 +46,25 @@ fn a_section_without_page_number_type_writes_none() {
     let d = wordcraft_docx::read(&docx(body)).unwrap();
     assert!(!document_xml(&wordcraft_docx::write(&d).unwrap()).contains("pgNumType"));
 }
+
+/// Chapter numbers in page numbers (`w:chapStyle`, `w:chapSep`): kept, Word's hyphen when no
+/// separator is given, and a level that isn't a heading level dropped.
+#[test]
+fn chapter_numbers_round_trip_and_default_to_a_hyphen() {
+    use wordcraft_doc::section::{ChapterNumbers, ChapterSep};
+    let body = r#"<w:p><w:r><w:t>One</w:t></w:r></w:p><w:sectPr><w:pgNumType w:fmt="decimal" w:chapStyle="2" w:chapSep="period"/></w:sectPr>"#;
+    let d = wordcraft_docx::read(&docx(body)).unwrap();
+    assert_eq!(d.last_section.page_num_chapter, Some(ChapterNumbers { level: 2, sep: ChapterSep::Period }));
+    let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
+    assert!(xml.contains(r#"<w:pgNumType w:fmt="decimal" w:chapStyle="2" w:chapSep="period"/>"#), "{xml}");
+
+    let body = r#"<w:p><w:r><w:t>One</w:t></w:r></w:p><w:sectPr><w:pgNumType w:chapStyle="1"/></w:sectPr>"#;
+    let d = wordcraft_docx::read(&docx(body)).unwrap();
+    assert_eq!(d.last_section.page_num_chapter, Some(ChapterNumbers { level: 1, sep: ChapterSep::Hyphen }));
+    let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
+    assert!(xml.contains(r#"w:chapStyle="1" w:chapSep="hyphen""#), "{xml}");
+
+    let body = r#"<w:p><w:r><w:t>One</w:t></w:r></w:p><w:sectPr><w:pgNumType w:chapStyle="12" w:chapSep="colon"/></w:sectPr>"#;
+    let d = wordcraft_docx::read(&docx(body)).unwrap();
+    assert_eq!(d.last_section.page_num_chapter, None);
+}

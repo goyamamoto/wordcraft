@@ -2671,3 +2671,16 @@
 	Text snaps to character grid	Szöveg igazítása a karakterrácshoz
 	Pitch:	Osztásköz:
 	Use default pitch	Alapértelmezett osztásköz
+	Page Number Format	Oldalszámformátum
+	Number format:	Számformátum:
+	Include chapter number	Fejezetszámmal
+	Chapter starts with style:	Fejezetkezdő stílus:
+	Use separator:	Elválasztó:
+	Examples:	Példák:
+	Page numbering	Oldalszámozás
+	Continue from previous section	Folytatás az előző szakasztól
+	- (hyphen)	- (kötőjel)
+	. (period)	. (pont)
+	: (colon)	: (kettőspont)
+	— (em dash)	— (hosszú gondolatjel)
+	– (en dash)	– (gondolatjel)

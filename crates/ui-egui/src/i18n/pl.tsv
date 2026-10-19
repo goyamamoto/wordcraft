@@ -2665,3 +2665,16 @@ preview	Title	Tytuł
 	Text snaps to character grid	Przyciągaj tekst do siatki znaków
 	Pitch:	Odstęp:
 	Use default pitch	Użyj domyślnego odstępu
+	Page Number Format	Format numeru strony
+	Number format:	Format liczb:
+	Include chapter number	Dołącz numer rozdziału
+	Chapter starts with style:	Rozdział zaczyna się od stylu:
+	Use separator:	Separator:
+	Examples:	Przykłady:
+	Page numbering	Numerowanie stron
+	Continue from previous section	Kontynuuj od poprzedniej sekcji
+	- (hyphen)	- (łącznik)
+	. (period)	. (kropka)
+	: (colon)	: (dwukropek)
+	— (em dash)	— (pauza)
+	– (en dash)	– (półpauza)

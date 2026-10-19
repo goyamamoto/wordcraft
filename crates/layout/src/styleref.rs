@@ -13,6 +13,7 @@
 //! the number; `\p` adds "above" / "below".
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use wordcraft_doc::numbering::Counters;
 use wordcraft_doc::para::InlineObject;
@@ -130,6 +131,9 @@ struct Entry {
     levels: Vec<(String, bool)>,
     /// How many paragraphs of its style there are up to this one.
     ordinal: u32,
+    /// Its numbering comes from its paragraph style (a multilevel list level linked to the
+    /// style), which is what makes a heading's number a chapter number for Word's page numbers.
+    style_numbered: bool,
 }
 
 /// Where a STYLEREF field is.
@@ -173,7 +177,14 @@ impl StyleIndex {
             let ord = ordinals.entry(style.clone()).or_insert(0);
             *ord = ord.saturating_add(1);
             let ordinal = *ord;
-            let num = p.props.numbering.or_else(|| doc.styles.resolve_para(&p.props).numbering).filter(|n| n.num != 0);
+            // The style chain's own numbering, apart from the paragraph's.
+            let style_num = doc
+                .styles
+                .resolve_para(&wordcraft_doc::props::ParaProps { style: p.props.style.clone(), ..Default::default() })
+                .numbering
+                .filter(|n| n.num != 0);
+            let num = p.props.numbering.filter(|n| n.num != 0).or(style_num);
+            let style_numbered = style_num.is_some() && num == style_num;
             let (mut label, mut levels) = (None, Vec::new());
             if let Some(n) = num
                 && let Some((l, def)) = counters.next_label(&doc.numbering, n.num, n.level)
@@ -207,7 +218,7 @@ impl StyleIndex {
                 off = end;
             }
             by_path.insert(path.clone(), entries.len());
-            entries.push(Entry { path, style, text: clean(&p.plain_text()), runs, label, levels, ordinal });
+            entries.push(Entry { path, style, text: clean(&p.plain_text()), runs, label, levels, ordinal, style_numbered });
         }
         StyleIndex { entries, by_path, styles }
     }
@@ -231,6 +242,49 @@ impl StyleIndex {
                 At::Page { first: first.unwrap_or(self.entries.len()), last: None }
             }
         }
+    }
+
+    /// The chapter number in effect at each body paragraph for page numbers that include chapter
+    /// numbers (Format Page Numbers › Include chapter number, `Heading {level}`), as Word for Mac
+    /// shows them (observed 2026-10-19, `ch3`–`ch6` probes): the number of the latest heading of
+    /// that level whose numbering comes from its style — a heading numbered paragraph by
+    /// paragraph counts for nothing — formatted in its level's own format (a `第１章` level in
+    /// full-width digits gives `１`); before the first such heading, the first one's number (a
+    /// preface page is `1-1` when the first chapter is 1, `3-1` when it is 3); none at all when
+    /// no heading of the level is numbered that way.
+    pub fn chapters(&self, level: u8) -> Vec<Option<Arc<str>>> {
+        let Some(Target::Para(id)) = self.target(&level.to_string()) else { return vec![None; self.entries.len()] };
+        let mut out: Vec<Option<Arc<str>>> = Vec::with_capacity(self.entries.len());
+        let mut now: Option<Arc<str>> = None;
+        for e in &self.entries {
+            if e.style == id
+                && e.style_numbered
+                && let Some((n, _)) = e.levels.last()
+            {
+                now = Some(Arc::from(n.as_str()));
+            }
+            out.push(now.clone());
+        }
+        // Before the first heading, its number.
+        if let Some(first) = out.iter().position(Option::is_some) {
+            let n = out.get(first).cloned().flatten();
+            for slot in out.iter_mut().take(first) {
+                *slot = n.clone();
+            }
+        }
+        out
+    }
+
+    /// The chapter number (from [`StyleIndex::chapters`]'s table) at `at`: for a page, the last
+    /// heading on it (Word's footer shows `2-1` on a page where chapter 2 starts below chapter
+    /// 1's text); in the body, the latest heading at the paragraph.
+    pub fn chapter_at(table: &[Option<Arc<str>>], at: At) -> Option<Arc<str>> {
+        let i = match at {
+            At::Body(i) => i,
+            At::Page { last: Some(l), .. } => l,
+            At::Page { first, last: None } => first.checked_sub(1)?,
+        };
+        table.get(i).cloned().flatten()
     }
 
     fn target(&self, style: &str) -> Option<Target> {
