@@ -80,6 +80,14 @@ pub fn apply(text: &str, opps: &mut Vec<usize>, kinsoku: bool, word_wrap: bool, 
         opps.retain(|&i| !next_char(i).is_some_and(|c| no_start.contains(c)) && !prev_char(i).is_some_and(|c| no_end.contains(c)));
     } else if kinsoku {
         opps.retain(|&i| !next_char(i).is_some_and(|c| NO_START.contains(c)) && !prev_char(i).is_some_and(|c| NO_END.contains(c)));
+        // Before an ellipsis after an East Asian letter (not after opening punctuation): Word's
+        // lists at either level don't name … or ‥, so a line may start with them (Word for Mac:
+        // 44 あ then …いろは wraps as …いろは), where UAX #14 keeps them with the letter.
+        for (i, c) in text.char_indices().skip(1) {
+            if matches!(c, '…' | '‥') && prev_char(i).is_some_and(|p| is_east_asian(p) && !NO_END.contains(p)) {
+                opps.push(i);
+            }
+        }
         // Before a small kana or ー after an East Asian letter (not after opening punctuation),
         // at the standard level only.
         if level == Level::Standard {
@@ -144,6 +152,10 @@ mod tests {
         let small = breaks("天井がパカッと開いた。ラメシールが「ッ」", true, true);
         assert!(small.iter().any(|s| s == "ッ") && small.iter().any(|s| s == "ー"), "{small:?}");
         assert_eq!(small.iter().filter(|s| *s == "ッ").count(), 1, "not after 「: {small:?}");
+        // An ellipsis may start a line after a letter (Word's lists leave it out), not after 「.
+        let dots = breaks("ああ…いい「…」‥う", true, true);
+        assert_eq!(dots.iter().filter(|s| *s == "…").count(), 1, "{dots:?}");
+        assert!(dots.iter().any(|s| s == "‥"), "{dots:?}");
         // Latin text: unchanged by kinsoku, broken anywhere without word wrap.
         let en = "Hello wonderful (world), 50%.";
         assert_eq!(breaks(en, true, true), breaks(en, false, true));
