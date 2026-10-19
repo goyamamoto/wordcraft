@@ -514,7 +514,13 @@ impl ActiveEventLoopExtMacOS for ActiveEventLoop {
 // reports the text around the caret, so the input method can read committed text
 // (`NSTextInputClient`'s `selectedRange` and `attributedSubstringForProposedRange:actualRange:`)
 // and ask for a range of it to be replaced by its marked text (再変換).
-pub use crate::platform_impl::ImeSurroundingText;
+pub use crate::platform_impl::{ImeMarked, ImeSurroundingText};
+
+/// What the input method is told lies around the caret right now: what the application last
+/// reported, as the input method's own edits since changed it (`ImeSurroundingText::apply`).
+pub fn ime_surrounding_text() -> Option<ImeSurroundingText> {
+    crate::platform_impl::ime_surrounding_text()
+}
 
 /// Tell the input method what text lies around the caret of the window taking keyboard input:
 /// `None` reports nothing, as winit did before. Call it once a frame, after the application has
