@@ -887,9 +887,8 @@ pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
             }
             let name = wordcraft_layout::fields::field_name(instr);
             match name.as_str() {
-                "DATE" | "TIME" | "CREATEDATE" | "SAVEDATE" | "PRINTDATE" => {
-                    let pic = date_picture(instr).unwrap_or_else(|| if name == "TIME" { "h:mm am/pm".into() } else { "M/d/yyyy".into() });
-                    updates.push((k, super::insert::format_date_in(&pic, field_lang(&s.doc, p, k).as_deref())));
+                "DATE" | "TIME" | "CREATEDATE" | "SAVEDATE" | "PRINTDATE" | "EDITTIME" => {
+                    updates.push((k, date_field_result(&s.doc, instr, field_lang(&s.doc, p, k).as_deref())));
                 }
                 "REF" | "PAGEREF" => {
                     let target = instr.split_whitespace().nth(1).unwrap_or("");
@@ -923,6 +922,12 @@ pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
 
 /// The text language (`w:lang/@w:val`) of the `k`th object of paragraph `p`: a DATE field's
 /// names (weekday, month, AM/PM) follow it.
+/// A date field's result now (local time), in the names and default pictures of its language,
+/// the document's creation and save times for `CREATEDATE` and `SAVEDATE` ([`super::dates`]).
+fn date_field_result(doc: &wordcraft_doc::Document, instr: &str, lang: Option<&str>) -> String {
+    super::dates::field_result(instr, lang, super::now_local_secs(), super::local_offset_secs(), &doc.core.created, &doc.core.modified)
+}
+
 fn field_lang(doc: &wordcraft_doc::Document, p: &wordcraft_doc::Paragraph, k: usize) -> Option<String> {
     let off = p.object_offsets().get(k).copied()?;
     doc.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(off)).lang
@@ -948,9 +953,7 @@ pub fn refresh_date_fields(doc: &mut wordcraft_doc::Document) {
                 if !matches!(name.as_str(), "DATE" | "TIME") {
                     continue;
                 }
-                // Word's default picture when the code carries no `\@` switch.
-                let pic = date_picture(instr).unwrap_or_else(|| if name == "TIME" { "h:mm am/pm".into() } else { "M/d/yyyy".into() });
-                updates.push((k, super::insert::format_date_in(&pic, field_lang(doc, p, k).as_deref())));
+                updates.push((k, date_field_result(doc, instr, field_lang(doc, p, k).as_deref())));
             }
             if updates.is_empty() {
                 continue;
@@ -969,11 +972,11 @@ pub fn refresh_date_fields(doc: &mut wordcraft_doc::Document) {
 /// A field's `\@` date picture: the quoted text after it (switches may follow), or one word.
 pub fn date_picture(instr: &str) -> Option<String> {
     let rest = instr.split_once("\\@")?.1.trim_start();
-    let pic = match rest.strip_prefix('"') {
-        Some(q) => q.split('"').next().unwrap_or(""),
-        None => rest.split_whitespace().next().unwrap_or(""),
-    };
-    (!pic.is_empty()).then(|| pic.to_string())
+    // An explicit empty picture (`\@ ""`) gives an empty result in Word; a bare `\@` nothing.
+    match rest.strip_prefix('"') {
+        Some(q) => Some(q.split('"').next().unwrap_or("").to_string()),
+        None => rest.split_whitespace().next().filter(|p| !p.starts_with('\\')).map(str::to_string),
+    }
 }
 
 /// The text a bookmark marks (field results included), up to its end in the same paragraph or
