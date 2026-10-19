@@ -848,6 +848,10 @@ pub fn state(s: &Session) -> Value {
         "caps": all.iter().all(|r| r.caps),
         "hidden": all.iter().all(|r| r.hidden),
         "spacing": same(&|r| json!(r.spacing)),
+        // OpenType features (Font › Advanced): an ST_Ligatures name, number form and spacing.
+        "ligatures": same(&|r| json!(r.ligatures)),
+        "numForm": same(&|r| json!(r.num_form)),
+        "numSpacing": same(&|r| json!(r.num_spacing)),
         "emphasisMark": same(&|r| json!(r.em.ooxml())),
         "fitText": same(&|r| json!(r.fit_text.map(|f| f.width))),
         "eastAsianLayout": same(&|r| json!(r.east_asian_layout)),

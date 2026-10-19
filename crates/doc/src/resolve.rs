@@ -39,6 +39,18 @@ pub struct ResolvedChar {
     /// Kerning: the smallest font size, in points, that is kerned (`w:kern`); 0 = never kerned.
     #[serde(default)]
     pub kern: f32,
+    /// OpenType features asked for (`w14:ligatures`, `w14:numForm`, `w14:numSpacing`,
+    /// `w14:stylisticSets`, `w14:cntxtAlts`); see [`ResolvedChar::opentype`].
+    #[serde(default)]
+    pub ligatures: crate::props::Ligatures,
+    #[serde(default)]
+    pub num_form: crate::props::NumForm,
+    #[serde(default)]
+    pub num_spacing: crate::props::NumSpacing,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stylistic_sets: Vec<u8>,
+    #[serde(default)]
+    pub cntxt_alts: bool,
     pub outline: bool,
     pub shadow: bool,
     pub emboss: bool,
@@ -102,6 +114,11 @@ impl ResolvedChar {
             scale: c.scale.unwrap_or(100.0).clamp(1.0, 600.0),
             position: c.position.unwrap_or(0.0).clamp(-800.0, 800.0),
             kern: c.kern.filter(|k| k.is_finite()).unwrap_or(0.0).clamp(0.0, 1638.0),
+            ligatures: c.ligatures.unwrap_or_default(),
+            num_form: c.num_form.unwrap_or_default(),
+            num_spacing: c.num_spacing.unwrap_or_default(),
+            stylistic_sets: c.stylistic_sets.iter().flatten().copied().filter(|s| (1..=20).contains(s)).take(20).collect(),
+            cntxt_alts: c.cntxt_alts.unwrap_or(false),
             outline: c.outline.unwrap_or(false),
             shadow: c.shadow.unwrap_or(false),
             emboss: c.emboss.unwrap_or(false),
@@ -139,6 +156,16 @@ impl ResolvedChar {
     /// a size of at least that many points, never by default (measured in Word for Windows).
     pub fn kerned(&self) -> bool {
         self.kern > 0.0 && self.size >= self.kern
+    }
+    /// Does the run ask for any OpenType feature? Word for Mac then shapes it by OpenType (GSUB
+    /// ligatures, GPOS kerning) instead of its legacy text path (no ligatures, the `kern` table's
+    /// pairs); see [`crate::props::Ligatures`].
+    pub fn opentype(&self) -> bool {
+        self.ligatures != crate::props::Ligatures::None
+            || self.num_form != crate::props::NumForm::Default
+            || self.num_spacing != crate::props::NumSpacing::Default
+            || !self.stylistic_sets.is_empty()
+            || self.cntxt_alts
     }
     /// Does a character of this run use the complex-script properties?
     pub fn uses_complex(&self, c: char) -> bool {

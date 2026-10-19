@@ -1399,6 +1399,9 @@ pub fn japanese_normal(d: &mut Document) {
     chr.size = Some(10.5);
     chr.size_cs = Some(12.0);
     chr.lang_ea = Some("ja-JP".into());
+    // Its document defaults: Kerning for fonts from 2 pt and standard and contextual ligatures.
+    chr.kern = Some(2.0);
+    chr.ligatures = Some(wordcraft_doc::props::Ligatures::StandardContextual);
     let para = &mut d.styles.default_para;
     para.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
     para.space_after = Some(0.0);
