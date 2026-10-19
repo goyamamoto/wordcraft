@@ -730,9 +730,11 @@ fn page_break_char_starts_new_page() {
 }
 
 #[test]
-fn a_missing_roman_font_is_drawn_as_word_draws_it() {
-    // Measured in Word: a font that isn't installed is drawn in Cambria when the font table calls
-    // it roman, in Calibri otherwise.
+fn a_missing_font_is_drawn_as_word_draws_it() {
+    // Word for Mac (`fj2b`, `fj3`, 2026-10-19): a font that isn't installed (in Word either) is
+    // drawn in Cambria when its name is Latin, whatever the font table calls it; one with a
+    // Japanese (Chinese, Korean) name in 游ゴシック, Latin letters included; Office's own fonts
+    // (Aptos) keep their stand-ins.
     let face_of = |font: &str, roman: bool| {
         let mut d = Document::from_text("Serif");
         if roman {
@@ -747,7 +749,15 @@ fn a_missing_roman_font_is_drawn_as_word_draws_it() {
     };
     let cambria = wordcraft_fonts::word::resolve("Cambria", false, false).face;
     assert_eq!(face_of("No Such Brand Font", true), cambria);
-    assert_ne!(face_of("No Such Brand Font", false), cambria);
+    assert_eq!(face_of("No Such Brand Font", false), cambria);
+    assert_eq!(face_of("Noto Sans JP Display", false), cambria);
+    let yu_gothic = wordcraft_fonts::word::resolve("Yu Gothic", false, false).face;
+    assert_eq!(face_of("小塚明朝 Pr6N R", true), yu_gothic);
+    assert_eq!(face_of("HGP創英角ﾎﾟｯﾌﾟ体", false), yu_gothic);
+    assert_ne!(yu_gothic, cambria);
+    let aptos = wordcraft_fonts::word::resolve("Aptos", false, false).face;
+    assert_eq!(face_of("Aptos", true), aptos);
+    assert_ne!(aptos, cambria);
     // Word's own 游明朝 comes with Office: a Word-made font table calls it roman (charset 80), and
     // it is drawn by its substitute (游明朝体 on a Mac), never Cambria (vt6, 2026-10-19).
     let yu = wordcraft_fonts::word::resolve("Yu Mincho", false, false).face;

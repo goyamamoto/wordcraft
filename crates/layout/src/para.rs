@@ -1170,28 +1170,6 @@ fn east_asian(c: char) -> bool {
     crate::kinsoku::is_east_asian(c) || matches!(u32::from(c), 0x1100..=0x11FF | 0x3130..=0x318F | 0xAC00..=0xD7AF)
 }
 
-/// Word draws a font that isn't installed in Cambria when the document's font table classes it
-/// as roman (measured in Word; Calibri otherwise, which our own substitutes already match).
-const MISSING_ROMAN_FONT: &str = "Cambria";
-
-/// The family to look `font` up as: [`MISSING_ROMAN_FONT`] for a missing roman font, else `font`.
-/// Word's own Chinese, Japanese and Korean fonts (游明朝, ＭＳ 明朝, SimSun, Batang…) come with
-/// Office, so a font table calling 游明朝 roman never makes it Cambria here: its substitute
-/// (`wordcraft_fonts::word::resolve`, 游明朝体 on a Mac) draws it.
-fn lookup_family<'f>(doc: &Document, font: &'f str) -> &'f str {
-    let db = wordcraft_fonts::FontDb::global();
-    let roman = doc.settings.roman_fonts.iter().any(|f| f.eq_ignore_ascii_case(font));
-    if roman
-        && !wordcraft_fonts::word::is_cjk_family(font)
-        && !db.has_family(font)
-        && !db.has_family(wordcraft_fonts::word::charset_base_family(font))
-    {
-        MISSING_ROMAN_FONT
-    } else {
-        font
-    }
-}
-
 impl<'a> Builder<'a> {
     /// Displayed form of `c` at run-relative byte `at` (Word › Numeral): one char in, one
     /// char out. `rtl` is the shaping direction; in Context mode `context` (from
@@ -1207,7 +1185,7 @@ impl<'a> Builder<'a> {
     /// `face_override` stands in for it — Word's own Yu Mincho/Yu Gothic keep Word's line
     /// metrics whatever face draws them.
     fn style(&mut self, rc: &Arc<ResolvedChar>, face_override: Option<FaceRef>, small: bool, ea_family: Option<&str>) -> u32 {
-        let r = wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &rc.font), rc.bold, rc.italic);
+        let r = wordcraft_fonts::word::resolve(&rc.font, rc.bold, rc.italic);
         let face = face_override.unwrap_or(r.face);
         // The display list reads every run's format (link target, strike kind, underline colour,
         // baseline shift…) from its StyleRun, so runs share one only when their formats are equal.
@@ -1281,12 +1259,12 @@ impl<'a> Builder<'a> {
         // Complex-script characters (Persian, Arabic…) use the run's complex-script font, size,
         // bold and italic.
         let rc_cs: Option<Arc<ResolvedChar>> = text.chars().any(|c| rc.uses_complex(c)).then(|| Arc::new(rc.complex()));
-        let resolved = wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &rc.font), rc.bold, rc.italic);
+        let resolved = wordcraft_fonts::word::resolve(&rc.font, rc.bold, rc.italic);
         let primary = resolved.face;
         // Symbol-font characters are laid out as their Unicode equivalents.
         let sym = SymbolRun::of(&rc.font, &resolved);
         let show = |c: char| sym.map_or(c, |m| m.show(c));
-        let primary_cs = rc_cs.as_ref().map(|r| wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &r.font), r.bold, r.italic).face);
+        let primary_cs = rc_cs.as_ref().map(|r| wordcraft_fonts::word::resolve(&r.font, r.bold, r.italic).face);
         // Chinese, Japanese and Korean characters use the run's East Asian font (`w:eastAsia`),
         // else the theme's font for the text's script (游明朝 for Japanese body text under Word's
         // Office theme), when it is installed — or, for a known CJK font, its substitute — and has
@@ -1301,7 +1279,7 @@ impl<'a> Builder<'a> {
         };
         let ea_named = rc.font_ea.as_deref().or(theme_ea.as_deref()).filter(|f| has_ea && !f.eq_ignore_ascii_case(&rc.font));
         let primary_ea = ea_named
-            .map(|f| (f, wordcraft_fonts::word::resolve(lookup_family(self.env.doc, f), rc.bold, rc.italic)))
+            .map(|f| (f, wordcraft_fonts::word::resolve(f, rc.bold, rc.italic)))
             .filter(|(f, r)| !r.substituted || wordcraft_fonts::word::is_cjk_family(f))
             .map(|(_, r)| r.face);
         let use_levels = para_text && !self.levels.is_empty();
@@ -1319,8 +1297,12 @@ impl<'a> Builder<'a> {
             if ea.is_empty() {
                 None
             } else {
-                // Word's own choice first (ＭＳ 明朝, `han_fallback`), then any face covering them all.
-                wordcraft_fonts::word::han_fallback(&ea, rc.bold, rc.italic).map(|f| (f, Some("MS Mincho"))).or_else(|| {
+                // Word's own choice first (ＭＳ 明朝, or ＭＳ ゴシック after a sans CJK font: `han_fallback`),
+                // then any face covering them all.
+                let ea_family = ea_named.unwrap_or(&rc.font);
+                let gothic = wordcraft_fonts::word::is_cjk_family(ea_family) && !wordcraft_fonts::word::is_cjk_serif_family(ea_family);
+                let name = if gothic { "MS Gothic" } else { "MS Mincho" };
+                wordcraft_fonts::word::han_fallback(&ea, gothic, rc.bold, rc.italic).map(|f| (f, Some(name))).or_else(|| {
                     wordcraft_fonts::FontDb::global().fallback_for_east_asian(&ea, primary.id(), rc.bold, rc.italic).map(|f| (FaceRef::of(&f), None))
                 })
             }
