@@ -6334,13 +6334,16 @@ fn table_formula_reads_cell_references_and_functions() {
     assert_eq!(run(&mut s, "table.formula", json!({"formula": "=SUM(B2:C3) \\# \"0.00\""}))["result"], "12.00");
 }
 
+/// Word inserts the field whatever the formula says and shows its error as the result.
 #[test]
-fn table_formula_with_an_unknown_function_is_an_error_and_inserts_nothing() {
+fn table_formula_with_an_unknown_function_inserts_words_error_as_its_result() {
     let mut s = formula_table();
-    let err = s.run("table.formula", &json!({"formula": "=MEDIAN(ABOVE)"})).err().map(|e| e.to_string()).unwrap_or_default();
-    assert!(err.contains("MEDIAN"), "{err}");
-    assert_eq!(formula_result(&s, 4, 1), None);
-    assert!(s.run("table.formula", &json!({"formula": "=SUM()"})).is_err(), "empty parentheses are a syntax error, as in Word");
+    assert_eq!(run(&mut s, "table.formula", json!({"formula": "=MEDIAN(ABOVE)"}))["result"], "!Syntax Error, (");
+    assert_eq!(formula_result(&s, 4, 1).as_deref(), Some("!Syntax Error, ("));
+    let mut s = formula_table();
+    assert_eq!(run(&mut s, "table.formula", json!({"formula": "=SUM()"}))["result"], "!Syntax Error, )", "empty parentheses, as in Word");
+    let mut s = formula_table();
+    assert_eq!(run(&mut s, "table.formula", json!({"formula": "=B2/0"}))["result"], "!Zero Divide");
 }
 
 #[test]
@@ -6404,17 +6407,18 @@ fn table_sort_reads_decimal_comma_in_polish() {
 }
 
 /// #836: table formulas read each cell in its language and write the result with its decimal
-/// separator.
+/// separator — and, as Word does, with the thousands grouping and currency the cells were
+/// written with, trailing zeros dropped.
 #[test]
 fn table_formula_reads_and_writes_decimal_comma_in_polish() {
     let mut s = column_table("pl-PL", &["3,50", "2,25", ""]);
     assert_eq!(run(&mut s, "table.formula", json!({"formula": "=SUM(ABOVE)"}))["result"], "5,75");
     let mut s = column_table("pl-PL", &["1 250,00", "100", ""]);
-    assert_eq!(run(&mut s, "table.formula", json!({"formula": "=SUM(ABOVE)"}))["result"], "1350");
-    let mut s = column_table("pl-PL", &["1\u{a0}250,50 zł", "100", ""]);
-    assert_eq!(run(&mut s, "table.formula", json!({"formula": "=SUM(ABOVE)"}))["result"], "1350,50");
+    assert_eq!(run(&mut s, "table.formula", json!({"formula": "=SUM(ABOVE)"}))["result"], "1 350");
+    let mut s = column_table("pl-PL", &["1\u{a0}250,50", "100", ""]);
+    assert_eq!(run(&mut s, "table.formula", json!({"formula": "=SUM(ABOVE)"}))["result"], "1 350,5");
     let mut s = column_table("en-US", &["$1,250.50", "3.25", ""]);
-    assert_eq!(run(&mut s, "table.formula", json!({"formula": "=SUM(ABOVE)"}))["result"], "1253.75");
+    assert_eq!(run(&mut s, "table.formula", json!({"formula": "=SUM(ABOVE)"}))["result"], "$1,253.75");
 }
 
 /// #837: text sorts follow the language's alphabet: Polish `ł` after `l`, `ć` after `c`.
