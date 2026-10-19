@@ -2540,7 +2540,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
     hp.rect_filled(text, 0.0, t.ruler);
     let rp = app.session.doc.para_at(&app.session.sel.focus).map(|para| app.session.doc.styles.resolve_para(&para.props));
     // Graduations in the File › Options unit.
-    let (unit, div, step) = ruler_scale(app.session.units());
+    let (unit, div, step, quarters) = ruler_scale(app.session.units());
     // The caret paragraph's reading direction anchors the whole scale (#692): for a right-to-left
     // paragraph it runs from the page's right edge and the numbers increase right-to-left, so the
     // ruler matches the indent and tab markers, which sit at the paragraph's start edge.
@@ -2549,7 +2549,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
     // A distance along the reading direction (points from the page's start edge) and back.
     let sx = |d: f32| ruler_x(d, x0, scale, page.w, rtl);
     let s_at = |x: f32| ruler_d(x, x0, scale, page.w, rtl);
-    for (d, mark) in ruler_marks(origin, page.w, (unit, div, step), scale) {
+    for (d, mark) in ruler_marks(origin, page.w, (unit, div, step, quarters), scale) {
         let x = sx(d);
         match mark {
             RulerMark::Label(n) => {
@@ -2708,7 +2708,7 @@ enum RulerMark {
 /// the reading direction): ticks every 1/8 inch past `origin` (the start margin, so the margin is
 /// numbered backwards to the page edge) out to `width`, their labels counting whole inches from
 /// the start margin. Sub-half-inch ticks drop out when they'd sit closer than ~4 screen points.
-fn ruler_marks(origin: f32, width: f32, (unit, div, step): (f32, i32, i32), scale: f32) -> Vec<(f32, RulerMark)> {
+fn ruler_marks(origin: f32, width: f32, (unit, div, step, quarters): (f32, i32, i32, bool), scale: f32) -> Vec<(f32, RulerMark)> {
     let div = div.max(2);
     let mut marks = Vec::new();
     let mut k = -((origin / unit).ceil() as i32) * div;
@@ -2723,7 +2723,7 @@ fn ruler_marks(origin: f32, width: f32, (unit, div, step): (f32, i32, i32), scal
             } else if scale * unit / div as f32 > 4.0 || k % 2 == 0 {
                 Some(RulerMark::Tick(if k % (div / 2) == 0 {
                     5.0
-                } else if div >= 8 && k % (div / 4) == 0 {
+                } else if quarters && div >= 8 && k % (div / 4) == 0 {
                     3.0
                 } else {
                     1.5
@@ -2756,14 +2756,16 @@ fn ruler_d(x: f32, x0: f32, scale: f32, page_w: f32, rtl: bool) -> f32 {
 
 /// A ruler's graduation for a unit: points per numbered step, divisions per step, and how much
 /// each step counts (millimetre rulers number every centimetre as 10, 20…).
-fn ruler_scale(u: wordcraft_geom::Unit) -> (f32, i32, i32) {
+fn ruler_scale(u: wordcraft_geom::Unit) -> (f32, i32, i32, bool) {
     use wordcraft_geom::Unit;
     match u {
-        Unit::Centimeters => (wordcraft_geom::PT_PER_CM, 4, 1),
-        Unit::Millimeters => (wordcraft_geom::PT_PER_CM, 4, 10),
-        Unit::Points => (72.0, 8, 72),
-        Unit::Picas => (72.0, 8, 6),
-        Unit::Inches => (72.0, 8, 1),
+        Unit::Centimeters => (wordcraft_geom::PT_PER_CM, 4, 1, true),
+        // Word for Mac's millimetre ruler (observed at 100 %, 2026-10-20): a number every 20 mm,
+        // a long tick between them at the odd tens, short ticks every 2.5 mm, none longer at 5.
+        Unit::Millimeters => (2.0 * wordcraft_geom::PT_PER_CM, 8, 20, false),
+        Unit::Points => (72.0, 8, 72, true),
+        Unit::Picas => (72.0, 8, 6, true),
+        Unit::Inches => (72.0, 8, 1, true),
     }
 }
 
@@ -4631,7 +4633,7 @@ mod tests {
         // The marks: inches labelled from the start margin (the page edge counts backwards into
         // the margin, the margin itself has no mark), half inches the long ticks, ending on the
         // far page edge.
-        let marks = ruler_marks(72.0, page_w, (unit, 8, 1), scale);
+        let marks = ruler_marks(72.0, page_w, (unit, 8, 1, true), scale);
         let at = |d: f32| marks.iter().find(|(td, _)| (*td - d).abs() < 1e-4).map(|(_, m)| *m);
         assert_eq!(marks.first().map(|(d, _)| *d), Some(0.0));
         assert_eq!(marks.last().map(|(d, _)| *d), Some(page_w));
@@ -4642,9 +4644,20 @@ mod tests {
         assert_eq!(at(72.0 + unit / 2.0), Some(RulerMark::Tick(5.0)));
         assert_eq!(at(72.0 + unit / 8.0), Some(RulerMark::Tick(1.5)));
         // Zoomed out, sub-half-inch ticks drop out rather than smudge together.
-        let coarse = ruler_marks(72.0, page_w, (unit, 8, 1), 0.3);
+        let coarse = ruler_marks(72.0, page_w, (unit, 8, 1, true), 0.3);
         assert!(!coarse.iter().any(|(_, m)| matches!(m, RulerMark::Tick(1.5))));
         assert!(coarse.iter().any(|(_, m)| matches!(m, RulerMark::Tick(3.0))));
+        // Millimetres as Word for Mac counts them: 20, 40… with a long tick at 10, 30… and short
+        // ones every 2.5 mm, none longer at 5.
+        let mm = ruler_scale(wordcraft_geom::Unit::Millimeters);
+        let mm_unit = mm.0;
+        let marks_mm = ruler_marks(72.0, page_w, mm, 1.0);
+        let at_mm = |d: f32| marks_mm.iter().find(|(td, _)| (*td - d).abs() < 1e-3).map(|(_, m)| *m);
+        assert_eq!(at_mm(72.0 + mm_unit), Some(RulerMark::Label(20)));
+        assert_eq!(at_mm(72.0 + 2.0 * mm_unit), Some(RulerMark::Label(40)));
+        assert_eq!(at_mm(72.0 + mm_unit / 2.0), Some(RulerMark::Tick(5.0)), "10 mm");
+        assert_eq!(at_mm(72.0 + mm_unit / 4.0), Some(RulerMark::Tick(1.5)), "5 mm is a short tick");
+        assert_eq!(at_mm(72.0 + mm_unit / 8.0), Some(RulerMark::Tick(1.5)), "2.5 mm");
         // Laid on screen, the same ticks run the other way when mirrored.
         let xs = |rtl| marks.iter().map(|(d, _)| ruler_x(*d, x0, scale, page_w, rtl)).collect::<Vec<_>>();
         assert!(xs(false).windows(2).all(|w| w[0] < w[1]));
