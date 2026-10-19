@@ -2800,6 +2800,69 @@ fn html_auto_spacing_off_is_read_and_kept() {
     assert_eq!(settings(""), (false, false));
 }
 
+/// Word's Japanese template's `w:compat` switches (`w:spaceForUL`,
+/// `w:balanceSingleByteDoubleByteWidth`, `w:doNotLeaveBackslashAlone`, `w:ulTrailSpace`,
+/// `w:doNotExpandShiftReturn`, `w:adjustLineHeightInTable`, `w:useFELayout`) are read, written in
+/// CT_Compat's order before the compatibility mode, and left out when off.
+#[test]
+fn words_japanese_compat_switches_round_trip_in_schema_order() {
+    let names = [
+        "w:spaceForUL",
+        "w:balanceSingleByteDoubleByteWidth",
+        "w:doNotLeaveBackslashAlone",
+        "w:ulTrailSpace",
+        "w:doNotExpandShiftReturn",
+        "w:adjustLineHeightInTable",
+        "w:useFELayout",
+    ];
+    let flags = |s: &wordcraft_doc::Settings| {
+        [
+            s.space_for_ul,
+            s.balance_single_byte_double_byte_width,
+            s.do_not_leave_backslash_alone,
+            s.ul_trail_space,
+            s.do_not_expand_shift_return,
+            s.adjust_line_height_in_table,
+            s.use_fe_layout,
+        ]
+    };
+    let read_with = |compat: &str| {
+        let s = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings {W_NS}><w:compat>{compat}</w:compat></w:settings>"#);
+        let rels = [("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings", "settings.xml")];
+        wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/settings.xml", &s)])).unwrap()
+    };
+    // In any order in the file (Word's own, with useFELayout last).
+    let all: String = names.iter().map(|n| format!("<{n}/>")).collect();
+    assert_eq!(flags(&read_with(&all).settings), [true; 7]);
+    assert_eq!(
+        flags(&read_with("<w:ulTrailSpace w:val=\"0\"/><w:doNotExpandShiftReturn w:val=\"true\"/>").settings),
+        [false, false, false, false, true, false, false]
+    );
+    assert_eq!(flags(&read_with("").settings), [false; 7]);
+    let settings_xml = |d: &Document| {
+        let bytes = wordcraft_docx::write(d).unwrap();
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut xml = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name("word/settings.xml").unwrap(), &mut xml).unwrap();
+        xml
+    };
+    let mut d = Document::new();
+    d.settings.space_for_ul = true;
+    d.settings.balance_single_byte_double_byte_width = true;
+    d.settings.do_not_leave_backslash_alone = true;
+    d.settings.ul_trail_space = true;
+    d.settings.do_not_expand_shift_return = true;
+    d.settings.adjust_line_height_in_table = true;
+    d.settings.use_fe_layout = true;
+    let xml = settings_xml(&d);
+    let at: Vec<usize> = names.iter().map(|n| xml.find(&format!("<{n}/>")).unwrap_or_else(|| panic!("{n} written: {xml}"))).collect();
+    assert!(at.windows(2).all(|w| w[0] < w[1]), "schema order: {at:?}");
+    assert!(at[6] < xml.find("compatibilityMode").unwrap(), "before the compatibility mode");
+    assert_eq!(flags(&wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap().settings), [true; 7]);
+    let none = settings_xml(&Document::new());
+    assert!(names.iter().all(|n| !none.contains(n)), "{none}");
+}
+
 /// A right triangle (`rtTriangle`) has its right angle at the bottom left: a cover page's white
 /// corner cut-outs drawn as isosceles triangles pointed the wrong way.
 #[test]

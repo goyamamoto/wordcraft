@@ -7491,6 +7491,18 @@ fn a_japanese_region_starts_from_words_japanese_normal_template() {
     assert!((d.last_section.columns.space - 21.25).abs() < 0.01, "425 twips between columns");
     assert_eq!((d.last_section.page_w, d.last_section.page_h), (595.28, 841.89), "A4 in Japan");
     assert_eq!(d.settings.east_asian_font(false, None, "漢字"), Some("游明朝"), "Han text follows the theme font language");
+    // Word's Japanese Normal.dotm sets these compatibility switches (settings.xml of a document
+    // it saved); its English one sets none of them.
+    let s7 = &d.settings;
+    assert!(
+        s7.do_not_expand_shift_return
+            && s7.ul_trail_space
+            && s7.space_for_ul
+            && s7.balance_single_byte_double_byte_width
+            && s7.do_not_leave_backslash_alone
+            && s7.adjust_line_height_in_table
+            && s7.use_fe_layout
+    );
     // Typing Japanese into it lays out and saves without trouble; the new document command uses it.
     run(&mut s, "file.new", json!({}));
     assert_eq!(s.doc.styles.default_chr.size, Some(10.5));
@@ -7503,6 +7515,7 @@ fn a_japanese_region_starts_from_words_japanese_normal_template() {
     s.system_region = wordcraft_geom::Region::from_tag("en-US");
     let us = s.blank_document();
     assert_eq!((us.styles.default_chr.size, us.last_section.doc_grid, us.settings.theme_font_lang_ea), (Some(12.0), None, None));
+    assert!(!us.settings.do_not_expand_shift_return && !us.settings.ul_trail_space && !us.settings.use_fe_layout);
     s.system_region = wordcraft_geom::Region::from_tag("zh-TW");
     assert_eq!(s.blank_document().settings.theme_font_lang_ea.as_deref(), Some("zh-TW"));
     s.system_region = wordcraft_geom::Region::from_tag("zh-CN");
