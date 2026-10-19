@@ -14,8 +14,19 @@ use wordcraft_layout::{DocLayout, Page, Placed};
 use crate::WordApp;
 use crate::theme::{Tokens, regular, semibold};
 
-/// Points on screen per document point at 100% (96 px per inch, like a word processor).
+/// Screen points per document point at 100 %. On macOS a point is a screen point, as in Word
+/// for Mac (its window observed at 100 %, 2026-10-19: a 612-pt Letter page 612 points wide, the
+/// 18-pt lines of the Japanese document grid 18 points apart, the 18-pt crop-mark bars 18 points
+/// long; a new document opens at 100 %). Elsewhere 96 per inch, as in Word for Windows.
+#[cfg(target_os = "macos")]
+pub const PX_PER_PT: f32 = 1.0;
+#[cfg(not(target_os = "macos"))]
 pub const PX_PER_PT: f32 = 96.0 / 72.0;
+/// Whether Print Layout puts pages side by side on its own when more than one fits across the
+/// window. Word for Windows does (#123); Word for Mac keeps one page per row at every zoom (its
+/// 1500-point-wide window observed with a four-page document at 100, 90, 80, 70, 60, 50 and 40 %,
+/// 2026-10-19: one centred column of pages each time) unless Multiple Pages is chosen.
+pub const PAGES_FLOW_SIDE_BY_SIDE: bool = !cfg!(target_os = "macos");
 const GAP: f32 = 18.0;
 const RULER: f32 = 22.0;
 /// Maximum device-pixel height of a tile on very tall Web/Draft pages.
@@ -131,6 +142,11 @@ pub struct CanvasState {
     /// The viewport (the content's visible rect on screen) at the end of last frame; the
     /// drag-select edge auto-scroll decides this frame's scroll from it (#688).
     pub(crate) viewport: Option<egui::Rect>,
+    /// The page point held under the pointer while a pointer zoom goes on (the wheel's zoom is
+    /// animated over several frames): taken once when it starts, with the pointer then, so it
+    /// isn't measured again each frame from the last frame's pixel-snapped page rects, whose
+    /// rounding added up into a drift.
+    zoom_hold: Option<(Pos2, (usize, f32, f32))>,
     /// Pages per row last frame; when it changes the caret's page is scrolled back into view.
     pub cols: usize,
     /// The comment whose balloon is selected (its text is editable in place, like Word's).
@@ -245,6 +261,7 @@ impl Default for CanvasState {
             scroll_max: egui::Vec2::ZERO,
             scroll_request: None,
             viewport: None,
+            zoom_hold: None,
             cols: 1,
             balloon: None,
             balloon_focus: false,
@@ -581,14 +598,16 @@ pub fn geometry(app: &WordApp, l: &DocLayout, avail: egui::Vec2) -> Geometry {
     if !scale.is_finite() {
         scale = PX_PER_PT;
     }
-    // Pages flow side by side in Print Layout whenever more than one fits across; One Page and
-    // Page Width show one per row (and so does a zoom after One Page, #768), Web Layout has no pages. Reading Mode is handled above.
+    // Pages flow side by side in Print Layout whenever more than one fits across (not on a Mac,
+    // where Word keeps one per row: `PAGES_FLOW_SIDE_BY_SIDE`); One Page and Page Width show one
+    // per row (and so does a zoom after One Page, #768), Web Layout has no pages. Reading Mode is
+    // handled above.
     let (min_cols, auto) = if web || v.fit == "onePage" || v.fit == "pageWidth" || v.single_column {
         (1, false)
     } else if v.multi_page {
         (2, true)
     } else {
-        (1, true)
+        (1, PAGES_FLOW_SIDE_BY_SIDE)
     };
     let cols = columns_for(avail.x, maxw * scale, l.pages.len(), min_cols, auto);
     let sizes: Vec<(f32, f32)> = l.pages.iter().map(|p| (p.w, p.h)).collect();
@@ -905,11 +924,17 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     if (zoom_delta - 1.0).abs() > 1e-3 && ui.rect_contains_pointer(area) {
         let reading = app.session.view.read_mode;
         if !reading && let Some(p) = ui.input(|i| i.pointer.latest_pos()) {
-            zoom_anchor = page_at(&app.canvas.page_rects, &layout, app.canvas.scale, p).map(|at| (p, at));
+            zoom_anchor = match app.canvas.zoom_hold {
+                Some((q, at)) if q == p => Some((p, at)),
+                _ => page_at(&app.canvas.page_rects, &layout, app.canvas.scale, p).map(|at| (p, at)),
+            };
         }
+        app.canvas.zoom_hold = zoom_anchor;
         let pct = (app.canvas.scale / PX_PER_PT * zoom_delta * 100.0).clamp(if reading { 75.0 } else { 10.0 }, if reading { 150.0 } else { 500.0 });
         let id = if reading { "view.readTextSize" } else { "view.zoom" };
         let _ = app.run(id, json!({"value": pct}));
+    } else {
+        app.canvas.zoom_hold = None;
     }
     let avail = if app.session.view.read_mode { area.size() } else { area.size() - vec2(14.0, 0.0) };
     let geo = geometry(app, &layout, avail);
@@ -2588,9 +2613,11 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
         // spans the text area, so a border marker keeps its drag) and before the indent markers,
         // which keep the pointer where they overlap.
         crate::table_ruler::columns(app, ui, layout, pi, bar, x0, scale);
-        // Dragging the left-indent marker.
+        // Dragging the left-indent marker. The indent markers' zones are as wide as the markers
+        // (9 points) and a little: at 100 % on a Mac a cell's 5.4-pt margin is 5.4 points, and the
+        // right-indent marker 5.4 points left of a column marker must leave it its drag.
         let id = ui.id().with("ruler_left");
-        let mr = Rect::from_center_size(pos2(left, bar.max.y - 3.0), vec2(12.0, 12.0));
+        let mr = Rect::from_center_size(pos2(left, bar.max.y - 3.0), vec2(10.0, 12.0));
         let r = ui.interact(mr, id, Sense::click_and_drag());
         if r.dragged()
             && let Some(pp) = r.interact_pointer_pos()
@@ -2602,7 +2629,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
             }
             let _ = app.run("para.indents", json!({"left": snapped}));
         }
-        let fr = Rect::from_center_size(pos2(first, bar.min.y + 3.0), vec2(12.0, 10.0));
+        let fr = Rect::from_center_size(pos2(first, bar.min.y + 3.0), vec2(10.0, 10.0));
         let r = ui.interact(fr, ui.id().with("ruler_first"), Sense::click_and_drag());
         if r.dragged()
             && let Some(pp) = r.interact_pointer_pos()
@@ -2613,7 +2640,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
             }
             let _ = app.run("para.indents", json!({"firstLine": (pt / 4.5).round() * 4.5}));
         }
-        let rr = Rect::from_center_size(pos2(right, bar.max.y - 3.0), vec2(12.0, 12.0));
+        let rr = Rect::from_center_size(pos2(right, bar.max.y - 3.0), vec2(10.0, 12.0));
         let r = ui.interact(rr, ui.id().with("ruler_right"), Sense::click_and_drag());
         if r.dragged()
             && let Some(pp) = r.interact_pointer_pos()
@@ -4388,7 +4415,8 @@ mod tests {
     /// letter page in an ordinary window stays one per row.
     #[test]
     fn pages_flow_into_rows_when_they_fit() {
-        let letter = 612.0 * PX_PER_PT;
+        // A Letter page 816 pixels wide (100 % at 96 pixels per inch).
+        let letter = 612.0 * 96.0 / 72.0;
         assert_eq!(columns_for(1200.0, letter, 10, 1, true), 1, "100%: one page per row");
         assert_eq!(columns_for(1200.0, letter * 0.6, 10, 1, true), 2, "60%: two per row");
         assert_eq!(columns_for(1200.0, letter * 0.25, 10, 1, true), 5, "25%: five per row");

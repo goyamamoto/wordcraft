@@ -10,6 +10,8 @@ struct Pen<'a> {
     c: Color32,
     a: Color32,
     w: f32,
+    /// Drawn turned a quarter clockwise (see [`TURNED`]).
+    turn: bool,
 }
 
 impl Pen<'_> {
@@ -19,6 +21,8 @@ impl Pen<'_> {
     fn pt(&self, x: f32, y: f32) -> Pos2 {
         let s = self.s();
         let o = self.r.center() - vec2(10.0 * s, 10.0 * s);
+        // A quarter turn clockwise about the grid's centre: the left edge comes to the top.
+        let (x, y) = if self.turn { (20.0 - y, x) } else { (x, y) };
         pos2(o.x + x * s, o.y + y * s)
     }
     fn stroke(&self, c: Color32) -> Stroke {
@@ -40,10 +44,10 @@ impl Pen<'_> {
         self.p.add(Shape::convex_polygon(v, c, Stroke::NONE));
     }
     fn rect(&self, x0: f32, y0: f32, x1: f32, y1: f32, c: Color32) {
-        self.p.rect_stroke(Rect::from_min_max(self.pt(x0, y0), self.pt(x1, y1)), 1.0, self.stroke(c), egui::StrokeKind::Middle);
+        self.p.rect_stroke(Rect::from_two_pos(self.pt(x0, y0), self.pt(x1, y1)), 1.0, self.stroke(c), egui::StrokeKind::Middle);
     }
     fn frect(&self, x0: f32, y0: f32, x1: f32, y1: f32, c: Color32) {
-        self.p.rect_filled(Rect::from_min_max(self.pt(x0, y0), self.pt(x1, y1)), 0.5, c);
+        self.p.rect_filled(Rect::from_two_pos(self.pt(x0, y0), self.pt(x1, y1)), 0.5, c);
     }
     fn circle(&self, x: f32, y: f32, r: f32, c: Color32) {
         self.p.circle_stroke(self.pt(x, y), r * self.s(), self.stroke(c));
@@ -53,7 +57,16 @@ impl Pen<'_> {
     }
     fn text(&self, x: f32, y: f32, size: f32, t: &str, c: Color32, bold: bool) {
         let font = if bold { crate::theme::semibold(size * self.s()) } else { FontId::proportional(size * self.s()) };
-        self.p.text(self.pt(x, y), egui::Align2::CENTER_CENTER, t, font, c);
+        if self.turn {
+            // Turned with the rest: the galley's top-left goes where its centre ends up at the
+            // point once it is turned a quarter clockwise about that corner.
+            let galley = self.p.layout_no_wrap(t.to_string(), font, c);
+            let (w, h) = (galley.size().x, galley.size().y);
+            let at = self.pt(x, y) + vec2(h / 2.0, -w / 2.0);
+            self.p.add(egui::epaint::TextShape::new(at, galley, c).with_angle(std::f32::consts::FRAC_PI_2));
+        } else {
+            self.p.text(self.pt(x, y), egui::Align2::CENTER_CENTER, t, font, c);
+        }
     }
     /// Horizontal text lines (a paragraph).
     fn lines(&self, x0: f32, x1: f32, ys: &[f32]) {
@@ -71,9 +84,24 @@ impl Pen<'_> {
     }
 }
 
-/// Paint icon `name` into `r`. `c` is the line colour; the accent comes from the theme.
+/// The suffix that asks for an icon turned a quarter clockwise (`"alignLeft@turned"`): Word for
+/// Mac turns its Paragraph group's list, indent, alignment and line-spacing icons so while the
+/// caret is in vertical text (its ribbon observed with a 縦書き document, 2026-10-20).
+pub const TURNED: &str = "@turned";
+
+/// `name` turned a quarter clockwise when `turn` (see [`TURNED`]).
+pub fn turned(name: &str, turn: bool) -> String {
+    if turn { format!("{name}{TURNED}") } else { name.to_string() }
+}
+
+/// Paint icon `name` into `r`. `c` is the line colour; the accent comes from the theme. A name
+/// ending in [`TURNED`] paints that icon turned a quarter clockwise.
 pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
-    let pen = Pen { p, r, c, a: accent, w: 1.25 };
+    let (name, turn) = match name.strip_suffix(TURNED) {
+        Some(n) => (n, true),
+        None => (name, false),
+    };
+    let pen = Pen { p, r, c, a: accent, w: 1.25, turn };
     let a = accent;
     let red = Color32::from_rgb(0xD1, 0x3B, 0x3B);
     let yellow = Color32::from_rgb(0xF2, 0xC8, 0x11);
@@ -1486,5 +1514,71 @@ pub fn library(p: &Painter, r: Rect, icon: &wordcraft_render::icon_lib::Icon, c:
             }
             p.add(Shape::line(pts, stroke));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The points of every line and the angles of every text `name` paints into a 20-point box at
+    /// the origin (one icon unit a point).
+    fn painted(name: &str) -> (Vec<Pos2>, Vec<f32>) {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            paint(ui.painter(), Rect::from_min_size(pos2(0.0, 0.0), vec2(20.0, 20.0)), name, Color32::BLACK, Color32::RED);
+        });
+        out.textures_delta.clear();
+        let (mut pts, mut angles) = (Vec::new(), Vec::new());
+        for c in std::mem::take(&mut out.shapes) {
+            match c.shape {
+                Shape::Path(p) => pts.extend(p.points),
+                Shape::LineSegment { points, .. } => pts.extend(points),
+                Shape::Text(t) => angles.push(t.angle),
+                _ => {}
+            }
+        }
+        (pts, angles)
+    }
+
+    /// Word for Mac turns the Paragraph group's icons a quarter clockwise in vertical text: each
+    /// point of the turned icon is the plain icon's point (x, y) at (20 − y, x), so its lines run
+    /// down and what was on the left is on top; the numbers turn with them.
+    #[test]
+    fn turned_icons_are_the_icon_a_quarter_clockwise() {
+        for name in [
+            "bullets",
+            "numbering",
+            "multilevel",
+            "outdent",
+            "indent",
+            "alignLeft",
+            "alignCenter",
+            "alignRight",
+            "justify",
+            "distribute",
+            "lineSpacing",
+        ] {
+            let (plain, plain_angles) = painted(name);
+            let (turned_pts, turned_angles) = painted(&turned(name, true));
+            assert!(!plain.is_empty(), "{name} draws lines");
+            assert_eq!(plain.len(), turned_pts.len(), "{name}");
+            for (p, q) in plain.iter().zip(&turned_pts) {
+                assert!((q.x - (20.0 - p.y)).abs() < 1e-3 && (q.y - p.x).abs() < 1e-3, "{name}: {p:?} turned is {q:?}");
+            }
+            assert!(plain_angles.iter().all(|a| *a == 0.0), "{name}");
+            assert_eq!(turned_angles.len(), plain_angles.len(), "{name}");
+            assert!(turned_angles.iter().all(|a| (*a - std::f32::consts::FRAC_PI_2).abs() < 1e-6), "{name}: text turns too");
+        }
+        // Align Left's flush-left lines become lines hanging from the top.
+        let (pts, _) = painted("alignLeft@turned");
+        assert!(pts.iter().all(|p| (p.x - 16.0).abs() < 1e-3
+            || (p.x - 4.0).abs() < 1e-3
+            || (p.x - 10.0).abs() < 1e-3
+            || (p.x - 13.0).abs() < 1e-3
+            || (p.x - 7.0).abs() < 1e-3));
+        assert!(pts.iter().any(|p| (p.y - 3.0).abs() < 1e-3), "they start at the top");
+        assert_eq!(turned("sort", false), "sort");
     }
 }
