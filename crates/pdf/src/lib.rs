@@ -1413,7 +1413,8 @@ impl Exporter<'_> {
             .collect();
         let pushed = italic;
         if italic {
-            s.push_transform(&Transform::from_row(1.0, 0.0, -0.21, 1.0, 0.21 * base, 0.0));
+            let slant = wordcraft_fonts::SYNTHETIC_ITALIC_SLANT;
+            s.push_transform(&Transform::from_row(1.0, 0.0, -slant, 1.0, slant * base, 0.0));
         }
         s.set_fill(Some(fill(color, alpha)));
         s.set_stroke(if bold {

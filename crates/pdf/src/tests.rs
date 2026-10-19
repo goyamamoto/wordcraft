@@ -1539,3 +1539,66 @@ fn character_scaling_stretches_the_glyphs_in_the_pdf() {
     let (plain, half, double) = (widths(None), widths(Some(50.0)), widths(Some(200.0)));
     assert!(plain > 0.0 && (half / plain - 0.5).abs() < 0.02 && (double / plain - 2.0).abs() < 0.05, "{plain} {half} {double}");
 }
+
+/// Each glyph's full transform (page from glyph space), in drawing order.
+fn glyph_transforms(bytes: &[u8]) -> Vec<kurbo::Affine> {
+    use hayro_interpret::font::Glyph;
+    use hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        interpret_page,
+    };
+    use hayro_syntax::Pdf;
+    struct Glyphs(Vec<kurbo::Affine>);
+    impl Device<'_> for Glyphs {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &kurbo::BezPath, _: kurbo::Affine, _: &Paint<'_>, _: &PathDrawMode) {}
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'_>, transform: kurbo::Affine, glyph: kurbo::Affine, _: &Paint<'_>, mode: &GlyphDrawMode) {
+            if !matches!(mode, GlyphDrawMode::Stroke(_)) {
+                self.0.push(transform * glyph);
+            }
+        }
+        fn draw_image(&mut self, _: Image<'_, '_>, _: kurbo::Affine) {}
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+    let pdf = Pdf::new(bytes.to_vec()).expect("parse");
+    let cache = InterpreterCache::new();
+    let mut g = Glyphs(Vec::new());
+    for page in pdf.pages().iter() {
+        let mut ctx = Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 1.0, 1.0), &cache, pdf.xref(), InterpreterSettings::default());
+        interpret_page(page, &mut ctx, &mut g);
+    }
+    g.0
+}
+
+/// Word for Mac slants a face it has no italic for by 0.3398 (its PDFs' text matrices,
+/// 2026-10-20), about 18.8°, where WordCraft leaned it by 0.21.
+#[test]
+fn synthetic_italics_lean_as_word_for_mac_leans_them() {
+    let chr = |italic: bool| wordcraft_doc::CharProps {
+        font: Some("游明朝".into()),
+        font_ea: Some("游明朝".into()),
+        size: Some(12.0),
+        italic: Some(italic),
+        ..Default::default()
+    };
+    let mut d = Document::from_text("");
+    d.body = vec![
+        wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("斜体", chr(true))),
+        wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("正体", chr(false))),
+    ];
+    let pdf = export(&d, &PdfOptions::default()).unwrap();
+    let lean = |a: &kurbo::Affine| {
+        let [_, _, c, dd, _, _] = a.as_coeffs();
+        (c / dd).abs()
+    };
+    let leans: Vec<f64> = glyph_transforms(&pdf).iter().map(lean).collect();
+    assert_eq!(leans.len(), 4, "{leans:?}");
+    for l in &leans[..2] {
+        assert!((l - f64::from(wordcraft_fonts::SYNTHETIC_ITALIC_SLANT)).abs() < 1e-3 && (l - 0.3398).abs() < 1e-3, "{leans:?}");
+    }
+    assert!(leans[2..].iter().all(|l| *l < 1e-6), "upright text doesn't lean: {leans:?}");
+}

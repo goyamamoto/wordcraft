@@ -776,7 +776,11 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             let db = FontDb::global();
             let k = *size as f64 / face.upem.max(1.0);
             ctx.set_paint(color(opts.ink_text(*c, *text_bg), *alpha));
-            let skew = if *synth_italic { Affine::new([1.0, 0.0, -0.21, 1.0, 0.0, 0.0]) } else { Affine::IDENTITY };
+            let skew = if *synth_italic {
+                Affine::new([1.0, 0.0, -f64::from(wordcraft_fonts::SYNTHETIC_ITALIC_SLANT), 1.0, 0.0, 0.0])
+            } else {
+                Affine::IDENTITY
+            };
             // Outline strokes, in font units: synthetic bold, then on-screen stem darkening (a
             // stroke grows the outline by half its width on each side). Darkening is skipped for
             // translucent text, where the stroke overlapping the fill would show as a darker rim.
