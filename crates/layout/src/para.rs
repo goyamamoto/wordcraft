@@ -388,6 +388,11 @@ pub struct ParaLayout {
     /// `distribute_cells`).
     pub cell_classes: Vec<CellClass>,
     pub cell_autos: Vec<f32>,
+    /// Per cluster, `EA_CHAR` when it is an East Asian character (ideographs, kana, Hangul, CJK
+    /// punctuation, full- and half-width forms) — justification shares the line's leftover
+    /// around them (see `justify_shares`) — and `EA_CLOSING` when it is a closing mark
+    /// punctuation compression may narrow (。、」…).
+    pub ea_flags: Vec<u8>,
     /// Per cluster, how far above its line's baseline the cluster's own baseline sits for the
     /// paragraph's text alignment (`w:textAlignment` top, center or bottom); empty otherwise.
     pub align_dy: Vec<f32>,
@@ -549,6 +554,46 @@ pub fn is_east_asian(c: char) -> bool {
         0x1100..=0x11FF | 0x2E80..=0x2FDF | 0x2FF0..=0x303F | 0x3040..=0x30FF | 0x3100..=0x312F | 0x3130..=0x318F
         | 0x3190..=0x31FF | 0x3200..=0x4DBF | 0x4E00..=0x9FFF | 0xA960..=0xA97F | 0xAC00..=0xD7FF | 0xF900..=0xFAFF
         | 0xFE30..=0xFE4F | 0xFF01..=0xFF60 | 0xFF61..=0xFFDC | 0xFFE0..=0xFFE6 | 0xFFE8..=0xFFEE | 0x20000..=0x3FFFF)
+}
+
+/// Justification without a character grid, as Word for Mac spreads a line (`cp2` probes, Yu
+/// Mincho 12 pt, no grid and a line grid alike): the leftover goes in shares, one between two
+/// characters one of which is East Asian (a space next to an East Asian character takes a share
+/// on each side: あいう えお puts 80.4 pt between あ and い and 160.8 around the space), one for
+/// a space after a Latin word before another — plus a twelfth of its size when a Latin word
+/// comes before the space — and none between two Latin words' letters (短い行 with Latin 終わり:
+/// 41.1 pt between 短 and い, 82.2 after 行, 42.5 between with and Latin, 40.9 after Latin). A
+/// Latin-only line puts the leftover in its spaces equally, as before. Word's own positions
+/// wander by up to 1.5 pt from these shares (its rounding); the shares are the rule. Returns
+/// what each content cluster's right side gains.
+fn justify_shares(pl: &ParaLayout, content: &[usize], slack: f32) -> Vec<f32> {
+    let ea = |k: usize| pl.ea_flags.get(k).is_some_and(|f| f & EA_CHAR != 0);
+    let space = |k: usize| pl.clusters.get(k).is_some_and(|c| c.kind == ClKind::Space);
+    let size = |k: usize| pl.clusters.get(k).and_then(|c| pl.styles.get(c.style as usize)).map_or(0.0, |st| st.size).clamp(0.0, 1584.0);
+    let mut shares = vec![0.0f32; content.len()];
+    let mut bonus = vec![0.0f32; content.len()];
+    for i in 0..content.len().saturating_sub(1) {
+        let (Some(&a), Some(&b)) = (content.get(i), content.get(i + 1)) else { break };
+        if ea(a) || ea(b) {
+            shares[i] = 1.0;
+        } else if space(a) {
+            shares[i] = 1.0;
+            if i > 0 && content.get(i - 1).is_some_and(|p| !ea(*p)) {
+                bonus[i] = size(a) / 12.0;
+            }
+        }
+    }
+    let n: f32 = shares.iter().sum();
+    let fixed: f32 = bonus.iter().sum();
+    if n <= 0.0 || !slack.is_finite() {
+        return vec![0.0; content.len()];
+    }
+    if fixed >= slack {
+        // Not even the twelfths fit: the leftover goes in their proportion.
+        return bonus.iter().map(|b| if fixed > 0.0 { slack * b / fixed } else { 0.0 }).collect();
+    }
+    let share = (slack - fixed) / n;
+    shares.iter().zip(&bonus).map(|(s, b)| s * share + b).collect()
 }
 
 /// Character grid: East Asian characters (all text with `snapToChars`) take whole cells of the
@@ -865,6 +910,9 @@ fn auto_space(b: &mut Builder, text: &str, letters: bool, digits: bool, grid: &G
 /// for Mac (Japanese Normal template): in 「括弧」と（丸括弧）、句読点。。。、、、 the ） before 、
 /// and every 。 and 、 but the last take half an em; a 、 before 句 keeps its full width.
 const COMPRESSIBLE: &str = "、。，．）」』】〕〉》〙〗〟］｝";
+/// `ParaLayout::ea_flags`: an East Asian character; a closing mark compression may narrow.
+pub const EA_CHAR: u8 = 1;
+pub const EA_CLOSING: u8 = 2;
 const FULL_WIDTH_PUNCT: &str = "、。，．・：；！？）」』】〕〉》〙〗〟］｝（「『【〔〈《〘〖〝［｛";
 /// Full-width opening brackets: after any full-width mark one loses its blank left half (Word
 /// for Mac: 「「い, 「（い, 『「い, （（い, ：「い, ・「い all put い 1.5 em after the first mark, and
@@ -2260,6 +2308,14 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     if env.doc.settings.punct_compression.compresses() {
         compress_punctuation(&mut b, &p.text, snap_cells);
     }
+    let ea_flags: Vec<u8> = b
+        .clusters
+        .iter()
+        .map(|c| match cluster_char(&p.text, c) {
+            Some(ch) if is_east_asian(ch) => EA_CHAR | if COMPRESSIBLE.contains(ch) { EA_CLOSING } else { 0 },
+            _ => 0,
+        })
+        .collect();
     fit_text_blocks(&mut b, &p.text);
     // Break opportunities and hyphenation points come from the text as laid out: hidden text that is
     // not shown and, without markup, tracked deletions are left out, so a space or soft hyphen there
@@ -2401,6 +2457,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         openings: Vec::new(),
         cell_classes,
         cell_autos,
+        ea_flags,
         align_dy: Vec::new(),
         vertical: env.vertical,
     };
@@ -3028,42 +3085,65 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 lab.x += shift;
             }
         }
-        let justify = display.is_none() && !distributed && ((rp.align == Align::Justify && end == LineEnd::Wrap) || rp.align == Align::Distribute);
+        // A justified line ending with a manual line break is spread like a wrapped one unless
+        // the document says not to (`w:doNotExpandShiftReturn`, set by Word's Japanese
+        // template); a line ending with a page or column break, and the paragraph's last line,
+        // keep their spacing. Distributed text spreads every line.
+        let expands = end == LineEnd::Wrap || (end == LineEnd::LineBreak && !env.doc.settings.do_not_expand_shift_return);
+        let justify = display.is_none() && !distributed && ((rp.align == Align::Justify && expands) || rp.align == Align::Distribute);
         // A line that only fits with shrunk spaces is shrunk, the last line of the paragraph too.
         let shrink = display.is_none() && shrink_spaces && slack < 0.0 && last_tab.is_none();
         if shrink {
             shrink_line_spaces(pl, &mut xs, c0, c1, content_end, slack);
         } else if justify && slack > 0.0 {
-            // Spaces inside the content (after the last tab).
-            let spaces: Vec<usize> = (align_from..c1)
+            // The line's content after the last tab: the clusters before the trailing spaces and
+            // breaks (markers take no room and no share).
+            let content: Vec<usize> = (align_from..c1)
                 .filter(|k| {
-                    pl.clusters.get(*k).is_some_and(|c| c.kind == ClKind::Space) && xs.get(k - c0).copied().unwrap_or(f32::MAX) < content_end - 0.01
+                    pl.clusters.get(*k).is_some_and(|c| c.kind != ClKind::Marker) && xs.get(k - c0).copied().unwrap_or(f32::MAX) < content_end - 0.01
                 })
                 .collect();
-            if rp.align == Align::Distribute || spaces.is_empty() {
-                let cnt = (c1 - align_from).saturating_sub(1).max(1) as f32;
-                if rp.align == Align::Distribute {
-                    let per = slack / cnt;
-                    for (q, v) in xs.iter_mut().enumerate().skip(align_from - c0) {
-                        let k = (q + c0 - align_from) as f32;
-                        *v += per * k.min(cnt);
-                    }
-                }
+            // What each content cluster's right side gains.
+            let extras: Vec<f32> = if rp.align == Align::Distribute {
+                // 均等割り付け: the leftover shared equally between the characters.
+                let cnt = content.len().saturating_sub(1).max(1) as f32;
+                content.iter().enumerate().map(|(i, _)| if i + 1 < content.len() { slack / cnt } else { 0.0 }).collect()
             } else {
-                let per = slack / spaces.len() as f32;
-                let mut add = 0.0;
-                let mut si = 0;
-                for k in align_from..c1 {
-                    if let Some(v) = xs.get_mut(k - c0) {
-                        *v += add;
-                    }
-                    if spaces.get(si) == Some(&k) {
-                        add += per;
-                        si += 1;
-                    }
-                }
-                if let Some(v) = xs.last_mut() {
+                justify_shares(pl, &content, slack)
+            };
+            // The last content cluster's width on the line, before the spread.
+            let last_width = content.last().and_then(|&l| Some(content_end - xs.get(l - c0)?));
+            let mut add = 0.0;
+            let mut ci = 0;
+            for k in align_from..c1 {
+                if let Some(v) = xs.get_mut(k - c0) {
                     *v += add;
+                }
+                if content.get(ci) == Some(&k) {
+                    add += extras.get(ci).copied().unwrap_or(0.0);
+                    ci += 1;
+                }
+            }
+            if let Some(v) = xs.last_mut() {
+                *v += add;
+            }
+            // A closing mark narrowed at the line's end (。 before the break, 10.2 pt of its 12 in
+            // Word) shares the leftover at its narrowed width but ends the line with its whole
+            // em box at the edge: Word puts it 1.8 pt back from its share.
+            if rp.align == Align::Justify
+                && let Some(&last) = content.last()
+                && let Some(c) = pl.clusters.get(last)
+                && pl.ea_flags.get(last).is_some_and(|f| f & EA_CLOSING != 0)
+                && let Some(width) = last_width
+            {
+                let size = pl.styles.get(c.style as usize).map_or(0.0, |st| st.size).clamp(0.0, 1584.0);
+                let prev_end =
+                    content.len().checked_sub(2).and_then(|i| content.get(i)).and_then(|&p| Some(xs.get(p - c0)? + pl.clusters.get(p)?.adv.max(0.0)));
+                if width < size - 0.01
+                    && right_edge - size >= prev_end.unwrap_or(f32::MIN)
+                    && let Some(v) = xs.get_mut(last - c0)
+                {
+                    *v = right_edge - size;
                 }
             }
         }

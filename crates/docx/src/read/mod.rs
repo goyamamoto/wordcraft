@@ -1121,6 +1121,15 @@ impl Reader<'_> {
                         s.compat_mode = m.clamp(11, 99);
                     }
                     s.sum_paragraph_spacing = k.children("w:doNotUseHTMLParagraphAutoSpacing").any(on_off);
+                    // Word's Japanese template's switches (ECMA-376 §17.15.3).
+                    let flag = |name: &str| k.children(name).any(on_off);
+                    s.space_for_ul = flag("w:spaceForUL");
+                    s.balance_single_byte_double_byte_width = flag("w:balanceSingleByteDoubleByteWidth");
+                    s.do_not_leave_backslash_alone = flag("w:doNotLeaveBackslashAlone");
+                    s.ul_trail_space = flag("w:ulTrailSpace");
+                    s.do_not_expand_shift_return = flag("w:doNotExpandShiftReturn");
+                    s.adjust_line_height_in_table = flag("w:adjustLineHeightInTable");
+                    s.use_fe_layout = flag("w:useFELayout");
                 }
                 "w:trackRevisions" => s.track_changes = on_off(k),
                 "w:characterSpacingControl" => {

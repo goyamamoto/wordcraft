@@ -696,6 +696,24 @@ fn lines(
         let top = y + (line.top - first.top);
         let base = top + (line.baseline - line.top);
         let bottom = top + line.height;
+        // The line's trailing spaces, marks and breaks: an underline stops before them — unless
+        // the document underlines trailing spaces (`w:ulTrailSpace`, Word's Japanese default):
+        // then the spaces before a line break, at the paragraph's end and the one a line wraps
+        // at are underlined too, the last no further than the line's right edge. Found once per
+        // line (a line of hidden fragments is all marks).
+        let trailing = |k: usize| {
+            pl.clusters
+                .get(k)
+                .is_some_and(|c| matches!(c.kind, ClKind::Space | ClKind::Marker | ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak))
+        };
+        let mut content_tail = line.c1;
+        while content_tail > line.c0 && trailing(content_tail - 1) {
+            content_tail -= 1;
+        }
+        let mut tail = line.c1;
+        while tail > content_tail && !(doc.settings.ul_trail_space && pl.clusters.get(tail - 1).is_some_and(|c| c.kind == ClKind::Space)) {
+            tail -= 1;
+        }
         // Commented text gets a soft shade (comment anchors are object markers).
         if opts.markup
             && opts.revisions.comments
@@ -1048,15 +1066,10 @@ fn lines(
                 };
                 out.push(Draw::Rotated { cx: x + left + c.adv / 2.0, cy, spin: Spin::new(-90.0, false, false), items: vec![item] });
             }
-            // Decorations across the run (underline skips trailing spaces of the line). Right-to-left
+            // Decorations across the run (an underline stops at the line's `tail`). Right-to-left
             // text inside a run can split it into several visual spans.
-            let mut end_k = run_end;
-            while end_k > run_start
-                && pl.clusters.get(end_k - 1).is_some_and(|c| matches!(c.kind, ClKind::Space | ClKind::Marker | ClKind::LineBreak))
-                && end_k == line.c1
-            {
-                end_k -= 1;
-            }
+            let end_k = run_end.min(tail).max(run_start);
+            let clip = (end_k > content_tail).then_some(line.right);
             let underline = match (ins_mark, del_mark) {
                 (Some(InsertMark::Underline), _) | (_, Some(DeleteMark::Underline)) => Underline::Single,
                 (Some(InsertMark::DoubleUnderline), _) => Underline::Double,
@@ -1084,7 +1097,7 @@ fn lines(
                 }
                 let geo = decoration_geometry(pl, para, line, fr0, fr1, base - st.shift - dy);
                 let ucolor = rc.underline_color.unwrap_or(color);
-                for (x0, x1) in spans.iter().map(|(a, b)| (x + a, x + b)).filter(|(a, b)| b > a) {
+                for (x0, x1) in spans.iter().map(|(a, b)| (x + a, x + clip.map_or(*b, |r| b.min(r)))).filter(|(a, b)| b > a) {
                     if underline == Underline::Words {
                         // Each word under its own line, where the face drawing it puts it (in one
                         // run Word draws a Latin word's line where its font says and a Japanese
