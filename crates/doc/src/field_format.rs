@@ -208,8 +208,8 @@ impl FieldNumFormat {
                 format!("{} and 00/100", section::cardinal_text(n).to_lowercase())
             }
             FieldNumFormat::Aiueo => cycle(cjk::AIUEO, 46)?,
-            FieldNumFormat::Iroha => cycle(IROHA_FIELD, 48)?,
-            FieldNumFormat::DbChar => cjk::decimal_full_width(n),
+            FieldNumFormat::Iroha => cycle(cjk::IROHA, 48)?,
+            FieldNumFormat::DbChar => cjk::decimal_full_width(i64::from(n)),
             FieldNumFormat::DbNum1 | FieldNumFormat::ChineseNum3 => cjk::ideograph_digital(n),
             FieldNumFormat::DbNum2 => {
                 if n >= 1_000_000 {
@@ -226,14 +226,8 @@ impl FieldNumFormat {
             FieldNumFormat::Gb3 => cjk::decimal_enclosed_circle_chinese(n),
             FieldNumFormat::Gb4 => cjk::enclosed(n, 0x3220, 10),
             FieldNumFormat::Zodiac1 => cjk::ideograph_traditional(n),
-            FieldNumFormat::Zodiac2 => cjk::ideograph_zodiac(n).replace('戌', "戍"),
-            FieldNumFormat::Zodiac3 => {
-                if n == 0 {
-                    "0".into()
-                } else {
-                    cjk::ideograph_zodiac_traditional((n - 1) % 60 + 1).replace('戌', "戍")
-                }
-            }
+            FieldNumFormat::Zodiac2 => cjk::ideograph_zodiac(n),
+            FieldNumFormat::Zodiac3 => cjk::ideograph_zodiac_traditional(n),
             FieldNumFormat::Hebrew1 => hebrew_gematria(n)?,
             FieldNumFormat::Hebrew2 => hebrew_ordinal(n)?,
             FieldNumFormat::ChineseNum1 => section::NumFormat::ChineseCountingThousand.format(n),
@@ -290,9 +284,6 @@ pub enum Switch {
     /// A word Word doesn't know; the field shows [`UNKNOWN_SWITCH`].
     Unknown,
 }
-
-/// Word's `Iroha` field order: the 47 iroha kana then ン, cycling by 48.
-const IROHA_FIELD: &str = "イロハニホヘトチリヌルヲワカヨタレソツネナラムウヰノオクヤマケフコエテアサキユメミシヱヒモセスン";
 
 /// Digits, the sign and the decimal point in their full-width forms.
 fn full_width_text(s: &str) -> String {

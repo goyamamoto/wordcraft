@@ -296,26 +296,58 @@ impl NumFormat {
     pub fn from_ooxml(s: &str) -> NumFormat {
         NumFormat::ALL.into_iter().find(|f| f.ooxml() == s).unwrap_or(NumFormat::Decimal)
     }
-    /// Format `n` (1-based). Formats WordCraft doesn't draw yet (Hebrew, Arabic, Hindi, Thai,
-    /// Vietnamese, text amounts) show decimal, as do values past a sequence's end
-    /// (the 21st item of ①…⑳).
+    /// Format `n` (1-based) as Word for Mac draws a list label in this format (`nf1`–`nf3`
+    /// probes, 2026-10-19, read through its object model with Japanese editing). Formats
+    /// WordCraft doesn't draw yet (Hebrew, Arabic, Hindi, Thai, Vietnamese, text amounts) show
+    /// decimal, as do values past an enclosed set's end (the 21st item of ①…⑳); a kana, hangul
+    /// or zodiac sequence cycles; roman numerals wrap at 32 767 and the repeats of a letter or
+    /// Chicago mark at 30; the counting systems with units, Korean 零 digits and the English
+    /// words stop at 999 999, hex at FFFF and Japanese ten-thousand digits at 9999 (nothing is
+    /// drawn beyond). Word reads the value as a signed 32-bit number: 2³²−1 is −1 (`-1`, `-１`,
+    /// the decimal fallback of a sequence) and nothing in a counting format; 2³¹ draws nothing.
     pub fn format(self, n: u32) -> String {
         use crate::cjk_numbers as cjk;
+        if n > i32::MAX as u32 {
+            return self.format_negative(n as i32);
+        }
         match self {
             NumFormat::DecimalZero => format!("{n:02}"),
-            NumFormat::UpperRoman => roman(n).to_uppercase(),
-            NumFormat::LowerRoman => roman(n),
+            // A roman or letter label for 0 is a single space in Word's lists.
+            NumFormat::UpperRoman | NumFormat::LowerRoman | NumFormat::UpperLetter | NumFormat::LowerLetter if n == 0 => " ".into(),
+            NumFormat::UpperRoman => roman(wrap_roman(n)).to_uppercase(),
+            NumFormat::LowerRoman => roman(wrap_roman(n)),
             NumFormat::UpperLetter => letters(n).to_uppercase(),
             NumFormat::LowerLetter => letters(n),
             NumFormat::RussianUpper => russian_letters(n).to_uppercase(),
             NumFormat::RussianLower => russian_letters(n),
             NumFormat::Ordinal => format!("{n}{}", ordinal_suffix(n)),
-            NumFormat::CardinalText => cardinal_text(n),
-            NumFormat::OrdinalText => ordinal_text(n),
+            NumFormat::CardinalText => {
+                if n > 999_999 {
+                    String::new()
+                } else {
+                    cardinal_text(n)
+                }
+            }
+            NumFormat::OrdinalText => {
+                if n > 999_999 {
+                    String::new()
+                } else {
+                    ordinal_text(n)
+                }
+            }
             NumFormat::Bullet | NumFormat::None => String::new(),
             NumFormat::Chicago => chicago(n),
             NumFormat::NumberInDash => format!("- {n} -"),
-            NumFormat::IdeographDigital | NumFormat::KoreanDigital2 | NumFormat::TaiwaneseDigital => cjk::ideograph_digital(n),
+            NumFormat::Hex => {
+                if n > 0xFFFF {
+                    String::new()
+                } else {
+                    format!("{n:X}")
+                }
+            }
+            NumFormat::IdeographDigital => cjk::ideograph_digital(n),
+            NumFormat::KoreanDigital2 => cjk::korean_digital2(n),
+            NumFormat::TaiwaneseDigital => cjk::taiwanese_digital(n),
             NumFormat::JapaneseCounting => cjk::japanese_counting(n),
             NumFormat::JapaneseLegal => cjk::japanese_legal(n),
             NumFormat::JapaneseDigitalTenThousand => cjk::japanese_digital_ten_thousand(n),
@@ -323,7 +355,7 @@ impl NumFormat {
             NumFormat::AiueoFullWidth => cjk::aiueo_full_width(n),
             NumFormat::Iroha => cjk::iroha(n),
             NumFormat::IrohaFullWidth => cjk::iroha_full_width(n),
-            NumFormat::DecimalFullWidth | NumFormat::DecimalFullWidth2 => cjk::decimal_full_width(n),
+            NumFormat::DecimalFullWidth | NumFormat::DecimalFullWidth2 => cjk::decimal_full_width(i64::from(n)),
             NumFormat::DecimalEnclosedCircle => cjk::decimal_enclosed_circle(n),
             NumFormat::DecimalEnclosedCircleChinese => cjk::decimal_enclosed_circle_chinese(n),
             NumFormat::DecimalEnclosedFullstop => cjk::decimal_enclosed_fullstop(n),
@@ -345,7 +377,6 @@ impl NumFormat {
             NumFormat::Chosung => cjk::chosung(n),
             NumFormat::Decimal
             | NumFormat::DecimalHalfWidth
-            | NumFormat::Hex
             | NumFormat::VietnameseCounting
             | NumFormat::Hebrew1
             | NumFormat::Hebrew2
@@ -362,16 +393,70 @@ impl NumFormat {
             | NumFormat::DollarText => n.to_string(),
         }
     }
+
+    /// A value Word reads as negative (2³¹ and above): the decimal fallbacks show it signed
+    /// (`-1`, `-１`), the counting, digital, legal, roman, letter, word, hex and Chicago formats
+    /// nothing; 2³¹ itself draws nothing anywhere.
+    fn format_negative(self, v: i32) -> String {
+        use crate::cjk_numbers as cjk;
+        if v == i32::MIN {
+            return String::new();
+        }
+        match self {
+            NumFormat::DecimalFullWidth | NumFormat::DecimalFullWidth2 => cjk::decimal_full_width(i64::from(v)),
+            NumFormat::DecimalZero => format!("{v:02}"),
+            NumFormat::Ordinal => format!("{v}{}", ordinal_suffix(v.unsigned_abs())),
+            NumFormat::NumberInDash => format!("- {v} -"),
+            NumFormat::Decimal
+            | NumFormat::DecimalHalfWidth
+            | NumFormat::DecimalEnclosedCircle
+            | NumFormat::DecimalEnclosedCircleChinese
+            | NumFormat::DecimalEnclosedFullstop
+            | NumFormat::DecimalEnclosedParen
+            | NumFormat::IdeographEnclosedCircle
+            | NumFormat::IdeographTraditional
+            | NumFormat::IdeographZodiac
+            | NumFormat::IdeographZodiacTraditional
+            | NumFormat::Aiueo
+            | NumFormat::AiueoFullWidth
+            | NumFormat::Iroha
+            | NumFormat::IrohaFullWidth
+            | NumFormat::Ganada
+            | NumFormat::Chosung
+            | NumFormat::KoreanLegal
+            | NumFormat::VietnameseCounting
+            | NumFormat::Hebrew1
+            | NumFormat::Hebrew2
+            | NumFormat::ArabicAlpha
+            | NumFormat::ArabicAbjad
+            | NumFormat::HindiVowels
+            | NumFormat::HindiConsonants
+            | NumFormat::HindiNumbers
+            | NumFormat::HindiCounting
+            | NumFormat::ThaiLetters
+            | NumFormat::ThaiNumbers
+            | NumFormat::ThaiCounting
+            | NumFormat::BahtText
+            | NumFormat::DollarText => v.to_string(),
+            _ => String::new(),
+        }
+    }
 }
 
-/// Chicago Manual of Style note marks: *, †, ‡, §, then doubled (**, ††, …) and so on.
+/// Word's roman numerals wrap at 32 767: 32 768 is I again, 65 534 the 32 Ms of 32 767.
+fn wrap_roman(n: u32) -> u32 {
+    if n == 0 { 0 } else { (n - 1) % 32_767 + 1 }
+}
+
+/// Chicago Manual of Style note marks: *, †, ‡, §, then doubled (**, ††, …) and so on; Word
+/// repeats a mark at most 30 times, then starts over (the 121st item is `*` again).
 fn chicago(n: u32) -> String {
     const MARKS: [char; 4] = ['*', '\u{2020}', '\u{2021}', '\u{a7}'];
     if n == 0 {
         return String::new();
     }
     let i = (n - 1) as usize;
-    let k = (i / 4 + 1).min(10);
+    let k = (i / 4) % 30 + 1;
     std::iter::repeat_n(MARKS.get(i % 4).copied().unwrap_or('*'), k).collect()
 }
 
@@ -413,13 +498,13 @@ pub fn roman(mut n: u32) -> String {
     s
 }
 
-/// Word-style letters: a..z, aa..zz, aaa.. (repeated letter, not base-26).
+/// Word-style letters: a..z, aa..zz, aaa.. (repeated letter, not base-26); a letter repeats at
+/// most 30 times, then the count starts over (781 is `a` again, as Word for Mac draws it).
 pub fn letters(n: u32) -> String {
     if n == 0 {
         return String::new();
     }
-    let n = n.min(780);
-    let k = (n - 1) / 26 + 1;
+    let k = ((n - 1) / 26) % 30 + 1;
     let c = (b'a' + ((n - 1) % 26) as u8) as char;
     std::iter::repeat_n(c, k as usize).collect()
 }
@@ -464,7 +549,8 @@ const ONES: [&str; 20] = [
 ];
 const TENS: [&str; 10] = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];
 
-/// English cardinal words, capitalised first letter (`Twenty-One`).
+/// English cardinal words with a capital first letter only (`Twenty-one`, `One hundred one`),
+/// as Word for Mac draws `cardinalText` list labels.
 pub fn cardinal_text(n: u32) -> String {
     fn words(n: u32) -> String {
         match n {
@@ -486,7 +572,7 @@ pub fn cardinal_text(n: u32) -> String {
     capitalize(&words(n.min(999_999)))
 }
 
-/// English ordinal words (`Twenty-First`).
+/// English ordinal words (`Twenty-first`, `One hundred first`).
 pub fn ordinal_text(n: u32) -> String {
     let c = cardinal_text(n).to_lowercase();
     let (head, last) = match c.rfind(['-', ' ']) {
@@ -516,7 +602,7 @@ fn capitalize(s: &str) -> String {
         } else {
             out.push(c);
         }
-        up = c == '-' || c == ' ';
+        up = false;
     }
     out
 }
@@ -987,30 +1073,80 @@ impl SectionProps {
 mod tests {
     use super::*;
 
+    /// List labels as Word for Mac draws them — read through its object model (`list string`)
+    /// with Japanese editing (`nf1`–`nf3` probes, 2026-10-19): the sequences cycle, the counting
+    /// systems with units stop at 999 999, Word's 戍 and ㈠, the signed 32-bit reading.
+    #[test]
+    fn list_labels_as_word_for_mac_draws_them() {
+        use NumFormat::*;
+        let f = |f: NumFormat, n: u32| f.format(n);
+        assert_eq!(
+            [f(Aiueo, 47), f(AiueoFullWidth, 60), f(Iroha, 48), f(IrohaFullWidth, 49), f(Ganada, 15), f(Chosung, 29)],
+            ["ｱ", "セ", "ﾝ", "イ", "가", "ㄱ"]
+        );
+        assert_eq!(
+            [f(IdeographZodiac, 11), f(IdeographZodiacTraditional, 61), f(IdeographZodiacTraditional, 32_767), f(IdeographEnclosedCircle, 1)],
+            ["戍", "甲子", "庚午", "㈠"]
+        );
+        assert_eq!(
+            [f(JapaneseCounting, 11_000), f(JapaneseCounting, 1_000_000), f(JapaneseDigitalTenThousand, 10_000), f(JapaneseLegal, 1_000_000_000)],
+            ["一万一千", "", "", "壱拾億"]
+        );
+        assert_eq!(
+            [
+                f(ChineseCounting, 0),
+                f(ChineseCounting, 100),
+                f(ChineseCountingThousand, 100_000),
+                f(ChineseLegalSimplified, 10_000),
+                f(TaiwaneseDigital, 10)
+            ],
+            ["○", "一○○", "一十万", "壹萬", "一○"]
+        );
+        assert_eq!(
+            [f(KoreanCounting, 110_000), f(KoreanDigital, 1_000_000_000), f(KoreanDigital2, 0), f(KoreanLegal, 101), f(KoreanLegal, 10_000_000)],
+            ["십만", "일영영영영영영영영영", "\u{F9B2}", "백일", ""]
+        );
+        assert_eq!(
+            [f(UpperRoman, 32_768), f(LowerLetter, 781), f(LowerLetter, 11_000), f(Chicago, 121), f(Hex, 65_535), f(Hex, 65_536)],
+            ["I", "a", "bbbb", "*", "FFFF", ""]
+        );
+        assert_eq!([f(UpperRoman, 65_534).len(), f(Chicago, 240).chars().count()], [40, 30]);
+        assert_eq!(
+            [f(CardinalText, 101), f(OrdinalText, 1001), f(CardinalText, 1_000_000), f(UpperRoman, 0)],
+            ["One hundred one", "One thousand first", "", " "]
+        );
+        assert_eq!(
+            [f(Decimal, u32::MAX), f(DecimalFullWidth, u32::MAX), f(Aiueo, u32::MAX), f(JapaneseLegal, u32::MAX), f(Decimal, 1 << 31)],
+            ["-1", "-１", "-1", "", ""]
+        );
+    }
+
     #[test]
     fn number_formats() {
         assert_eq!(NumFormat::UpperRoman.format(1994), "MCMXCIV");
         assert_eq!(NumFormat::LowerLetter.format(27), "aa");
-        assert_eq!(NumFormat::LowerLetter.format(0), "");
+        assert_eq!(NumFormat::LowerLetter.format(0), " ");
         assert_eq!(NumFormat::Ordinal.format(12), "12th");
         assert_eq!(NumFormat::Ordinal.format(22), "22nd");
-        assert_eq!(NumFormat::CardinalText.format(21), "Twenty-One");
-        assert_eq!(NumFormat::OrdinalText.format(21), "Twenty-First");
+        assert_eq!(NumFormat::CardinalText.format(21), "Twenty-one");
+        assert_eq!(NumFormat::OrdinalText.format(21), "Twenty-first");
         assert_eq!(NumFormat::OrdinalText.format(20), "Twentieth");
-        assert_eq!(NumFormat::OrdinalText.format(112), "One Hundred Twelfth");
+        assert_eq!(NumFormat::OrdinalText.format(112), "One hundred twelfth");
         assert_eq!(NumFormat::DecimalZero.format(3), "03");
-        assert!(!NumFormat::UpperRoman.format(u32::MAX).is_empty());
-        assert_eq!(NumFormat::LowerLetter.format(u32::MAX).len(), 30);
+        assert_eq!(NumFormat::UpperRoman.format(u32::MAX), "");
+        assert_eq!([NumFormat::LowerLetter.format(123_456_789), NumFormat::LowerLetter.format(32_767)], ["a".repeat(29), "g".into()]);
         assert_eq!([NumFormat::Chicago.format(1), NumFormat::Chicago.format(6)], ["*", "\u{2020}\u{2020}"]);
         assert_eq!(NumFormat::ChineseCounting.format(11), "十一");
-        assert_eq!(NumFormat::ChineseCountingThousand.format(101), "一百零一");
+        assert_eq!(NumFormat::ChineseCountingThousand.format(101), "一百〇一");
         assert_eq!(NumFormat::DecimalEnclosedCircle.format(3), "③");
         assert_eq!(NumFormat::Hebrew1.format(3), "3", "formats not drawn yet show decimal");
         assert_eq!(NumFormat::RussianLower.format(0), "");
-        assert_eq!(NumFormat::RussianUpper.format(u32::MAX).chars().count(), 30);
+        assert_eq!(NumFormat::RussianUpper.format(i32::MAX as u32).chars().count(), 30);
         for f in NumFormat::ALL {
             assert_eq!(NumFormat::from_ooxml(f.ooxml()), f, "{f:?} round-trips");
-            assert!(f == NumFormat::Bullet || f == NumFormat::None || !f.format(u32::MAX).is_empty(), "{f:?}");
+            assert!(f == NumFormat::Bullet || f == NumFormat::None || !f.format(7).is_empty(), "{f:?}");
+            // The extremes draw something or nothing, never panic.
+            let _ = (f.format(0), f.format(i32::MAX as u32), f.format(1 << 31), f.format(u32::MAX));
         }
         assert_eq!(NumFormat::from_ooxml("klingon"), NumFormat::Decimal, "unknown formats are decimal");
     }
