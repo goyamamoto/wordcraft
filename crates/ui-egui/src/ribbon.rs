@@ -905,9 +905,14 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
         let align = rp.as_ref().map(|r| r.align.visual(r.bidi)).unwrap_or_default();
         let rtl = rp.as_ref().is_some_and(|r| r.bidi);
         let lists = wordcraft_engine::cmd::para::list_buttons(&app.session.doc, rp.as_ref().and_then(|r| r.numbering));
+        // In vertical text (縦書き) Word for Mac turns the list, indent, alignment and line-spacing
+        // icons a quarter clockwise, so they show the text's lines running down the page (its
+        // ribbon observed with a tbRl section, 2026-10-20; text turned up was not observed).
+        let down = wordcraft_engine::cmd::page::text_direction_at(&app.session) == wordcraft_doc::props::TextDirection::Down;
+        let ic = |name: &str| crate::icons::turned(name, down);
         stack(ui, |ui| {
             crate::widgets::row(ui, |ui| {
-                split(ui, app, "bullets", "Bullets", "para.bullets", json!({}), lists.bullets, None, |ui, app| {
+                split(ui, app, &ic("bullets"), "Bullets", "para.bullets", json!({}), lists.bullets, None, |ui, app| {
                     ui.label(egui::RichText::new(tl!("Bullet Library")).small().weak());
                     ui.horizontal(|ui| {
                         for c in ["•", "○", "▪", "◆", "➢", "✓", "–"] {
@@ -935,7 +940,7 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                     // The galleries' (ア) and 第１章 need the CJK interface font.
                     app.want_system_cjk = true;
                 }
-                split(ui, app, "numbering", "Numbering", "para.numbering", json!({}), lists.numbering, None, |ui, app| {
+                split(ui, app, &ic("numbering"), "Numbering", "para.numbering", json!({}), lists.numbering, None, |ui, app| {
                     if japanese {
                         for k in wordcraft_doc::numbering::ListKind::JA_NUMBERING {
                             mi_text(ui, app, &k.preview(), "para.numbering", json!({"kind": k.id()}));
@@ -956,7 +961,7 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                     mi(ui, app, "Restart at 1", "para.restartNumbering", json!({}));
                     mi(ui, app, "None", "para.numbering", json!({"off": true}));
                 });
-                split(ui, app, "multilevel", "Multilevel List", "para.multilevel", json!({}), lists.multilevel, None, |ui, app| {
+                split(ui, app, &ic("multilevel"), "Multilevel List", "para.multilevel", json!({}), lists.multilevel, None, |ui, app| {
                     if japanese {
                         for k in wordcraft_doc::numbering::ListKind::JA_MULTILEVEL {
                             mi_text(ui, app, &k.preview(), "para.multilevel", json!({"kind": k.id()}));
@@ -973,8 +978,8 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                     }
                 });
                 ui.add_space(4.0);
-                small(ui, app, "outdent", None, "Decrease Indent", "para.outdent", json!({}), false);
-                small(ui, app, "indent", None, "Increase Indent", "para.indent", json!({}), false);
+                small(ui, app, &ic("outdent"), None, "Decrease Indent", "para.outdent", json!({}), false);
+                small(ui, app, &ic("indent"), None, "Increase Indent", "para.indent", json!({}), false);
                 ui.add_space(4.0);
                 small(ui, app, "sort", None, "Sort", "para.sort", json!({}), false);
                 let marks = app.session.view.marks;
@@ -983,11 +988,11 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
             ui.add_space(3.0);
             crate::widgets::row(ui, |ui| {
                 use wordcraft_doc::Align as A;
-                small(ui, app, "alignLeft", None, "Align Left", "para.alignLeft", json!({}), align == A::Left);
-                small(ui, app, "alignCenter", None, "Center", "para.alignCenter", json!({}), align == A::Center);
-                small(ui, app, "alignRight", None, "Align Right", "para.alignRight", json!({}), align == A::Right);
-                small(ui, app, "justify", None, "Justify", "para.justify", json!({}), align == A::Justify);
-                small(ui, app, "distribute", None, "Distributed", "para.distribute", json!({}), align == A::Distribute);
+                small(ui, app, &ic("alignLeft"), None, "Align Left", "para.alignLeft", json!({}), align == A::Left);
+                small(ui, app, &ic("alignCenter"), None, "Center", "para.alignCenter", json!({}), align == A::Center);
+                small(ui, app, &ic("alignRight"), None, "Align Right", "para.alignRight", json!({}), align == A::Right);
+                small(ui, app, &ic("justify"), None, "Justify", "para.justify", json!({}), align == A::Justify);
+                small(ui, app, &ic("distribute"), None, "Distributed", "para.distribute", json!({}), align == A::Distribute);
                 // Word's Asian Layout menu (with an East Asian editing language): each item is a
                 // dialog over `format.horizontalInVertical`, `format.combineCharacters`,
                 // `format.twoLinesInOne` and `format.fitText`.
@@ -1002,7 +1007,7 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                 small(ui, app, "textLtr", None, "Left-to-Right Text Direction", "para.ltr", json!({}), !rtl);
                 small(ui, app, "textRtl", None, "Right-to-Left Text Direction", "para.rtl", json!({}), rtl);
                 ui.add_space(4.0);
-                menu_button(ui, app, "lineSpacing", None, "Line and Paragraph Spacing", false, "para.lineSpacing", |ui, app| {
+                menu_button(ui, app, &ic("lineSpacing"), None, "Line and Paragraph Spacing", false, "para.lineSpacing", |ui, app| {
                     for v in [1.0, 1.15, 1.5, 2.0, 2.5, 3.0] {
                         mi(ui, app, &format!("{v}"), "para.lineSpacing", json!({"value": v}));
                     }
