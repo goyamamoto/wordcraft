@@ -1613,9 +1613,6 @@
 	Select a picture, shape, chart or table to describe it.	Изаберите слику, облик, графикон или табелу да бисте их описали.
 	Document Grid	Мрежа документа
 	No grid	Без мреже
-	Lines only	Само редови
-	Lines and characters	Редови и знакови
-	Text snaps to characters	Текст се поравнава са знаковима
 	Characters per line:	Знакова по реду:
 	Lines per page:	Редова по страници:
 	Moved from	Премештено одавде
@@ -2288,3 +2285,9 @@
 	Baseline	Основна линија
 	Snap to grid when document grid is defined	Поравнај са мрежом када је мрежа документа дефинисана
 	Automatically adjust right indent when document grid is defined	Аутоматски прилагоди десно увлачење када је мрежа документа дефинисана
+	Text direction:	Смер текста:
+	Specify line grid only	Само мрежа редова
+	Specify line and character grid	Мрежа редова и знакова
+	Text snaps to character grid	Текст се поравнава уз мрежу знакова
+	Pitch:	Корак:
+	Use default pitch	Користи подразумевани корак

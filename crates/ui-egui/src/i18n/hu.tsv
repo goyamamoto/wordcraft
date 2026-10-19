@@ -1984,9 +1984,6 @@
 	Select a picture, shape, chart or table to describe it.	Jelölj ki egy képet, alakzatot, diagramot vagy táblázatot a leírásához.
 	Document Grid	Dokumentumrács
 	No grid	Nincs rács
-	Lines only	Csak sorok
-	Lines and characters	Sorok és karakterek
-	Text snaps to characters	A szöveg a karakterrácshoz igazodik
 	Characters per line:	Karakterek soronként:
 	Lines per page:	Sorok oldalanként:
 	Moved from	Áthelyezve innen
@@ -2668,3 +2665,9 @@
 	Baseline	Alapvonal
 	Snap to grid when document grid is defined	Rácshoz igazítás, ha a dokumentumrács meg van adva
 	Automatically adjust right indent when document grid is defined	Jobb behúzás automatikus igazítása, ha a dokumentumrács meg van adva
+	Text direction:	Szövegirány:
+	Specify line grid only	Csak sorrács megadása
+	Specify line and character grid	Sor- és karakterrács megadása
+	Text snaps to character grid	Szöveg igazítása a karakterrácshoz
+	Pitch:	Osztásköz:
+	Use default pitch	Alapértelmezett osztásköz

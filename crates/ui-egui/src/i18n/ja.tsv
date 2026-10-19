@@ -1597,13 +1597,10 @@
 	Decorative objects only add visual interest: screen readers skip them.	装飾用のオブジェクトは見た目を整えるだけなので、スクリーン リーダーは読み上げません。
 	Describe what this table shows, for people who can't see it.	この表が示す内容を、見ることができない人のために説明してください。
 	Select a picture, shape, chart or table to describe it.	説明する画像、図形、グラフ、または表を選択してください。
-	Document Grid	文書グリッド
-	No grid	グリッドなし
-	Lines only	行のみ
-	Lines and characters	行と文字
-	Text snaps to characters	文字をグリッドに合わせる
-	Characters per line:	1 行の文字数:
-	Lines per page:	1 ページの行数:
+	Document Grid	文字数と行数
+	No grid	標準の文字数を使う
+	Characters per line:	文字数:
+	Lines per page:	行数:
 	Moved from	移動元
 	Moved to	移動先
 	Developer	開発
@@ -2274,3 +2271,12 @@
 	Baseline	ベースライン
 	Snap to grid when document grid is defined	1ページの行数を指定時に文字を行グリッド線に合わせる
 	Automatically adjust right indent when document grid is defined	1行の文字数を指定時に右のインデント幅を自動調整する
+	Text direction:	文字方向:
+	Specify line grid only	行数だけを指定する
+	Specify line and character grid	文字数と行数を指定する
+	Text snaps to character grid	原稿用紙の設定にする
+	Pitch:	字送り:
+	Use default pitch	標準の字送りを使用する
+direction	Horizontal	横書き
+direction	Vertical	縦書き
+lines	Pitch:	行送り:
