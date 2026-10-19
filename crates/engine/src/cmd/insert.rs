@@ -799,34 +799,55 @@ fn date_time(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
-/// Format today's date with a Word picture (`M/d/yyyy`, `MMMM d, yyyy`, `yyyy-MM-dd`, `dddd`…).
+/// Format today's date with a Word picture (`M/d/yyyy`, `MMMM d, yyyy`, `yyyy-MM-dd`, `dddd`…)
+/// in English names, local time.
 pub fn format_date(fmt: &str) -> String {
-    let iso = super::now_iso();
-    let y: i64 = iso.get(0..4).and_then(|x| x.parse().ok()).unwrap_or(2026);
-    let m: usize = iso.get(5..7).and_then(|x| x.parse().ok()).unwrap_or(1);
-    let d: u32 = iso.get(8..10).and_then(|x| x.parse().ok()).unwrap_or(1);
-    let hh: u32 = iso.get(11..13).and_then(|x| x.parse().ok()).unwrap_or(0);
-    let mm: u32 = iso.get(14..16).and_then(|x| x.parse().ok()).unwrap_or(0);
-    let ss: u32 = iso.get(17..19).and_then(|x| x.parse().ok()).unwrap_or(0);
-    format_date_parts(fmt, y, m, d, (hh, mm, ss), (super::now_unix() / 86_400) as i64)
+    format_date_in(fmt, None)
+}
+
+/// Format today's date, local time, with a Word picture in the names of language `lang` (the
+/// field's text language, `w:lang`; see [`format_date_parts_in`]).
+pub fn format_date_in(fmt: &str, lang: Option<&str>) -> String {
+    let local = super::now_local_secs();
+    let days = local.div_euclid(86_400);
+    let t = local.rem_euclid(86_400) as u32;
+    let (y, m, d) = super::civil_from_days(days);
+    format_date_parts_in(fmt, lang, y, m as usize, d, (t / 3600, t / 60 % 60, t % 60), days)
+}
+
+/// [`format_date_parts_in`] with English names.
+pub fn format_date_parts(fmt: &str, y: i64, m: usize, d: u32, hms: (u32, u32, u32), days_since: i64) -> String {
+    format_date_parts_in(fmt, None, y, m, d, hms, days_since)
 }
 
 /// Format a date and time with a Word picture; `days_since` (days since 1970-01-01) gives the weekday.
 ///
 /// Word's tokens, as Word for Mac evaluates them (observed 2026-10-18): `y`/`Y` year, `M` month,
-/// `d`/`D` day (`ddd`, `dddd` the English weekday), `H` and `h` hours, `m` minutes, `s`/`S`
-/// seconds, `am/pm` (any case) AM or PM, `'…'` literal text, and the Japanese tokens of
+/// `d`/`D` day (`ddd`, `dddd` the weekday), `H` and `h` hours, `m` minutes, `s`/`S` seconds,
+/// `am/pm` (any case) AM or PM, `'…'` literal text, and the Japanese tokens of
 /// [`super::wareki`] — `ggg`/`gg`/`g`/`GG`/`G` the era, `e`/`ee`/`E` the era year, `EE` the year
 /// in kanji, `aaa` the weekday's kanji, `A` and `O` the day and month in kanji, `ampm` 午前/午後.
 /// A run longer than a token's longest form is cut into tokens from the left (`gggg` = `ggg` +
-/// `g`), as Word does. Other characters are copied.
-pub fn format_date_parts(fmt: &str, y: i64, m: usize, d: u32, (hh, mm, ss): (u32, u32, u32), days_since: i64) -> String {
+/// `g`), as Word does. Other characters are copied. The names follow the field's text
+/// language `lang` (`w:lang/@w:val`, `dt1` probe, 2026-10-19): Japanese writes `dddd` 月曜日,
+/// `ddd` 月, `MMMM` and `MMM` 10月, and `am/pm` of any case 午前 or 午後, where English writes
+/// Monday, Mon, October, Oct, AM or PM (`AM/PM h時mm分` reads 午後 8時43分 in a Japanese run and
+/// PM 8時43分 in an English one); the era, kanji and `ampm` tokens read the same in both.
+pub fn format_date_parts_in(fmt: &str, lang: Option<&str>, y: i64, m: usize, d: u32, (hh, mm, ss): (u32, u32, u32), days_since: i64) -> String {
     use super::wareki::{era_of, kanji_digits, kanji_number, weekday_kanji};
     const MONTHS: [&str; 12] =
         ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
     const DAYS: [&str; 7] = ["Thursday", "Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday"];
-    let month = MONTHS.get(m.saturating_sub(1)).copied().unwrap_or("January");
-    let day = DAYS.get(days_since.rem_euclid(7) as usize).copied().unwrap_or("Monday");
+    let japanese = lang.map(str::trim).is_some_and(|l| l.len() >= 2 && l.is_char_boundary(2) && l[..2].eq_ignore_ascii_case("ja"));
+    let month_en = MONTHS.get(m.saturating_sub(1)).copied().unwrap_or("January");
+    let day_en = DAYS.get(days_since.rem_euclid(7) as usize).copied().unwrap_or("Monday");
+    let (month, month_short, day, day_short) = if japanese {
+        let w = weekday_kanji(days_since);
+        (format!("{m}月"), format!("{m}月"), format!("{w}曜日"), w.to_string())
+    } else {
+        (month_en.to_string(), month_en.get(..3).unwrap_or(month_en).to_string(), day_en.to_string(), day_en.get(..3).unwrap_or(day_en).to_string())
+    };
+    let (am, pm) = if japanese { ("午前", "午後") } else { ("AM", "PM") };
     let era = era_of(y, m.min(12) as u32, d);
     // The year within the era; the western year before 明治.
     let era_year = era.map(|(_, n)| n).unwrap_or(y);
@@ -839,7 +860,7 @@ pub fn format_date_parts(fmt: &str, y: i64, m: usize, d: u32, (hh, mm, ss): (u32
         let c = chars.get(i).copied().unwrap_or(' ');
         // `am/pm` (any case) is one token: AM or PM.
         if chars.get(i..i + 5).is_some_and(|w| w.iter().collect::<String>().eq_ignore_ascii_case("am/pm")) {
-            out.push_str(if hh < 12 { "AM" } else { "PM" });
+            out.push_str(if hh < 12 { am } else { pm });
             i += 5;
             continue;
         }
@@ -872,12 +893,12 @@ pub fn format_date_parts(fmt: &str, y: i64, m: usize, d: u32, (hh, mm, ss): (u32
         let (take, text): (usize, String) = match (c, n) {
             ('y' | 'Y', 4..) => (n, format!("{y:04}")),
             ('y' | 'Y', _) => (n, format!("{:02}", y.rem_euclid(100))),
-            ('M', 4..) => (n, month.to_string()),
-            ('M', 3) => (n, month.get(..3).unwrap_or(month).to_string()),
+            ('M', 4..) => (n, month.clone()),
+            ('M', 3) => (n, month_short.clone()),
             ('M', 2) => (n, format!("{m:02}")),
             ('M', 1) => (n, m.to_string()),
-            ('d' | 'D', 4..) => (n, day.to_string()),
-            ('d' | 'D', 3) => (n, day.get(..3).unwrap_or(day).to_string()),
+            ('d' | 'D', 4..) => (n, day.clone()),
+            ('d' | 'D', 3) => (n, day_short.clone()),
             ('d' | 'D', 2) => (n, format!("{d:02}")),
             ('d' | 'D', 1) => (n, d.to_string()),
             ('H', 2..) => (n, format!("{hh:02}")),
@@ -1196,6 +1217,31 @@ mod tests {
         assert_eq!(date_picture(r#"DATE \@ "MMMM d, yyyy" \* MERGEFORMAT"#).as_deref(), Some("MMMM d, yyyy"));
         assert_eq!(date_picture(r#"TIME \@ HH:mm"#).as_deref(), Some("HH:mm"));
         assert_eq!(date_picture("DATE"), None);
+    }
+
+    /// A DATE field's names follow its text language, as Word for Mac's do (`dt1` probe,
+    /// 2026-10-19, Monday 20:43): Japanese 月曜日, 月, 10月, 午後; English Monday, Mon, October,
+    /// Oct, PM; the era and kanji tokens the same in both.
+    #[test]
+    fn date_names_follow_the_fields_language() {
+        let days = super::super::controls::days_from_civil(2026, 10, 19);
+        let f = |pic: &str, lang: Option<&str>| format_date_parts_in(pic, lang, 2026, 10, 19, (20, 43, 0), days);
+        let pic = "dddd|ddd|MMMM|MMM|AM/PM h時mm分|am/pm h:mm|ggge年M月d日(aaa)|ampm";
+        assert_eq!(f(pic, Some("ja-JP")), "月曜日|月|10月|10月|午後 8時43分|午後 8:43|令和8年10月19日(月)|午後");
+        assert_eq!(f(pic, Some("en-US")), "Monday|Mon|October|Oct|PM 8時43分|PM 8:43|令和8年10月19日(月)|午後");
+        assert_eq!(f(pic, None), f(pic, Some("en-US")));
+        assert_eq!(f("ggge年M月d日 dddd", Some("ja")), "令和8年10月19日 月曜日");
+    }
+
+    /// DATE and TIME fields show local time, as Word's do, not UTC.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn date_fields_show_local_time() {
+        let before = chrono::Local::now();
+        let got = format_date("yyyy-MM-dd HH:mm");
+        let after = chrono::Local::now();
+        let fmt = |t: &chrono::DateTime<chrono::Local>| t.format("%Y-%m-%d %H:%M").to_string();
+        assert!(got == fmt(&before) || got == fmt(&after), "{got} is neither {} nor {}", fmt(&before), fmt(&after));
     }
 
     /// Word's Japanese date pictures give what Word for Mac gave on 2026-10-18 (Sunday) at
