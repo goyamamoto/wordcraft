@@ -1280,15 +1280,18 @@ impl<'a> Builder<'a> {
 
     /// Shape `text` (a piece of the paragraph starting at byte `base`) in one style and append clusters.
     fn shape(&mut self, text: &str, base: usize, rc: &Arc<ResolvedChar>, kind_override: Option<ClKind>) {
-        self.shape_with(text, base, rc, kind_override, true);
+        self.shape_with(text, base, rc, kind_override, true, false);
     }
 
     /// `para_text`: `text` is paragraph text at `base`, so the paragraph's bidi levels apply
     /// (false for field results and list labels, which are shaped on their own).
-    fn shape_with(&mut self, text: &str, base: usize, rc: &Arc<ResolvedChar>, kind_override: Option<ClKind>, para_text: bool) {
+    /// `ea_hint`: every character is East Asian for the choice of font (a list number of an East
+    /// Asian format: Word draws its ① in the East Asian font, where ① in text takes the Latin one).
+    fn shape_with(&mut self, text: &str, base: usize, rc: &Arc<ResolvedChar>, kind_override: Option<ClKind>, para_text: bool, ea_hint: bool) {
         if text.is_empty() {
             return;
         }
+        let east_asian = |c: char| ea_hint || east_asian(c);
         // Complex-script characters (Persian, Arabic…) use the run's complex-script font, size,
         // bold and italic.
         let rc_cs: Option<Arc<ResolvedChar>> = text.chars().any(|c| rc.uses_complex(c)).then(|| Arc::new(rc.complex()));
@@ -1563,7 +1566,7 @@ impl<'a> Builder<'a> {
     /// One cluster for a whole object with its display text (fields, note references).
     fn shape_atomic(&mut self, text: &str, start: usize, end: usize, rc: &Arc<ResolvedChar>) {
         let before = self.clusters.len();
-        self.shape_with(text, start, rc, None, false);
+        self.shape_with(text, start, rc, None, false, false);
         let added: Vec<Cluster> = self.clusters.drain(before..).collect();
         let Some(first) = added.first() else {
             let si = self.style(rc, None, false, None);
@@ -1904,7 +1907,7 @@ impl Builder<'_> {
         self.shape_atomic(base, start, end, rc);
         let ci = self.clusters.len().checked_sub(1)?;
         let (bc, bg) = (self.clusters.len(), self.glyphs.len());
-        self.shape_with(ruby, 0, ruby_rc, None, false);
+        self.shape_with(ruby, 0, ruby_rc, None, false, false);
         let cl: Vec<Cluster> = self.clusters.drain(bc..).collect();
         let ruby_w: f32 = cl.iter().map(|c| c.adv).sum();
         let base_w = self.clusters.get(ci).map_or(0.0, |c| c.adv);
@@ -2414,14 +2417,18 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let break_only =
         b.clusters.iter().any(|c| c.kind == ClKind::PageBreak) && b.clusters.iter().all(|c| matches!(c.kind, ClKind::PageBreak | ClKind::Marker));
     let label = env.label.as_ref().filter(|_| !break_only).map(|(text, lvl)| {
-        let lc = p.mark.clone().overlaid(&lvl.chr);
+        let mut lc = p.mark.clone().overlaid(&lvl.chr);
+        // A list number is never kerned: Word for Mac draws an ア． label two em wide where the
+        // same ア． in text is kerned (`nl1`/`kn6` probes, 10.5-pt 游明朝, 2026-10-19).
+        lc.kern = Some(0.0);
         let rc = resolve(&lc);
         // A Symbol/Wingdings bullet (U+F0B7…) is drawn as its Unicode equivalent when the font
         // isn't installed (shaping maps it); the label's text reads as that character too.
         let shown = |t: &str| -> String { wordcraft_doc::symbol_fonts::map_text(&rc.font, t) };
         let before_c = b.clusters.len();
         let before_g = b.glyphs.len();
-        b.shape_with(text, 0, &rc, None, false);
+        // The number of an East Asian format in the East Asian font (nl1 probe: ① in 游明朝).
+        b.shape_with(text, 0, &rc, None, false, lvl.format.east_asian());
         let mut cl: Vec<Cluster> = b.clusters.drain(before_c..).collect();
         // A right-to-left paragraph's label reads right to left too ("1." shows as ".1").
         if rp.bidi {
@@ -2668,11 +2675,19 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
             let end = lab.x + lab.width;
             x = match suffix.unwrap_or(LevelSuffix::Tab) {
                 LevelSuffix::Tab => {
-                    let t = next_tab(end, &rp.tabs, default_tab, hanging_at).pos;
-                    // The level's own tab stop after the number, when it comes first.
-                    match level.and_then(|l| l.tab).filter(|p| p.is_finite() && *p > end + 0.01) {
-                        Some(p) if p < t => p,
-                        _ => t,
+                    // A number ending exactly at the hanging indent (１． two em wide under a
+                    // two-character hanging indent) puts the text there, where a typed tab would
+                    // go on to the next stop (Word for Mac, `nl1`/`tb1` probes, 2026-10-19).
+                    let own = level.and_then(|l| l.tab).filter(|p| p.is_finite());
+                    if let Some(p) = hanging_at.into_iter().chain(own).find(|p| (p - end).abs() <= 0.05) {
+                        p
+                    } else {
+                        let t = next_tab(end, &rp.tabs, default_tab, hanging_at).pos;
+                        // The level's own tab stop after the number, when it comes first.
+                        match own.filter(|p| *p > end + 0.01) {
+                            Some(p) if p < t => p,
+                            _ => t,
+                        }
                     }
                 }
                 LevelSuffix::Space => end + pl.styles.get(lab.style as usize).map(|s| s.size * 0.25).unwrap_or(3.0),
@@ -4227,5 +4242,41 @@ mod label_spacing_tests {
         for line in &lines[1..] {
             assert!((line.height - 17.52).abs() <= 0.25, "{}", line.height);
         }
+    }
+}
+
+#[cfg(test)]
+mod shaping_feature_tests {
+    use super::*;
+
+    fn rc(kern: Option<f32>, ligatures: Option<wordcraft_doc::props::Ligatures>) -> ResolvedChar {
+        let chr = CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), kern, ligatures, ..Default::default() };
+        // A sheet asking for no OpenType feature itself (the built-in one asks for ligatures).
+        let mut sheet = wordcraft_doc::styles::StyleSheet::default();
+        sheet.default_chr.ligatures = None;
+        sheet.resolve_char(None, &chr)
+    }
+
+    fn feature(f: &[wordcraft_fonts::Feature], tag: &[u8; 4]) -> Vec<(u32, u32, u32)> {
+        let tag = wordcraft_fonts::feature_value(tag, 0).tag;
+        f.iter().filter(|x| x.tag == tag).map(|x| (x.value, x.start, x.end)).collect()
+    }
+
+    /// The features of Word's two text paths for a `GPOS`-only font.
+    #[test]
+    fn features_follow_the_text_path() {
+        use wordcraft_doc::props::Ligatures;
+        let face = wordcraft_fonts::word::resolve("Source Sans 3", false, false).face;
+        let f = shaping_features(&rc(Some(1.0), Some(Ligatures::StandardContextual)), &face, false);
+        assert_eq!(feature(&f, b"kern"), vec![(1, 0, u32::MAX)], "{f:?}");
+        assert_eq!(feature(&f, b"liga"), vec![(1, 0, u32::MAX)]);
+        assert_eq!(feature(&f, b"clig"), vec![(1, 0, u32::MAX)]);
+        assert_eq!(feature(&f, b"calt"), vec![(0, 0, u32::MAX)]);
+        // The legacy path: no `kern` table in Source Sans 3, so no kerning.
+        let f = shaping_features(&rc(Some(1.0), None), &face, false);
+        assert_eq!(feature(&f, b"kern"), vec![(0, 0, u32::MAX)], "{f:?}");
+        assert_eq!(feature(&f, b"liga"), vec![(0, 0, u32::MAX)]);
+        let f = shaping_features(&rc(Some(1.0), Some(Ligatures::Standard)), &face, true);
+        assert_eq!(feature(&f, b"vert"), vec![(1, 0, u32::MAX)]);
     }
 }
