@@ -43,6 +43,15 @@ pub fn specs() -> Vec<CommandSpec> {
             .pure(),
         CommandSpec::new("view.focus", "Focus", "View › Immersive", |s, v| toggle(s, v, |x| &mut x.focus_mode)).pure(),
         CommandSpec::new("view.ruler", "Ruler", "View › Show", |s, v| toggle(s, v, |x| &mut x.ruler)).pure(),
+        // Crop marks at the corners of the text area (screen only; Word › Preferences › View).
+        // Without a value, toggles the setting in effect (the region's default until chosen).
+        CommandSpec::new("view.cropMarks", "Crop marks", "File › Options › Display", |s, v| {
+            let on = p::bool(v, "value").unwrap_or(!s.crop_marks());
+            s.view.crop_marks = Some(on);
+            Ok(json!({"value": on}))
+        })
+        .params(r#"{"value"?: bool}"#)
+        .pure(),
         // The drawing grid over the page (screen only; never printed or exported).
         CommandSpec::new("view.gridlines", "Gridlines", "View › Show", |s, v| toggle(s, v, |x| &mut x.gridlines))
             .params(r#"{"value"?: bool}"#)

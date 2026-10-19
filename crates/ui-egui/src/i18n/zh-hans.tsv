@@ -90,6 +90,7 @@
 	Color only	仅颜色
 	Compress punctuation at the start of a line	压缩行首标点
 	Couldn't make WordCraft the default: {error}	无法将 WordCraft 设为默认应用：{error}
+	Crop marks	裁剪标记
 	Custom dictionary	自定义词典
 	Dark page (white text on black)	深色页面（黑底白字）
 	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	拖出矩形以绘制表格，或拖出穿过单元格的线条以拆分单元格。按 Esc 结束。

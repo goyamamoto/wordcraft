@@ -114,6 +114,11 @@ pub struct ViewState {
     pub focus_mode: bool,
     pub marks: bool,
     pub ruler: bool,
+    /// Crop marks (Word › Preferences › View › Crop marks; 裁ちトンボ): an L at each corner of
+    /// the text area, on screen only. `None` is the region's default — on in Japan, as Word for
+    /// Mac with Japanese editing shows them; see [`Session::crop_marks`].
+    #[serde(default)]
+    pub crop_marks: Option<bool>,
     /// View › Show › Gridlines: the drawing grid over the page's text area (on screen only).
     pub gridlines: bool,
     /// Table Layout › View Gridlines: outlines of table cells (on screen only); on by default, as in Word.
@@ -216,6 +221,7 @@ impl Default for ViewState {
             focus_mode: false,
             marks: false,
             ruler: true,
+            crop_marks: None,
             gridlines: false,
             table_gridlines: true,
             nav_pane: false,
@@ -983,6 +989,13 @@ impl Session {
             Some(tag) => wordcraft_geom::Region::from_tag(tag),
             None => self.system_region.clone(),
         }
+    }
+
+    /// Whether crop marks are shown at the corners of the text area: the user's choice
+    /// (`view.cropMarks`), else on in the Japan region (Word for Mac shows them with Japanese
+    /// editing, observed 2026-10-19) and off elsewhere.
+    pub fn crop_marks(&self) -> bool {
+        self.view.crop_marks.unwrap_or_else(|| self.region().territory == "JP")
     }
 
     /// The unit rulers and dialogs show lengths in: the user's choice, else the region's.
