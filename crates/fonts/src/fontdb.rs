@@ -196,6 +196,15 @@ impl FontFace {
     pub fn has_kern_table(&self) -> bool {
         self.layout_tables().kern_table
     }
+    /// The `hhea` descender in font units, positive (the face's descent when the table has none).
+    pub fn hhea_descent(&self) -> f64 {
+        use skrifa::raw::TableProvider;
+        self.skrifa()
+            .and_then(|f| f.hhea().ok())
+            .map(|h| f64::from(h.descender().to_i16()).abs())
+            .filter(|d| *d > 0.0 && *d <= self.upem * 2.0)
+            .unwrap_or(self.descent.abs())
+    }
     /// Where in the design space glyphs, metrics and outlines come from.
     pub fn location(&self) -> LocationRef<'_> {
         (&self.location).into()

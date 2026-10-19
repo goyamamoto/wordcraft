@@ -108,7 +108,19 @@ pub fn specs() -> Vec<CommandSpec> {
             .key(super::mac_or("Ctrl+Shift+P", "Alt+Shift+P")),
         CommandSpec::new("insert.dropCap", "Drop Cap", "Insert › Text", |s, v| {
             let lines = p::u64(v, "lines").unwrap_or(3).min(10) as u8;
-            super::para::fmt(s, &|p| p.drop_cap = Some(lines))
+            super::para::fmt(s, &|p| p.drop_cap = Some(lines))?;
+            // Word sizes the letter itself and stores the size in its run (the Font box shows
+            // 38.5 for three lines of 10.5-pt 游明朝); None gives it the text's size back.
+            let story = s.sel.focus.story;
+            for path in super::selected_paths(s) {
+                let size = s.doc.para(story, &path).filter(|_| lines > 0).and_then(|para| wordcraft_layout::drop_cap_size(&s.doc, para));
+                let para = s.doc.para_mut(story, &path)?;
+                if let Some(first) = para.text.chars().next() {
+                    para.format(0, first.len_utf8(), &|c| c.size = size)?;
+                    para.touch();
+                }
+            }
+            super::sel_result(s)
         })
         .params(r#"{"lines"?: n (0 = none)}"#),
         CommandSpec::new("insert.horizontalLine", "Horizontal Line", "Home › Paragraph › Borders", |s, _| {

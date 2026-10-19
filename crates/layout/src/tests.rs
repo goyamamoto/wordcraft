@@ -2895,6 +2895,76 @@ fn drop_cap_indents_its_lines() {
     assert!(g < -20.0, "dy {g}");
 }
 
+/// Drop caps sized and placed as Word for Mac draws them (`dc1`–`dc5` probes, 2026-10-19): a
+/// letter whose run asks for a larger size than the text keeps it (a Word file stores the size
+/// Word computed); else the letter is sized, in half points rounded down, so that its ink spans
+/// from the top of the first line's em box (1 em above the bottom of the hhea descent) to line
+/// N's baseline; the text starts at the letter's advance; the letter's ink bottom sits on line
+/// N's baseline; and an exact line's baseline is 80% of the way down the line.
+#[test]
+fn drop_caps_as_word_for_mac_draws_them() {
+    use wordcraft_doc::props::LineSpacing;
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+    let body = "Every line of this paragraph wraps around a large first letter. ".repeat(6);
+    let lay_para = |first_size: Option<f32>| {
+        let mut p = wordcraft_doc::Paragraph::with_text(&body, chr.clone());
+        if let Some(s) = first_size {
+            p.format(0, 1, &|c| c.size = Some(s)).unwrap();
+        }
+        p.props.drop_cap = Some(3);
+        let mut d = Document::from_text("x");
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = lay(&d);
+        l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }).unwrap()
+    };
+    let pl = lay_para(None);
+    let (nc, lines, w) = pl.drop_cap.unwrap();
+    assert_eq!((nc, lines), (1, 3));
+    let c0 = &pl.clusters[0];
+    let st = &pl.styles[c0.style as usize];
+    let gid = pl.glyphs[c0.g0 as usize].gid;
+    let (_, y0, _, y1) = wordcraft_fonts::math::glyph_bounds(&st.face, gid).unwrap();
+    let upem = st.face.upem as f32;
+    let body_st = &pl.styles[pl.clusters[1].style as usize];
+    assert_eq!(body_st.size, 12.0);
+    let pitch = pl.lines[1].baseline - pl.lines[0].baseline;
+    let top = 1.0 - (st.face.hhea_descent() / st.face.upem) as f32;
+    let expected = ((2.0 * pitch + top * 12.0) / ((y1 - y0) / upem) * 2.0).floor() / 2.0;
+    assert!((st.size - expected).abs() < 0.01 && (40.0..80.0).contains(&st.size), "size {} expected {expected}", st.size);
+    // The text starts at the letter's advance: no gap.
+    assert!((w - pl.drop_cap_w).abs() < 0.01 && (w - st.size * st.face.advance(gid) as f32 / upem).abs() < 0.05, "width {w}");
+    let x = pl.lines[0].xs.first().copied().unwrap();
+    assert!((x - w).abs() < 0.01, "text at {x}, letter {w} wide");
+    // The ink bottom on line 3's baseline.
+    let ink = y0 * st.size / upem;
+    assert!((pl.drop_cap_ink - ink).abs() < 0.01);
+    let dy = pl.glyphs[c0.g0 as usize].dy;
+    let want = -((pl.lines[2].baseline - pl.lines[0].baseline) + ink);
+    assert!((dy - want).abs() < 0.01, "dy {dy}, expected {want}");
+    // A letter with its own larger size keeps it.
+    let pl = lay_para(Some(34.0));
+    let st = &pl.styles[pl.clusters[0].style as usize];
+    assert_eq!(st.size, 34.0);
+    assert!((pl.drop_cap.unwrap().2 - 34.0 * st.face.advance(gid) as f32 / upem).abs() < 0.05);
+    // `drop_cap_size` gives the computed size whatever the letter's run asks for.
+    let mut p = wordcraft_doc::Paragraph::with_text(&body, chr.clone());
+    p.format(0, 1, &|c| c.size = Some(34.0)).unwrap();
+    p.props.drop_cap = Some(3);
+    let d = Document::from_text("x");
+    assert_eq!(crate::drop_cap_size(&d, &p), Some(expected));
+    p.props.drop_cap = None;
+    assert_eq!(crate::drop_cap_size(&d, &p), None);
+    // An exact line: the baseline 80% of the way down.
+    let mut p = wordcraft_doc::Paragraph::with_text("Exact line", chr);
+    p.props.line_spacing = Some(LineSpacing::Exactly(30.0));
+    let mut d = Document::from_text("x");
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = lay(&d);
+    let pl = l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }).unwrap();
+    let line = &pl.lines[0];
+    assert!((line.baseline - line.top - 24.0).abs() < 0.01 && (line.height - 30.0).abs() < 0.01);
+}
+
 #[test]
 fn auto_hyphenation_breaks_long_words() {
     let text = "Internationalization considerations notwithstanding, administrators systematically reconsidered extraordinarily uncharacteristic responsibilities. ".repeat(4);
@@ -3555,7 +3625,8 @@ fn multiple_line_spacing_adds_its_leading_below_the_text() {
             );
         }
     }
-    // Exact spacing still keeps the descent below the baseline.
+    // Exact spacing puts the baseline 80% of the way down the line, whatever the font (Word for
+    // Mac: 24 pt below the top of a 30-pt line of 10.5-pt 游明朝 and of 12-pt Times New Roman).
     let mut d = Document::from_text("Exact");
     if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
         p.props.line_spacing = Some(LineSpacing::Exactly(30.0));
@@ -3563,7 +3634,7 @@ fn multiple_line_spacing_adds_its_leading_below_the_text() {
     let l = lay(&d);
     let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
     let line = &para.lines[0];
-    assert!((line.top + line.height - line.baseline - para.styles[0].descent).abs() < 0.01);
+    assert!((line.baseline - line.top - 24.0).abs() < 0.01, "baseline {} below the top", line.baseline - line.top);
 }
 
 #[test]
