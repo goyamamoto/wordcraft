@@ -9,7 +9,7 @@ use wordcraft_fonts::{BezPath, FaceRef};
 use wordcraft_geom::{Rect, Spin};
 
 use crate::math::MItem;
-use crate::para::{ClKind, LineEnd, ParaLayout};
+use crate::para::{ClKind, LineEnd, ParaLayout, StyleRun};
 use crate::{Page, Placed};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -617,12 +617,30 @@ fn rule(x0: f32, y0: f32, x1: f32, y1: f32, b: &Border, alpha: f32) -> Draw {
 
 /// Closed box around one line segment of a character-border group, widened by `space`.
 // Note: border drawn outside text advance, reserve width in line breaking if overlap shows.
+/// The run's own line: for horizontal text from its ascent above the baseline to its descent
+/// below (the Yu fonts' 1.43 em, Aptos's 1.22), in a vertical column that height centred on the
+/// em squares' centre line.
+fn run_box(pl: &ParaLayout, st: &StyleRun, base: f32) -> (f32, f32) {
+    let (a, d) = (st.ascent.max(0.0), st.descent.max(0.0));
+    if pl.vertical {
+        let c = base - st.shift - st.v_centre;
+        (c - (a + d) / 2.0, c + (a + d) / 2.0)
+    } else {
+        (base - st.shift - a, base - st.shift + d)
+    }
+}
+
+/// A character border around the text from `x0` to `x1` (the clusters' edges, the border's room
+/// included) on its run line `top`..`bottom`: the lines sit outside the text and its distance
+/// from the border, the top and bottom ones running the box's whole width so its corners close.
 fn char_box(b: &Border, x0: f32, x1: f32, top: f32, bottom: f32, alpha: f32, out: &mut Vec<Draw>) {
-    let (l, r) = (x0 - b.space, x1 + b.space);
-    out.push(rule(l, top, r, top, b, alpha));
-    out.push(rule(l, bottom, r, bottom, b, alpha));
-    out.push(rule(l, top, l, bottom, b, alpha));
-    out.push(rule(r, top, r, bottom, b, alpha));
+    let w = b.width.max(0.0);
+    let (l, r) = (x0 + w / 2.0, x1 - w / 2.0);
+    let (t, btm) = (top - b.space - w / 2.0, bottom + b.space + w / 2.0);
+    out.push(rule(x0, t, x1, t, b, alpha));
+    out.push(rule(x0, btm, x1, btm, b, alpha));
+    out.push(rule(l, t, l, btm, b, alpha));
+    out.push(rule(r, t, r, btm, b, alpha));
 }
 
 fn item(doc: &Document, it: &Placed, opts: &DisplayOptions, alpha: f32, out: &mut Vec<Draw>) {
@@ -749,33 +767,43 @@ fn lines(
                 }
             }
         }
-        // Backgrounds first: highlight and character shading; character borders group equal adjacent borders.
-        let mut open: Option<(Border, f32, f32)> = None;
+        // Backgrounds first: a highlight at the line's height; character shading on the run's own
+        // line — its ascent and descent at its baseline, in a vertical column the line's height
+        // centred on the em squares' centre line — as Word for Mac paints it (`cb1`/`cbv1`
+        // probes, 2026-10-19); character borders group equal adjacent borders into one box
+        // around that line (the tallest run's), drawn outside it and its distance from the text,
+        // in the room the clusters keep for it (`para::border_room`).
+        let mut open: Option<(Border, f32, f32, f32, f32)> = None;
         for k in line.c0..line.c1 {
             let (Some(c), Some(cx), Some(nx)) = (pl.clusters.get(k), line.cl_left(k), line.cl_right(k)) else { continue };
             let Some(st) = pl.styles.get(c.style as usize) else { continue };
             if c.kind == ClKind::Marker {
                 continue;
             }
-            if let Some(h) = st.rc.highlight.or(st.rc.shading) {
+            let (rt, rb) = run_box(pl, st, base);
+            if let Some(h) = st.rc.highlight {
                 out.push(Draw::Fill { rect: Rect::new(x + cx, top, (nx - cx).max(0.0), line.height), color: h, alpha, text_bg: true });
+            } else if let Some(h) = st.rc.shading {
+                out.push(Draw::Fill { rect: Rect::new(x + cx, rt, (nx - cx).max(0.0), (rb - rt).max(0.0)), color: h, alpha, text_bg: true });
             }
             let b = st.rc.border;
-            if let Some((ob, x0, x1)) = open.as_mut()
+            if let Some((ob, x0, x1, t, btm)) = open.as_mut()
                 && Some(*ob) == b
             {
                 // Right-to-left text grows leftwards.
                 *x0 = x0.min(x + cx);
                 *x1 = x1.max(x + nx);
+                *t = t.min(rt);
+                *btm = btm.max(rb);
                 continue;
             }
-            if let Some((ob, x0, x1)) = open.take() {
-                char_box(&ob, x0, x1, top, bottom, alpha, out);
+            if let Some((ob, x0, x1, t, btm)) = open.take() {
+                char_box(&ob, x0, x1, t, btm, alpha, out);
             }
-            open = b.map(|b| (b, x + cx, x + nx));
+            open = b.map(|b| (b, x + cx, x + nx, rt, rb));
         }
-        if let Some((ob, x0, x1)) = open {
-            char_box(&ob, x0, x1, top, bottom, alpha, out);
+        if let Some((ob, x0, x1, t, btm)) = open {
+            char_box(&ob, x0, x1, t, btm, alpha, out);
         }
         // Label.
         if li == pl.label_line()
