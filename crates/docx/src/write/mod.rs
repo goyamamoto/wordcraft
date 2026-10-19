@@ -1064,12 +1064,21 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, template_rel: O
         w.close(tag);
     }
     w.open("w:compat", &[]);
-    // CT_Compat: the older switches come before the `w:compatSetting`s.
-    if doc.settings.sum_paragraph_spacing {
-        w.empty("w:doNotUseHTMLParagraphAutoSpacing", &[]);
-    }
-    if s.allow_space_of_same_style_in_table {
-        w.empty("w:allowSpaceOfSameStyleInTable", &[]);
+    // CT_Compat: the older switches come before the `w:compatSetting`s, in the schema's order.
+    for (name, on) in [
+        ("w:spaceForUL", s.space_for_ul),
+        ("w:balanceSingleByteDoubleByteWidth", s.balance_single_byte_double_byte_width),
+        ("w:doNotLeaveBackslashAlone", s.do_not_leave_backslash_alone),
+        ("w:ulTrailSpace", s.ul_trail_space),
+        ("w:doNotExpandShiftReturn", s.do_not_expand_shift_return),
+        ("w:adjustLineHeightInTable", s.adjust_line_height_in_table),
+        ("w:doNotUseHTMLParagraphAutoSpacing", s.sum_paragraph_spacing),
+        ("w:useFELayout", s.use_fe_layout),
+        ("w:allowSpaceOfSameStyleInTable", s.allow_space_of_same_style_in_table),
+    ] {
+        if on {
+            w.empty(name, &[]);
+        }
     }
     let mode = doc.settings.compat_mode.clamp(11, 15).to_string();
     w.empty("w:compatSetting", &[("w:name", "compatibilityMode"), ("w:uri", "http://schemas.microsoft.com/office/word"), ("w:val", &mode)]);

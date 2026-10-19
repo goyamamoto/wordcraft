@@ -1387,7 +1387,10 @@ pub fn blank_document(region: &wordcraft_geom::Region) -> Document {
 /// sizes `w:sz="21"`), single line spacing with no space after and no widow control, a line grid
 /// of 18 pt (`w:docGrid w:type="lines" w:linePitch="360"`), 42 pt default tabs, header and
 /// footer 851 and 992 twips from the edge, 425 twips between columns, punctuation compression on, the East Asian language
-/// `ja-JP` in the document defaults and `w:themeFontLang`. The paper follows the region as before.
+/// `ja-JP` in the document defaults and `w:themeFontLang`, and Word's Japanese compatibility
+/// switches (`w:doNotExpandShiftReturn`, `w:ulTrailSpace`, `w:spaceForUL`,
+/// `w:balanceSingleByteDoubleByteWidth`, `w:doNotLeaveBackslashAlone`,
+/// `w:adjustLineHeightInTable`, `w:useFELayout`). The paper follows the region as before.
 pub fn japanese_normal(d: &mut Document) {
     let chr = &mut d.styles.default_chr;
     chr.size = Some(10.5);
@@ -1400,6 +1403,16 @@ pub fn japanese_normal(d: &mut Document) {
     d.settings.theme_font_lang_ea = Some("ja-JP".into());
     d.settings.punct_compression = wordcraft_doc::east_asian::PunctCompression::CompressPunctuation;
     d.settings.default_tab = 42.0;
+    // Word's Japanese Normal.dotm sets these compatibility switches (its English one sets none):
+    // a justified line ending with a manual line break is not spread, underlines run under
+    // trailing spaces.
+    d.settings.do_not_expand_shift_return = true;
+    d.settings.ul_trail_space = true;
+    d.settings.space_for_ul = true;
+    d.settings.balance_single_byte_double_byte_width = true;
+    d.settings.do_not_leave_backslash_alone = true;
+    d.settings.adjust_line_height_in_table = true;
+    d.settings.use_fe_layout = true;
     let sect = &mut d.last_section;
     sect.doc_grid = Some(wordcraft_doc::section::DocGrid { kind: wordcraft_doc::section::DocGridType::Lines, line_pitch: 18.0, char_space: 0 });
     sect.header = 851.0 / 20.0;
