@@ -1531,7 +1531,37 @@ fn display_has_glyphs_and_marks() {
     assert!(items.iter().any(|i| matches!(i, display::Draw::Glyphs { .. })));
     assert!(items.iter().any(|i| matches!(i, display::Draw::Line { .. })));
     assert!(items.iter().any(|i| matches!(i, display::Draw::Mark { ch: '¶', .. })));
-    assert!(items.iter().any(|i| matches!(i, display::Draw::Mark { ch: '→', .. })));
+    // The tab arrow as Word for Mac draws it: 0.6 em long and 0.46 em tall, centred in its cell.
+    let Some(display::Draw::MarkLines { lines, .. }) = items.iter().find(|i| matches!(i, display::Draw::MarkLines { .. })) else {
+        panic!("no tab mark")
+    };
+    let xs: Vec<f32> = lines.iter().flatten().map(|p| p.0).collect();
+    let ys: Vec<f32> = lines.iter().flatten().map(|p| p.1).collect();
+    let (x0, x1) = (xs.iter().copied().fold(f32::MAX, f32::min), xs.iter().copied().fold(f32::MIN, f32::max));
+    let (y0, y1) = (ys.iter().copied().fold(f32::MAX, f32::min), ys.iter().copied().fold(f32::MIN, f32::max));
+    let Some(Placed::Lines { para, x, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+    let size = para.styles[0].size;
+    let k = para.clusters.iter().position(|c| c.kind == crate::para::ClKind::Tab).unwrap();
+    let cell = para.lines[0].cl_right(k).unwrap() - para.lines[0].cl_left(k).unwrap();
+    let w = (size * 0.6).min(cell - 3.5);
+    assert!((x1 - x0 - w).abs() < 0.01 && (y1 - y0 - size * 0.46).abs() < 0.01, "{x0} {x1} {y0} {y1} cell {cell} size {size}");
+    assert!(((x0 + x1) / 2.0 - (x + para.lines[0].cl_left(k).unwrap() + cell / 2.0)).abs() < 0.01, "centred in the cell");
+    // A narrow cell: the arrow shrinks to the cell less 3.5 pt, then in height to twice its length;
+    // a right-to-left line points it left; hostile numbers never panic.
+    let narrow = |cell: f32, rtl: bool| {
+        let display::Draw::MarkLines { lines, .. } = display::tab_mark(100.0, 100.0 + cell, 50.0, 48.0, rtl) else { panic!() };
+        let xs: Vec<f32> = lines.iter().flatten().map(|p| p.0).collect();
+        let ys: Vec<f32> = lines.iter().flatten().map(|p| p.1).collect();
+        let w = xs.iter().copied().fold(f32::MIN, f32::max) - xs.iter().copied().fold(f32::MAX, f32::min);
+        let h = ys.iter().copied().fold(f32::MIN, f32::max) - ys.iter().copied().fold(f32::MAX, f32::min);
+        let tip = lines[0][1].0;
+        (w, h, tip)
+    };
+    let close = |a: (f32, f32, f32), b: (f32, f32, f32)| (a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01 && (a.2 - b.2).abs() < 0.01;
+    assert!(close(narrow(18.0, false), (14.5, 48.0 * 0.46, 100.0 + 9.0 + 7.25)), "{:?}", narrow(18.0, false));
+    assert!(close(narrow(6.0, false), (2.5, 5.0, 100.0 + 3.0 + 1.25)), "{:?}", narrow(6.0, false));
+    assert!((narrow(60.0, true).2 - (100.0 + 30.0 - 14.4)).abs() < 0.01);
+    let _ = display::tab_mark(f32::NAN, f32::INFINITY, f32::NAN, -3.0, false);
 }
 
 /// With Show/Hide ¶ on, an ideographic space (全角スペース) shows as the hollow grey square Word
@@ -1581,6 +1611,68 @@ fn ideographic_spaces_show_as_words_hollow_square_with_formatting_marks() {
     for s in [f32::NAN, f32::INFINITY, -5.0, 1e9] {
         let display::Draw::MarkBox { rect, .. } = display::ideographic_space_mark(f32::NAN, s, s) else { panic!() };
         assert!(rect.w.is_finite() && rect.h.is_finite() && rect.x.is_finite() && rect.y.is_finite());
+    }
+}
+
+/// With Japanese editing, Word for Mac draws the paragraph mark as a hooked arrow (↵) of a fixed
+/// 6.5 × 6 pt at 12, 24, 48 and 72 pt alike, standing on the baseline, and a manual line break
+/// as a ↓ of the text's size (0.4375 em wide, 0.708 em tall) — `sp4` probe, 2026-10-19; without
+/// it, ¶ and ↵ glyphs as before. A tracked paragraph's arrow keeps its reviser's colour.
+#[test]
+fn japanese_editing_draws_words_return_and_down_arrow_marks() {
+    let chr = CharProps { size: Some(24.0), ..Default::default() };
+    let mut d = Document::from_text("");
+    d.body.clear();
+    d.body.push(wordcraft_doc::para_block(Paragraph::with_text(&format!("a{}b", wordcraft_doc::para::LINE_BREAK), chr.clone())));
+    d.body.push(wordcraft_doc::para_block(Paragraph::with_text("c", CharProps { size: Some(72.0), ..chr })));
+    let l = lay(&d);
+    let extent = |pts: &[Vec<(f32, f32)>]| {
+        let all: Vec<(f32, f32)> = pts.iter().flatten().copied().collect();
+        let (x0, x1) = (all.iter().map(|p| p.0).fold(f32::MAX, f32::min), all.iter().map(|p| p.0).fold(f32::MIN, f32::max));
+        let (y0, y1) = (all.iter().map(|p| p.1).fold(f32::MAX, f32::min), all.iter().map(|p| p.1).fold(f32::MIN, f32::max));
+        (x0, x1, y0, y1)
+    };
+    let opts = display::DisplayOptions { marks: true, japanese_marks: true, ..Default::default() };
+    let items = display::page_display(&d, &l.pages[0], &opts);
+    assert!(!items.iter().any(|i| matches!(i, display::Draw::Mark { ch: '¶' | '↵', .. })), "no glyph marks with Japanese editing");
+    let arrows: Vec<(f32, f32, f32, f32, bool)> = items
+        .iter()
+        .filter_map(|i| match i {
+            display::Draw::MarkLines { lines, fills, .. } => {
+                let (x0, x1, y0, y1) = extent(&lines.iter().chain(fills.iter()).cloned().collect::<Vec<_>>());
+                Some((x0, x1, y0, y1, fills.is_empty()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(arrows.len(), 3, "a line break and two paragraph marks: {arrows:?}");
+    let Some(Placed::Lines { para, y, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+    let base0 = y + para.lines[0].baseline - para.lines[0].top;
+    // The line break: 10.5 × 17 pt (0.4375 × 0.708 em at 24 pt), its tip nearly on the baseline.
+    let (x0, x1, y0, y1, stroked_only) = arrows[0];
+    assert!(!stroked_only, "a filled head");
+    assert!((x1 - x0 - 10.5).abs() < 0.01 && (y1 - y0 - 24.0 * 0.698).abs() < 0.01, "{:?}", arrows[0]);
+    assert!((y1 - (base0 - 0.24)).abs() < 0.01, "tip 0.01 em above the baseline: {y1} vs {base0}");
+    // Both paragraph marks are 6.5 × 6 pt (24 pt and 72 pt text alike), standing on the baseline
+    // (the first after the second line, the one the break made).
+    for (k, a) in arrows[1..].iter().enumerate() {
+        let (x0, x1, y0, y1, stroked_only) = *a;
+        assert!(stroked_only);
+        assert!((x1 - x0 - (display::RETURN_MARK_W - 0.75)).abs() < 0.01 && (y1 - y0 - 5.5).abs() < 0.01, "{a:?}");
+        if k == 0 {
+            let base = y + para.lines[1].baseline - para.lines[0].top;
+            assert!((y0 - (base - display::RETURN_MARK_H)).abs() < 0.01, "top 6 pt above the baseline: {y0} vs {base}");
+        }
+    }
+    // Without Japanese editing: the ¶ and ↵ glyphs.
+    let items = display::page_display(&d, &l.pages[0], &display::DisplayOptions { marks: true, ..Default::default() });
+    assert_eq!(items.iter().filter(|i| matches!(i, display::Draw::Mark { ch: '¶', .. })).count(), 2);
+    assert_eq!(items.iter().filter(|i| matches!(i, display::Draw::Mark { ch: '↵', .. })).count(), 1);
+    assert!(!items.iter().any(|i| matches!(i, display::Draw::MarkLines { .. })));
+    // Hostile numbers never panic.
+    for v in [f32::NAN, f32::INFINITY, -1e9] {
+        let _ = display::return_mark(v, v, None);
+        let _ = display::line_break_mark(v, v, v);
     }
 }
 
