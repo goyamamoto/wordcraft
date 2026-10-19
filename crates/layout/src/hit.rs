@@ -276,7 +276,9 @@ impl DocLayout {
             // A page of turned text (a vertical section): the nearest turned line.
             return nearest_turned(p, story, x, y);
         }
-        let best = lines.iter().min_by(|a, b| score(a, x, y).total_cmp(&score(b, x, y)))?;
+        // Of lines scoring alike (the mark after a page break shares its break line's row), the
+        // narrower one: the mark's box when the point is on it.
+        let best = lines.iter().min_by(|a, b| score(a, x, y).total_cmp(&score(b, x, y)).then((a.right - a.left).total_cmp(&(b.right - b.left))))?;
         let off = best.para.off_at_x(best.li, x - best.x);
         Some(Pos { story: best.story, path: best.path.clone(), off })
     }

@@ -215,6 +215,10 @@ impl VisCl {
 /// Width of a paragraph mark's box, points: what a selection running past the paragraph's end
 /// highlights, and how much room the mark takes for assistive technology.
 pub const PARA_MARK_WIDTH: f32 = 5.0;
+/// Where the paragraph mark that follows a page break sits, from the line's right edge: Word for
+/// Mac draws it on the break's own row, its ↵ ending 0.75 pt inside the right margin (`bk1`
+/// probe, 2026-10-19), so the mark's box starts 8.25 pt from the edge.
+pub const PAGE_BREAK_MARK_INSET: f32 = 8.25;
 
 impl Line {
     /// Left edge of cluster `k` (a paragraph cluster index on this line).
@@ -3204,7 +3208,40 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
             top += even_row(lines.get_mut(row_first..).unwrap_or_default());
         }
         if i >= n {
-            // A paragraph ending with a line break gets an empty last line.
+            // A paragraph ending with a page break keeps its mark on the break's row, at the
+            // right margin (Word: the ↵ follows the dotted "Page Break" rule on the same line);
+            // one ending with a line or column break gets an empty last line (after a column
+            // break at the top of the next column).
+            if end == LineEnd::PageBreak
+                && let Some(prev) = lines.last()
+            {
+                let (x0, left, right) = if rtl_para {
+                    let x0 = (width - base_right + PAGE_BREAK_MARK_INSET).min(prev.visual_end_x() - 2.0);
+                    (x0, width - base_right, x0)
+                } else {
+                    let x0 = (base_right - PAGE_BREAK_MARK_INSET).max(prev.visual_end_x() + 2.0);
+                    (x0, x0, base_right)
+                };
+                lines.push(Line {
+                    top: prev.top,
+                    height: prev.height,
+                    baseline: prev.baseline,
+                    c0: n,
+                    c1: n,
+                    xs: vec![x0],
+                    leaders: Vec::new(),
+                    end: LineEnd::Para,
+                    start: pl.text_len,
+                    stop: pl.text_len,
+                    left,
+                    right,
+                    hyphen: None,
+                    beside: true,
+                    vis: Vec::new(),
+                    rtl: rtl_para,
+                });
+                break;
+            }
             if matches!(end, LineEnd::LineBreak | LineEnd::PageBreak | LineEnd::ColumnBreak) {
                 let (asc, desc) = pl.styles.get(mark_style as usize).map(|s| (s.ascent, s.descent)).unwrap_or((10.0, 3.0));
                 let natural = asc + desc;
