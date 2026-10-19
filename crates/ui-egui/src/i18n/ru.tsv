@@ -199,6 +199,7 @@
 	Only for the selected text	Только для выделенного текста
 	No document is open. Create a document or open one first.	Нет открытого документа. Сначала создайте или откройте документ.
 	Search	Поиск
+	This document uses the Aptos font, which isn't installed. Lines and pages may break differently from Word.	В этом документе используется шрифт Aptos, который не установлен. Разрывы строк и страниц могут отличаться от Word.
 	Title Bar	Строка заголовка
 	development build	сборка для разработки
 	Diagonal	Диагональ
@@ -221,6 +222,7 @@
 	Document Text	Текст документа
 	Document Title	Название документа
 	Documents you open will show up here.	Здесь появятся документы, которые вы открываете.
+	Don't show again	Больше не показывать
 	Dot-dash	Штрихпунктирный
 	Dot-dot-dash	Штрих-точка-точка
 	Dotted	Точечный
@@ -301,6 +303,7 @@
 	Formatting at Selection	Форматирование выделенного фрагмента
 	Formula	Формула
 	General	Общие
+	Get Aptos from Microsoft	Скачать Aptos у Microsoft
 	Go To	Перейти
 	Go to	Перейти
 	Go To (⌘⌥G)	Перейти (⌘⌥G)

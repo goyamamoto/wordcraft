@@ -91,6 +91,31 @@ Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
 Copy-Item (Join-Path $Bin 'wordcraft.exe'), (Join-Path $Bin 'wordcraft-cli.exe') $Stage
 
+# The Japanese dictionary wordcraft-jaseg reads beside the program (dict\lindera-ipadic): lindera's
+# prebuilt IPADIC, pinned like packaging/env.sh (JA_DICT_URL, JA_DICT_SHA256); its NOTICE.txt (the
+# NAIST/ICOT licence, which allows redistribution with it) ships in the folder. JA_DICT_DIR (an
+# unpacked lindera-ipadic folder) is used when set.
+$JaDictUrl = 'https://github.com/lindera/lindera/releases/download/v6.2.0/lindera-ipadic-6.2.0.zip'
+$JaDictSha256 = '5ed4bba6b429030b0387df67d40d5751d35dedef0306f4bac6d957cad5f04b72'
+if ($env:JA_DICT_DIR) {
+  $JaDictSrc = $env:JA_DICT_DIR
+} else {
+  $JaCache = Join-Path $TargetDir 'ja-dict'
+  New-Item -ItemType Directory -Force -Path $JaCache | Out-Null
+  $JaZip = Join-Path $JaCache 'lindera-ipadic-6.2.0.zip'
+  if (-not (Test-Path $JaZip) -or (Get-FileHash -Algorithm SHA256 $JaZip).Hash -ne $JaDictSha256.ToUpper()) {
+    Invoke-WebRequest -Uri $JaDictUrl -OutFile $JaZip
+  }
+  if ((Get-FileHash -Algorithm SHA256 $JaZip).Hash -ne $JaDictSha256.ToUpper()) { throw "$JaZip doesn't match its pinned SHA-256" }
+  $JaUnpacked = Join-Path $JaCache 'unpacked'
+  Remove-Item -Recurse -Force $JaUnpacked -ErrorAction SilentlyContinue
+  Expand-Archive -Path $JaZip -DestinationPath $JaUnpacked
+  $JaDictSrc = Join-Path $JaUnpacked 'lindera-ipadic'
+}
+if (-not (Test-Path (Join-Path $JaDictSrc 'dict.trie')) -or -not (Test-Path (Join-Path $JaDictSrc 'NOTICE.txt'))) { throw "$JaDictSrc isn't a lindera dictionary with its NOTICE.txt" }
+New-Item -ItemType Directory -Force -Path (Join-Path $Stage 'dict') | Out-Null
+Copy-Item -Recurse $JaDictSrc (Join-Path $Stage 'dict\lindera-ipadic')
+
 & (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'wordcraft.exe') (Join-Path $Stage 'wordcraft-cli.exe')
 
 # ---- MSI ---------------------------------------------------------------------------------------
@@ -141,6 +166,7 @@ $Portable = Join-Path $TargetDir "windows-package\wordcraft-$Version-windows-$Ar
 Remove-Item -Recurse -Force $Portable -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Portable | Out-Null
 Copy-Item (Join-Path $Stage '*.exe') $Portable
+Copy-Item -Recurse (Join-Path $Stage 'dict') $Portable
 foreach ($f in 'README.md', 'LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE') {
   $p = Join-Path $Root $f
   if (Test-Path $p) { Copy-Item $p $Portable }

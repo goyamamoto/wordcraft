@@ -67,6 +67,8 @@ mkdir -p "$STAGE/usr/share/icons"
 cp -R "$ROOT/assets/app-icon/hicolor" "$STAGE/usr/share/icons/"
 mkdir -p "$STAGE/usr/share/doc/wordcraft"
 copy_docs "$STAGE/usr/share/doc/wordcraft"
+# The Japanese dictionary: /usr/share/wordcraft/dict/lindera-ipadic, beside /usr/bin's binaries.
+copy_ja_dict "$STAGE/usr/share/wordcraft/dict"
 
 if command -v desktop-file-validate >/dev/null; then
   desktop-file-validate "$STAGE/usr/share/applications/$APP_ID.desktop"

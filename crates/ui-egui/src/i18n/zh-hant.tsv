@@ -82,6 +82,7 @@
 	Crop marks	裁切標記
 	Custom dictionary	自訂字典
 	Dark page (white text on black)	深色頁面（黑底白字）
+	Don't show again	不再顯示
 	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	拖出矩形以繪製表格，或拖出穿過儲存格的線條以分割儲存格。按 Esc 結束。
 	Draw Table	繪製表格
 	Define New Multilevel List	定義新的多層次清單
@@ -209,6 +210,7 @@
 	Page Border	頁面框線設定
 	Apply to:	套用至：
 	These marks show even when Show/Hide ¶ is off.	即使關閉「顯示/隱藏 ¶」，這些標記也會顯示。
+	This document uses the Aptos font, which isn't installed. Lines and pages may break differently from Word.	此文件使用了未安裝的 Aptos 字型。換行與分頁可能與 Word 不同。
 	Title Bar	標題列
 	Typing replaces selected text	輸入的內容取代選取的文字
 	Update fields before printing	列印前更新功能變數
@@ -436,6 +438,7 @@
 	Formatting at Selection	選取範圍的格式
 	Formula	公式
 	General	一般
+	Get Aptos from Microsoft	從 Microsoft 取得 Aptos
 	Go To	移至
 	Go to	移至
 	Go To (⌘⌥G)	移至 (⌘⌥G)

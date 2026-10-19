@@ -81,6 +81,7 @@
 	Crop marks	裁ちトンボ
 	Custom dictionary	ユーザー辞書
 	Dark page (white text on black)	ダーク ページ (黒地に白い文字)
+	Don't show again	今後表示しない
 	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	四角形をドラッグして表を描くか、セルを横切る線を引いて分割します。Esc で終了します。
 	Draw Table	表を描画
 	Define New Multilevel List	新しいアウトラインの定義
@@ -208,6 +209,7 @@
 	Page Border	ページ罫線の設定
 	Apply to:	適用先:
 	These marks show even when Show/Hide ¶ is off.	これらの記号は、[編集記号の表示/非表示 ¶] がオフでも表示されます。
+	This document uses the Aptos font, which isn't installed. Lines and pages may break differently from Word.	このドキュメントは Aptos フォントを使用していますが、インストールされていません。行やページの区切りが Word と異なる場合があります。
 	Title Bar	タイトル バー
 	Typing replaces selected text	入力時に選択文字列を置き換える
 	Update fields before printing	印刷前にフィールドを更新する
@@ -435,6 +437,7 @@
 	Formatting at Selection	選択範囲の書式
 	Formula	計算式
 	General	全般
+	Get Aptos from Microsoft	Microsoft から Aptos を入手
 	Go To	ジャンプ
 	Go to	移動
 	Go To (⌘⌥G)	ジャンプ (⌘⌥G)

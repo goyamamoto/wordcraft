@@ -564,6 +564,14 @@ mod tests {
     /// test run); wait for the outcome itself.
     fn settle_until(h: &mut egui_kittest::Harness<'_, WordApp>, done: impl Fn(&WordApp) -> bool) {
         let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        // The button just clicked keeps the focus; when the worker's result removes it (the
+        // dialog closes, the list empties) in a later frame, AccessKit's tree would name a focused
+        // node that's gone. Nothing needs the focus while waiting.
+        h.ctx.memory_mut(|m| {
+            if let Some(id) = m.focused() {
+                m.surrender_focus(id);
+            }
+        });
         while !done(h.state()) {
             h.run_steps(2);
             assert!(std::time::Instant::now() < end, "timed out waiting for the recovery");

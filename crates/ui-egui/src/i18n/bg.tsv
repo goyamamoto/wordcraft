@@ -147,12 +147,14 @@
 	Page Border	Рамка на страницата
 	Apply to:	Прилагане към:
 	Whole document	Целия документ
+	This document uses the Aptos font, which isn't installed. Lines and pages may break differently from Word.	Този документ използва шрифта Aptos, който не е инсталиран. Пренасянията на редове и страници може да се различават от Word.
 	This section	Този раздел
 	Fill	Запълване
 	Setting:	Настройка:
 	3-D	3-D
 	Custom	Потребителски
 	Style:	Стил:
+	Don't show again	Да не се показва отново
 	Dot dash	Точка-тире
 	Triple	Тройна
 	Between	Между
@@ -376,6 +378,7 @@
 	Formatting at Selection	Форматиране при селекцията
 	Formula	Формула
 	General	Общи
+	Get Aptos from Microsoft	Изтегляне на Aptos от Microsoft
 	Go To	Отиване до
 	Go To (⌘⌥G)	Отиване до (⌘⌥G)
 	Go To…	Отиване до…
