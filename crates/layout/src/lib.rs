@@ -1047,6 +1047,13 @@ fn layout_box(
     // Word 16.113.3: the override applies in modes 11/12/14, but not mode 15.
     let allow_same_style_space =
         in_cell && ctx.doc.settings.allow_space_of_same_style_in_table && matches!(ctx.doc.settings.compat_mode, 11 | 12 | 14);
+    // Text in a table cell snaps to the line grid only with `w:adjustLineHeightInTable` (Word's
+    // Japanese template sets it; `cp5` probes, Word for Mac 2026-10-19: without it a cell's
+    // 10.5 pt lines sit 15.1 pt apart on an 18 pt grid, the character pitch still applying).
+    let outer_grid = ctx.grid;
+    if in_cell && !ctx.doc.settings.adjust_line_height_in_table {
+        ctx.grid.line = None;
+    }
     let mut items = Vec::new();
     // Pictures behind the text go first; `behind` counts them.
     let mut behind = 0;
@@ -1196,6 +1203,7 @@ fn layout_box(
     }
     let floats_bottom = float_tables.iter().map(|r| r.bottom()).fold(0.0, f32::max);
     ctx.hide_deleted = outer_hide;
+    ctx.grid = outer_grid;
     BoxLayout { items, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0) }
 }
 
