@@ -1073,7 +1073,7 @@ impl Exporter<'_> {
                 s.set_fill(None);
                 s.set_stroke(None);
             }
-            Draw::Mark { .. } | Draw::MarkText { .. } => {}
+            Draw::Mark { .. } | Draw::MarkText { .. } | Draw::MarkBox { .. } => {}
             Draw::Clip { rect, items } => {
                 let Some(clip) = rect_path(rect) else { return };
                 s.push_clip_path(&clip, &FillRule::NonZero);

@@ -1534,6 +1534,56 @@ fn display_has_glyphs_and_marks() {
     assert!(items.iter().any(|i| matches!(i, display::Draw::Mark { ch: '→', .. })));
 }
 
+/// With Show/Hide ¶ on, an ideographic space (全角スペース) shows as the hollow grey square Word
+/// for Mac draws (24, 36 and 72 pt Yu Mincho, Yu Gothic and MS Mincho, 2026-10-19): 3 pt
+/// narrower than the em and 0.75 em + 1 pt tall, centred on the character's cell and on the
+/// font's ideographic em box (0.88 em above the baseline for the Yu fonts), in the same grey for
+/// red text; a half-width space keeps its dot.
+#[test]
+fn ideographic_spaces_show_as_words_hollow_square_with_formatting_marks() {
+    let yu = wordcraft_fonts::word::resolve("Yu Mincho", false, false);
+    if !yu.face.covers('あ') {
+        return;
+    }
+    let chr = CharProps { font: Some("Yu Mincho".into()), font_ea: Some("Yu Mincho".into()), size: Some(24.0), ..Default::default() };
+    let mut d = Document::from_text("");
+    d.body.clear();
+    d.body.push(wordcraft_doc::para_block(Paragraph::with_text("あ\u{3000}い a\u{3000}b", chr.clone())));
+    d.body.push(wordcraft_doc::para_block(Paragraph::with_text(
+        "赤\u{3000}字",
+        CharProps { color: Some(wordcraft_doc::TextColor::Rgb(Rgb(0xFF, 0, 0))), size: Some(36.0), ..chr },
+    )));
+    let l = lay(&d);
+    let items = display::page_display(&d, &l.pages[0], &display::DisplayOptions { marks: true, ..Default::default() });
+    let boxes: Vec<(Rect, Rgb)> =
+        items.iter().filter_map(|i| if let display::Draw::MarkBox { rect, color } = i { Some((*rect, *color)) } else { None }).collect();
+    assert_eq!(boxes.len(), 3, "{boxes:?}");
+    let dots = items.iter().filter(|i| matches!(i, display::Draw::Mark { ch: '·', .. })).count();
+    assert_eq!(dots, 1, "the half-width space keeps its dot");
+    let Some(Placed::Lines { para, x, y, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+    let line = &para.lines[0];
+    let (cl, cr) = (x + line.cl_left(1).unwrap(), x + line.cl_right(1).unwrap());
+    assert!((cr - cl - 24.0).abs() < 0.01, "an em cell: {cl} {cr}");
+    let (r, c) = boxes[0];
+    assert_eq!(c, display::IDEOGRAPHIC_SPACE_MARK);
+    assert!((r.w - 21.0).abs() < 1e-3 && (r.h - 19.0).abs() < 1e-3, "{r:?}");
+    assert!((r.x + r.w / 2.0 - (cl + cr) / 2.0).abs() < 0.01, "centred on the cell: {r:?} {cl} {cr}");
+    let base = y + line.baseline - line.top;
+    let centre = base - (0.88 - 0.5) * 24.0;
+    assert!((r.y + r.h / 2.0 - centre).abs() < 0.3, "centred on the em box: {} vs {centre}", r.y + r.h / 2.0);
+    // The second square sits an em further on: a　b.
+    assert!((boxes[1].0.x - r.x) > 24.0, "{boxes:?}");
+    // 36 pt red text: 33 × 28, the same grey.
+    let (r2, c2) = boxes[2];
+    assert_eq!(c2, display::IDEOGRAPHIC_SPACE_MARK);
+    assert!((r2.w - 33.0).abs() < 1e-3 && (r2.h - 28.0).abs() < 1e-3, "{r2:?}");
+    // Hostile sizes never panic.
+    for s in [f32::NAN, f32::INFINITY, -5.0, 1e9] {
+        let display::Draw::MarkBox { rect, .. } = display::ideographic_space_mark(f32::NAN, s, s) else { panic!() };
+        assert!(rect.w.is_finite() && rect.h.is_finite() && rect.x.is_finite() && rect.y.is_finite());
+    }
+}
+
 #[test]
 fn a_tracked_paragraph_mark_shows_in_its_authors_colour() {
     let mut d = Document::from_text("Split\nhere");
