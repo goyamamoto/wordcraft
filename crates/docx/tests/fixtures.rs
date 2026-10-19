@@ -2949,3 +2949,23 @@ fn percentage_shading_patterns_tint_the_fill() {
     assert_eq!(at(3), Some(Rgb(0xFF, 0xFF, 0x00)));
     assert_eq!(at(4), Some(Rgb(0x00, 0xFF, 0x00)));
 }
+
+/// Word for Mac's own 縦書き saves `tbRlV`, whose lines it stacks from the left: the section keeps
+/// that apart from `tbRl` and writes it back.
+#[test]
+fn a_tbrlv_section_reads_as_left_to_right_stacking_and_round_trips() {
+    use wordcraft_doc::props::TextDirection;
+    let d = read_body(r#"<w:p><w:r><w:t>縦</w:t></w:r></w:p><w:sectPr><w:textDirection w:val="tbRlV"/></w:sectPr>"#);
+    assert_eq!(d.last_section.text_direction, TextDirection::Down);
+    assert!(d.last_section.stack_left_to_right);
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<w:textDirection w:val="tbRlV"/>"#), "{xml}");
+    let back = wordcraft_docx::read(&bytes).unwrap();
+    assert!(back.last_section.stack_left_to_right && back.last_section.text_direction == TextDirection::Down);
+    // `tbRl` stays right to left.
+    let r = read_body(r#"<w:p/><w:sectPr><w:textDirection w:val="tbRl"/></w:sectPr>"#);
+    assert!(r.last_section.text_direction == TextDirection::Down && !r.last_section.stack_left_to_right);
+}
