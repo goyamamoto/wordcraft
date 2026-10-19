@@ -1266,44 +1266,46 @@ fn turned_lines(l: &DocLayout) -> &Placed {
     l.pages[0].items.iter().find(|it| matches!(it, Placed::Lines { path, .. } if path.0 == [1, 0, 1, 0])).unwrap()
 }
 
-/// Table Layout › Text Direction (#226): turned cell text runs along the cell's height, the row
-/// grows to fit it, and caret, clicks and drawing follow the turn.
+/// Table Layout › Text Direction (#226): turned cell text runs along the cell's height — the
+/// row's, which it never grows (Word for Mac, `tv1`–`tv4` probes, 2026-10-19): the text wraps
+/// into columns the row's height long, stacking from the cell's right edge, and caret, clicks and
+/// drawing follow the turn.
 #[test]
 fn turned_cell_text_runs_down_the_cell() {
     let text = "Turned cell text";
     let d = turned_table(TextDirection::Down, text, None);
     let l = lay(&d);
     let it = turned_lines(&l);
-    assert!(matches!(it, Placed::Lines { turn: TextDirection::Down, l0: 0, l1: 1, .. }), "one unwrapped line: {it:?}");
+    let Placed::Lines { turn: TextDirection::Down, l0: 0, l1, .. } = it else { panic!("{it:?}") };
+    assert!(*l1 > 2, "wrapped into columns a line tall: {it:?}");
     let b = it.turned_bounds().unwrap();
-    // Tall and narrow, against the cell's right edge (cell 2 spans x 228..384, 5.4pt margins).
-    assert!(b.h > 60.0 && b.w < 20.0, "{b:?}");
-    assert!((b.right() - (72.0 + 312.0 - 5.4)).abs() < 1.0 && b.x > 72.0 + 156.0, "{b:?}");
-    // The row grew to hold the text: the next paragraph starts below it.
-    let after = l.caret(&Pos::body(2, 0)).unwrap();
-    assert!(after.top > b.bottom(), "{after:?} vs {b:?}");
+    // The row is one line tall — the plain cell's — and the next paragraph starts right below.
     let cell = l.pages[0].items.iter().find_map(|i| if let Placed::Cell { rect, cell: 1, .. } = i { Some(*rect) } else { None }).unwrap();
-    assert!(cell.h >= b.h, "{cell:?}");
-    // The caret lies across the page and moves down as the text goes on.
+    assert!(cell.h < 20.0 && b.h <= cell.h && b.y >= cell.y - 0.01, "{cell:?} {b:?}");
+    let after = l.caret(&Pos::body(2, 0)).unwrap();
+    assert!(after.top >= cell.bottom() - 0.01 && after.top < cell.bottom() + 2.0, "{after:?} vs {cell:?}");
+    // The columns stack leftwards from the cell's right edge (cell 2 spans x 228..384, 5.4pt margins).
+    assert!((b.right() - (72.0 + 312.0 - 5.4)).abs() < 1.0 && b.w > 60.0 && b.x > 72.0 + 156.0, "{b:?}");
+    // The caret lies across the page; the text goes on down the first column, then to the next.
     let pos = |off| Pos { story: StoryRef::Body, path: Path(vec![1, 0, 1, 0]), off };
     let c0 = l.caret(&pos(0)).unwrap();
     let c1 = l.caret(&pos(text.len())).unwrap();
     assert!(c0.width > 5.0 && c0.height == 0.0, "{c0:?}");
-    assert!((c0.top - b.y).abs() < 1.0 && c1.top > c0.top + 50.0, "{c0:?} {c1:?}");
+    assert!((c0.top - b.y).abs() < 1.0 && c1.x < c0.x - 30.0, "{c0:?} {c1:?}");
     assert!(c0.x >= b.x - 0.5 && c0.x + c0.width <= b.right() + 0.5, "{c0:?} {b:?}");
-    // A click on the turned text lands in it, by how far down the click is.
-    let hit = l.hit(0, b.x + b.w / 2.0, b.y + b.h * 0.6, StoryRef::Body).unwrap();
+    // A click on the turned text lands in it, by how far down and across the click is.
+    let hit = l.hit(0, b.right() - c0.width / 2.0, b.y + b.h * 0.9, StoryRef::Body).unwrap();
     assert_eq!(hit.path, Path(vec![1, 0, 1, 0]));
-    assert!(hit.off > 3 && hit.off < text.len(), "{hit:?}");
-    // Selection highlights are turned too: tall, inside the text's area.
+    assert!(hit.off > 0 && hit.off < text.len(), "{hit:?}");
+    // Selection highlights are turned too: one a column, from the row's top.
     let sel = l.selection_rects(&d, &pos(0), &pos(text.len()), 0);
-    assert!(sel.iter().all(|(_, r)| r.h > r.w && r.x >= b.x - 1.0 && r.right() <= b.right() + 1.0), "{sel:?}");
+    assert!(sel.len() > 2 && sel.iter().all(|(_, r)| (r.y - b.y).abs() < 1.0 && r.x >= b.x - 1.0 && r.right() <= b.right() + 1.0), "{sel:?}");
     // Drawn in a turned frame.
     let draws = display::page_display(&d, &l.pages[0], &Default::default());
     let turned = draws.iter().find_map(|x| if let display::Draw::Turned { turn, items, .. } = x { Some((*turn, items)) } else { None });
     let (turn, items) = turned.expect("turned draw");
     assert_eq!(turn, TextDirection::Down);
-    assert!(items.iter().any(|x| matches!(x, display::Draw::Glyphs { text, .. } if text.contains("Turned"))), "{items:?}");
+    assert!(items.iter().any(|x| matches!(x, display::Draw::Glyphs { text, .. } if text.starts_with("Tu"))), "{items:?}");
 }
 
 #[test]
@@ -1316,9 +1318,68 @@ fn turned_up_cell_text_reads_bottom_to_top() {
     assert!((b.x - (72.0 + 156.0 + 5.4)).abs() < 1.0, "{b:?}");
     let pos = |off| Pos { story: StoryRef::Body, path: Path(vec![1, 0, 1, 0]), off };
     let (c0, c1) = (l.caret(&pos(0)).unwrap(), l.caret(&pos(text.len())).unwrap());
-    assert!((c0.top - b.bottom()).abs() < 1.0 && c1.top < c0.top - 50.0, "{c0:?} {c1:?} {b:?}");
-    let hit = l.hit(0, b.x + b.w / 2.0, b.bottom() - 2.0, StoryRef::Body).unwrap();
+    // The text climbs the first column and goes on in the next one to the right.
+    assert!((c0.top - b.bottom()).abs() < 1.0 && c1.x > c0.x + 30.0, "{c0:?} {c1:?} {b:?}");
+    let hit = l.hit(0, b.x + 2.0, b.bottom() - 2.0, StoryRef::Body).unwrap();
     assert_eq!((hit.path, hit.off), (Path(vec![1, 0, 1, 0]), 0));
+}
+
+/// Word for Mac (`tv2`, `tv3` and `tv4` probes, 10.5-pt 游明朝 on an 18-pt line grid,
+/// 2026-10-19): a turned cell never grows its row. Forty-six kana in a 120-pt cell of their own
+/// get a row one empty line tall — 18 pt plus the two 0.5-pt border bands, 24-pt text or not —
+/// and stand one to a column, 18 pt apart, the columns running on past the cell's left edge,
+/// where they are cut off; an exact 60-pt row holds five to a column, an at-least 100-pt one
+/// nine, and the row keeps that height.
+#[test]
+fn turned_cells_never_grow_their_row_as_word_for_mac_lays_them_out() {
+    use wordcraft_doc::props::HeightRule;
+    use wordcraft_doc::section::{DocGrid, DocGridType};
+    if !wordcraft_fonts::word::resolve("游明朝", false, false).face.covers('語') {
+        return;
+    }
+    let kana = "あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをん";
+    let table = |size: f32, height: Option<(f32, HeightRule)>| {
+        let props = wordcraft_doc::CharProps {
+            font: Some("游明朝".into()),
+            font_ea: Some("游明朝".into()),
+            size: Some(size),
+            lang_ea: Some("ja-JP".into()),
+            ..Default::default()
+        };
+        let mut d = Document::from_text("");
+        d.last_section.doc_grid = Some(DocGrid { kind: DocGridType::Lines, line_pitch: 18.0, char_space: 0 });
+        // As Word's Japanese Normal: cell text on the line grid.
+        d.settings.adjust_line_height_in_table = true;
+        let mut t = Table::new(1, 1, 120.0);
+        let mut p = wordcraft_doc::Paragraph::with_text(kana, props);
+        p.mark = wordcraft_doc::CharProps { size: Some(10.5), lang_ea: Some("ja-JP".into()), ..Default::default() };
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+        t.rows[0].cells[0].props.text_direction = TextDirection::Down;
+        if let Some((h, rule)) = height {
+            t.rows[0].props.height = Some(h);
+            t.rows[0].props.height_rule = rule;
+        }
+        d.body = vec![Arc::new(Block::Table(t))];
+        let l = lay(&d);
+        let (rect, clip) =
+            l.pages[0].items.iter().find_map(|i| if let Placed::Cell { rect, clip, .. } = i { Some((*rect, *clip)) } else { None }).unwrap();
+        let it = l.pages[0].items.iter().find(|it| matches!(it, Placed::Lines { path, .. } if path.0 == [0, 0, 0, 0])).unwrap();
+        let Placed::Lines { l0, l1, .. } = it else { panic!("{it:?}") };
+        let pos = |off| Pos { story: StoryRef::Body, path: Path(vec![0, 0, 0, 0]), off };
+        let pitch = l.caret(&pos(0)).unwrap().x - l.caret(&pos(3)).unwrap().x;
+        (rect.h, l1 - l0, pitch, clip, it.turned_bounds().unwrap())
+    };
+    let near = |a: f32, b: f32| (a - b).abs() < 0.05;
+    let (h, cols, pitch, clip, b) = table(10.5, None);
+    assert!(near(h, 19.0) && cols == 46 && near(pitch, 18.0) && clip, "{h} {cols} {pitch} {clip}");
+    // The columns start at the cell's right edge (72 + 120 − 5.4) and run off the page.
+    assert!((b.right() - 186.6).abs() < 0.5 && b.x < 0.0, "{b:?}");
+    let (h, cols, pitch, ..) = table(24.0, None);
+    assert!(near(h, 19.0) && cols == 46 && near(pitch, 36.0), "{h} {cols} {pitch}");
+    let (h, cols, _, clip, _) = table(10.5, Some((60.0, HeightRule::Exact)));
+    assert!(near(h, 60.0) && cols == 10 && clip, "{h} {cols} {clip}");
+    let (h, cols, _, clip, _) = table(10.5, Some((100.0, HeightRule::AtLeast)));
+    assert!(near(h, 101.0) && cols == 6 && !clip, "{h} {cols} {clip}");
 }
 
 #[test]

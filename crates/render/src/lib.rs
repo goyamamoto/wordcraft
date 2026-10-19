@@ -1289,15 +1289,17 @@ mod tests {
     }
 
     /// Table Layout › Text Direction (#226): a turned cell's text is painted running down the
-    /// cell, not across it.
+    /// cell, not across it (the row is given an exact height: turned text never grows its row).
     #[test]
     fn turned_cell_text_is_painted_turned() {
-        use wordcraft_doc::props::TextDirection;
+        use wordcraft_doc::props::{HeightRule, TextDirection};
         let ink = |dir: TextDirection| {
             let mut d = Document::from_text("before\nafter");
             let mut t = wordcraft_doc::Table::new(1, 2, 400.0);
             t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("WWWWWWWWWWWW", Default::default()))];
             t.rows[0].cells[0].props.text_direction = dir;
+            t.rows[0].props.height = Some(150.0);
+            t.rows[0].props.height_rule = HeightRule::Exact;
             d.insert_block(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
             let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
             let img = render_page(&d, &l.pages[0], 1.0, &RenderOptions::default());
