@@ -1315,38 +1315,72 @@ impl Paragraph {
         }
         (a, e)
     }
-    /// Sentence around `off` (Ctrl+click): ends after `.`, `!`, `?` and following spaces.
+    /// Sentence around `off` (Ctrl+click), as Word for Mac bounds it: see [`sentence_ends`].
     pub fn sentence_at(&self, off: usize) -> (usize, usize) {
         let off = self.clamp(off);
-        let t = &self.text;
-        let mut a = 0;
-        let mut prev_end = false;
-        for (i, c) in t.char_indices() {
-            if i >= off {
-                break;
-            }
-            if prev_end && c != ' ' {
-                a = i;
-            }
-            if matches!(c, '.' | '!' | '?') {
-                prev_end = true;
-            } else if c != ' ' {
-                prev_end = false;
-            }
-        }
-        let mut b = t.len();
-        let mut ended = false;
-        for (i, c) in t.get(off..).unwrap_or("").char_indices() {
-            if ended && c != ' ' {
-                b = off + i;
-                break;
-            }
-            if matches!(c, '.' | '!' | '?') {
-                ended = true;
-            }
-        }
+        let ends = sentence_ends(&self.text);
+        let a = ends.iter().copied().rfind(|&e| e <= off).unwrap_or(0);
+        let b = ends.iter().copied().find(|&e| e > off).unwrap_or(self.text.len());
         (a, b)
     }
+}
+
+/// Where the sentences of `text` end (byte offsets after each sentence, its trailing spaces
+/// included), as Word for Mac bounds them — its `sentences` read with Japanese editing
+/// (`sn1`–`sn3` probes, 2026-10-19): a full-width 。！？． ends a sentence whatever follows
+/// (「本当？」と聞いた。 is two: 「本当？」 and と聞いた。; ひらがな。ぁ次 breaks before ぁ); a
+/// Latin `.`, `!` or `?` ends one when what follows it is a space, tab, no-break or ideographic
+/// space, a line break, the paragraph's end or a straight quote (`"Hi." Then` ends before the
+/// quote, which starts the next sentence), not a letter or digit (Go.Now, No.5, 3.14) — and a
+/// `.` after a capital that follows another `.` is an abbreviation (U.S.A. is big. is one
+/// sentence, where Mr. and e.g. and a lone A. end one). More terminators (?!, 。。。, ...),
+/// closing brackets and curly quotes (）」』】〕〉》］｝ ) ] } ” ’) after a terminator belong to
+/// the sentence, then its spaces (a tab and 全角スペース too). … 、，、 and a `.` inside a word
+/// end nothing.
+pub fn sentence_ends(text: &str) -> Vec<usize> {
+    const FULL: &str = "。！？．";
+    const LATIN: &str = ".!?";
+    const CLOSERS: &str = ")]}”’）」』】〕〉》］｝";
+    const SPACES: &str = " \t\u{a0}\u{3000}\n\u{b}";
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let at = |i: usize| chars.get(i).map(|&(_, c)| c);
+    let mut ends = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let Some(c) = at(i) else { break };
+        let full = FULL.contains(c);
+        let latin = LATIN.contains(c);
+        if !(full || latin) {
+            i += 1;
+            continue;
+        }
+        // U.S.A.: a capital between two dots.
+        let abbreviation = c == '.' && i >= 2 && at(i - 1).is_some_and(|p| p.is_ascii_uppercase()) && at(i - 2) == Some('.');
+        // The terminators, brackets and quotes that belong to the sentence.
+        let mut j = i + 1;
+        while at(j).is_some_and(|n| FULL.contains(n) || LATIN.contains(n) || CLOSERS.contains(n)) {
+            j += 1;
+        }
+        let next = at(j);
+        let ends_here = if full || (i + 1..j).any(|k| at(k).is_some_and(|n| FULL.contains(n))) {
+            true
+        } else {
+            !abbreviation && next.is_none_or(|n| SPACES.contains(n) || matches!(n, '"' | '\''))
+        };
+        if !ends_here {
+            i = j.max(i + 1);
+            continue;
+        }
+        while at(j).is_some_and(|n| SPACES.contains(n)) {
+            j += 1;
+        }
+        let end = chars.get(j).map_or(text.len(), |&(o, _)| o);
+        if end < text.len() {
+            ends.push(end);
+        }
+        i = j.max(i + 1);
+    }
+    ends
 }
 
 #[cfg(test)]
@@ -1498,6 +1532,67 @@ mod tests {
         assert_eq!(p.sentence_at(3), (0, 21));
         assert_eq!(p.next_boundary(0), 1);
         assert_eq!(p.prev_boundary(0), 0);
+    }
+
+    /// Word for Mac's sentence bounds with Japanese editing (`sn1`–`sn3` probes, 2026-10-19),
+    /// replayed: each paragraph's sentences in order.
+    #[test]
+    fn sentences_end_as_word_for_mac_bounds_them() {
+        let split = |t: &str| -> Vec<String> {
+            let p = Paragraph::with_text(t, CharProps::default());
+            let mut out = Vec::new();
+            let mut at = 0;
+            while at < t.len() {
+                let (a, b) = p.sentence_at(at);
+                assert_eq!(a, at, "{t:?}: the sentence at {at} starts there");
+                out.push(t[a..b].to_string());
+                at = b;
+            }
+            out
+        };
+        let cases: &[(&str, &[&str])] = &[
+            ("今日は晴れです。明日は雨です！本当ですか？そうですね", &["今日は晴れです。", "明日は雨です！", "本当ですか？", "そうですね"]),
+            ("彼は「はい。」と言った。「本当？」と聞いた。終わり", &["彼は「はい。」", "と言った。", "「本当？」", "と聞いた。", "終わり"]),
+            (
+                "一つ目（注。）二つ目。三つ目．四つ目…五つ目。 六つ目。\u{3000}七つ目",
+                &["一つ目（注。）", "二つ目。", "三つ目．", "四つ目…五つ目。 ", "六つ目。\u{3000}", "七つ目"],
+            ),
+            ("英語のHello world. Next sentence. 日本語。ok", &["英語のHello world. ", "Next sentence. ", "日本語。", "ok"]),
+            ("ええ。。。はい？！そう！？いいえ。」」また", &["ええ。。。", "はい？！", "そう！？", "いいえ。」」", "また"]),
+            ("ピリオド.で終わる.次 3.5 kg です。次", &["ピリオド.で終わる.次 3.5 kg です。", "次"]),
+            ("Mr. Smith went to Washington. He came back. 日本語", &["Mr. ", "Smith went to Washington. ", "He came back. ", "日本語"]),
+            ("句点なしの段落", &["句点なしの段落"]),
+            ("「括弧」。次。『二重』！次？次", &["「括弧」。", "次。", "『二重』！", "次？", "次"]),
+            ("カンマ、では切れない，はず．次", &["カンマ、では切れない，はず．", "次"]),
+            ("He said \"Hi.\" Then (ok.) Next", &["He said \"Hi.", "\" Then (ok.) ", "Next"]),
+            ("U.S.A. is big. 3.14 is pi. e.g. this", &["U.S.A. is big. ", "3.14 is pi. ", "e.g. ", "this"]),
+            ("Really?! Yes!? Wait... Go.Now end", &["Really?! ", "Yes!? ", "Wait... ", "Go.Now end"]),
+            ("Quote: “done.” Next ‘x.’ y", &["Quote: “done.” ", "Next ‘x.’ ", "y"]),
+            ("終わり。）」』】〕〉》次", &["終わり。）」』】〕〉》", "次"]),
+            ("終わり。”次。’次。)次。]次", &["終わり。”", "次。’", "次。)", "次。]", "次"]),
+            ("終わり。\t次。\u{a0}次", &["終わり。\t", "次。\u{a0}", "次"]),
+            ("A.\u{3000}B。 C！\u{3000}D", &["A.\u{3000}", "B。 ", "C！\u{3000}", "D"]),
+            ("タブ\t区切り。次", &["タブ\t区切り。", "次"]),
+            ("He said \"Hi!\" and left", &["He said \"Hi!", "\" and left"]),
+            ("Dr. Who and U.S. is big. A. B. C. end", &["Dr. ", "Who and U.S. is big. ", "A. ", "B. ", "C. ", "end"]),
+            ("i.e. so No.5 is here. ok", &["i.e. ", "so No.5 is here. ", "ok"]),
+            ("end.” next end.’ next end.\" next", &["end.” ", "next end.’ ", "next end.", "\" next"]),
+            ("fin。\"次 fin。'次", &["fin。", "\"次 fin。", "'次"]),
+            ("He said (really?) and left. ok", &["He said (really?) ", "and left. ", "ok"]),
+            ("wow!) next wow!\" next", &["wow!) ", "next wow!", "\" next"]),
+            ("Hi.. there... end", &["Hi.. ", "there... ", "end"]),
+            ("ひらがな。ぁ次 カタカナ？ー次", &["ひらがな。", "ぁ次 カタカナ？", "ー次"]),
+            ("one.) two", &["one.) ", "two"]),
+        ];
+        for (t, want) in cases {
+            assert_eq!(split(t), *want, "{t:?}");
+        }
+        // A sentence and its selection include the trailing spaces; the offset inside picks it.
+        let p = Paragraph::with_text("一。 二。", CharProps::default());
+        assert_eq!(p.sentence_at(0), (0, 7));
+        assert_eq!(p.sentence_at(6), (0, 7));
+        assert_eq!(p.sentence_at(7), (7, 13));
+        assert_eq!(sentence_ends("終わり。"), Vec::<usize>::new());
     }
 
     proptest::proptest! {
