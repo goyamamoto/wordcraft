@@ -125,6 +125,9 @@ pub enum Draw {
     /// A formatting mark (¶ · → ↵) in the UI's mark colour, or in `color` (a tracked
     /// paragraph mark in its reviser's colour).
     Mark { x: f32, baseline: f32, size: f32, ch: char, color: Option<Rgb> },
+    /// An ideographic space (U+3000) with Show/Hide ¶ on: the hollow grey square Word for Mac
+    /// draws in its cell, a hairline on screen only (see [`ideographic_space_mark`]).
+    MarkBox { rect: Rect, color: Rgb },
     /// Turned text (a table cell's text direction): `items` are drawn in a frame turned `turn`
     /// whose origin is page point (`x`, `y`) (see [`crate::turn_point`]).
     Turned { x: f32, y: f32, turn: TextDirection, items: Vec<Draw> },
@@ -1294,6 +1297,12 @@ fn lines(
                 let size = pl.styles.get(c.style as usize).map(|s| s.size).unwrap_or(msize);
                 let arrow = if line.rtl { '←' } else { '→' };
                 match c.kind {
+                    ClKind::Space if marks.spaces && is_ideographic_space(pl, c) => {
+                        if let Some(st) = pl.styles.get(c.style as usize) {
+                            let centre = if pl.vertical { base - st.v_centre } else { base - (ideographic_box_top(&st.face) - 0.5) * size };
+                            out.push(ideographic_space_mark((cx + nx) / 2.0, centre, size));
+                        }
+                    }
                     ClKind::Space if marks.spaces => {
                         out.push(Draw::Mark { x: (cx + nx) / 2.0 - size * 0.12, baseline: base - size * 0.08, size, ch: '·', color: None })
                     }
@@ -1351,6 +1360,42 @@ fn lines(
         }
         let _ = bottom;
     }
+}
+
+/// The grey of Word for Mac's ideographic-space mark (read from its window, 2026-10-19).
+pub const IDEOGRAPHIC_SPACE_MARK: Rgb = Rgb(0x6D, 0x6D, 0x6D);
+
+/// The formatting mark of an ideographic space (全角スペース) as Word for Mac draws it with
+/// Show/Hide ¶ on (24, 36 and 72 pt Yu Mincho, Yu Gothic and MS Mincho, 2026-10-19): a hollow
+/// square 3 pt narrower than the em and 0.75 em + 1 pt tall, centred on the character's cell
+/// (`cx`) and on the font's ideographic em box (`centre`), in a fixed grey whatever the text's
+/// colour; in a 縦書き column it turns with the column. `size` is the font size in points.
+pub fn ideographic_space_mark(cx: f32, centre: f32, size: f32) -> Draw {
+    let size = if size.is_finite() { size.clamp(1.0, 1638.0) } else { 11.0 };
+    let w = (size - 3.0).max(1.0);
+    let h = size * 0.75 + 1.0;
+    let (cx, centre) = (if cx.is_finite() { cx } else { 0.0 }, if centre.is_finite() { centre } else { 0.0 });
+    Draw::MarkBox { rect: Rect::new(cx - w / 2.0, centre - h / 2.0, w, h), color: IDEOGRAPHIC_SPACE_MARK }
+}
+
+/// Whether space cluster `c` is an ideographic space (U+3000): its one glyph is the style's
+/// face's glyph for it.
+fn is_ideographic_space(pl: &ParaLayout, c: &crate::para::Cluster) -> bool {
+    let Some(st) = pl.styles.get(c.style as usize) else { return false };
+    let gid = st.face.glyph_for('\u{3000}');
+    gid != 0 && c.g1 == c.g0.saturating_add(1) && pl.glyphs.get(c.g0 as usize).is_some_and(|g| g.gid == gid)
+}
+
+/// The top of a font's ideographic em box above the baseline, in ems (its vertical origin:
+/// 0.88 for the Yu fonts and Hiragino, 0.8 for Songti); 0.88 where the font gives none.
+fn ideographic_box_top(face: &wordcraft_fonts::FaceRef) -> f32 {
+    let gid = face.glyph_for('\u{3000}');
+    let gid = if gid == 0 { face.glyph_for('一') } else { gid };
+    if gid == 0 {
+        return 0.88;
+    }
+    let v = (face.vertical_origin(gid) / face.upem.max(1.0)) as f32;
+    if v.is_finite() && (0.5..=1.2).contains(&v) { v } else { 0.88 }
 }
 
 /// The kind of section break that ends at body paragraph `path`: the start type of the section

@@ -833,6 +833,13 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             ctx.set_transform(view * Affine::translate((*x as f64, *baseline as f64)) * Affine::scale(k));
             ctx.fill_path(&o);
         }
+        Draw::MarkBox { rect, color: c } => {
+            ctx.set_transform(view);
+            ctx.set_paint(color(opts.ink(*c), 1.0));
+            ctx.set_stroke(kurbo::Stroke::new(1.0));
+            let (w, h) = (f64::from(rect.w.max(0.0)), f64::from(rect.h.max(0.0)));
+            ctx.stroke_path(&kurbo::Rect::new(f64::from(rect.x), f64::from(rect.y), f64::from(rect.x) + w, f64::from(rect.y) + h).to_path(0.1));
+        }
         Draw::MarkText { x, baseline, size, text } => {
             let base_face = wordcraft_fonts::word::resolve("Source Sans 3", false, false).face;
             ctx.set_paint(color(opts.ink(opts.mark_color), 0.9));
