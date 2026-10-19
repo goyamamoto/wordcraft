@@ -235,6 +235,11 @@ pub struct UiState {
     #[serde(skip)]
     pub print: print_page::PrintSettings,
     pub ribbon_collapsed: bool,
+    /// The notice offering Microsoft's Aptos is never shown ("Don't show again").
+    pub aptos_notice_off: bool,
+    /// ... or not for the rest of this run (its close button).
+    #[serde(skip)]
+    pub aptos_notice_closed: bool,
     pub recent: Vec<String>,
     /// Symbols inserted from the Symbol dialog, most recent first (#321).
     pub recent_symbols: Vec<dialogs_insert::RecentSymbol>,
@@ -330,6 +335,9 @@ pub struct UiState {
 /// no longer applies (a contextual tab after the selection moved away, a tab hidden in Customize
 /// Ribbon). Word opens on Home every launch; see [`UiState::tab`].
 pub const DEFAULT_TAB: &str = "Home";
+/// Microsoft's free download of its Aptos fonts (Download Center; the page follows the viewer's
+/// language). Aptos may be installed from it, not redistributed, so WordCraft points there.
+pub const APTOS_DOWNLOAD: &str = "https://www.microsoft.com/download/details.aspx?id=106087";
 /// Most recent documents kept (File › Options › Advanced offers 0–50, as Word does).
 pub const MAX_RECENT: usize = 50;
 /// Most custom dictionary words read back from `ui.json`.
@@ -343,6 +351,8 @@ impl Default for UiState {
             backstage_page: "home".into(),
             print: print_page::PrintSettings::default(),
             ribbon_collapsed: false,
+            aptos_notice_off: false,
+            aptos_notice_closed: false,
             recent: Vec::new(),
             recent_symbols: Vec::new(),
             recent_colors: Vec::new(),
@@ -1497,6 +1507,20 @@ impl WordApp {
                 self.canvas.open_url = Some("https://discord.gg/artcraft".into());
                 json!({})
             }
+            // Microsoft's free download of its Aptos fonts (Office's body font since 2024): with
+            // them installed, documents set in Aptos lay out as in Word.
+            "ui.getAptos" => {
+                self.canvas.open_url = Some(APTOS_DOWNLOAD.into());
+                json!({"url": APTOS_DOWNLOAD})
+            }
+            // The notice offering Aptos: closed for this run, or (`forever`) never shown again.
+            "ui.hideAptosNotice" => {
+                self.ui.aptos_notice_closed = true;
+                if p.get("forever").and_then(Value::as_bool).unwrap_or(false) {
+                    self.ui.aptos_notice_off = true;
+                }
+                json!({"closed": true, "off": self.ui.aptos_notice_off})
+            }
             "ui.caretAnimation" => {
                 // File › Options › Advanced › Animation: `value` true or false turns the caret's
                 // glide and fading blink on or off; no value reads it.
@@ -2016,6 +2040,7 @@ impl WordApp {
             chrome::title_bar(self, ui);
             if !self.session.view.focus_mode {
                 ribbon::show(self, ui);
+                chrome::aptos_notice(self, ui);
                 chrome::status_bar(self, ui);
                 panes::show(self, ui);
             }
@@ -2396,6 +2421,8 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.fileBrowser"
             | "ui.makeDefaultApp"
             | "ui.discord"
+            | "ui.getAptos"
+            | "ui.hideAptosNotice"
             | "ui.caretAnimation"
             | "ui.startScreen"
     ) || id.starts_with("help.")
@@ -3844,6 +3871,33 @@ mod tests {
             }
             assert!(a.canvas.cols >= 2, "Multiple Pages: side by side");
         }
+    }
+
+    /// A document set in Aptos without Aptos installed shows a bar under the ribbon pointing to
+    /// Microsoft's free download; closing it hides it for the run, "Don't show again" for good.
+    #[test]
+    fn the_aptos_notice_points_to_microsofts_download_and_closes() {
+        let mut a = app();
+        let shows = !wordcraft_fonts::FontDb::global().has_family("Aptos");
+        let ctx = egui::Context::default();
+        assert_eq!(chrome::wants_aptos_notice(&a, &ctx), shows && a.session.missing_aptos());
+        assert_eq!(a.run("ui.getAptos", json!({})).unwrap()["url"], APTOS_DOWNLOAD);
+        assert_eq!(a.canvas.open_url.as_deref(), Some(APTOS_DOWNLOAD));
+        assert!(APTOS_DOWNLOAD.starts_with("https://www.microsoft.com/"));
+        a.run("ui.hideAptosNotice", json!({})).unwrap();
+        assert!(a.ui.aptos_notice_closed && !a.ui.aptos_notice_off);
+        assert!(!chrome::wants_aptos_notice(&a, &ctx), "closed for the run");
+        // Closing isn't remembered; "Don't show again" is.
+        let saved = serde_json::to_value(a.prefs()).unwrap();
+        let mut b = app();
+        b.apply_prefs(serde_json::from_value(saved).unwrap());
+        assert!(!b.ui.aptos_notice_closed && !b.ui.aptos_notice_off);
+        b.run("ui.hideAptosNotice", json!({"forever": true})).unwrap();
+        let saved = serde_json::to_value(b.prefs()).unwrap();
+        let mut c = app();
+        c.apply_prefs(serde_json::from_value(saved).unwrap());
+        assert!(c.ui.aptos_notice_off);
+        assert!(!chrome::wants_aptos_notice(&c, &ctx));
     }
 
     #[test]

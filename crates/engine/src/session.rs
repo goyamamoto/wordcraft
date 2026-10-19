@@ -1003,6 +1003,20 @@ impl Session {
         self.view.crop_marks.unwrap_or_else(|| self.region().territory == "JP")
     }
 
+    /// Whether the document asks for Microsoft's Aptos family (the theme's body or heading font,
+    /// the document defaults' or a style's font) and no Aptos is installed. Word lays it out with
+    /// Aptos; no open font has its widths, so a stand-in breaks lines and pages differently. The
+    /// interface then points to Microsoft's free download (`ui.getAptos`): installed, it is used.
+    pub fn missing_aptos(&self) -> bool {
+        let aptos = |f: &str| f.trim().get(..5).is_some_and(|p| p.eq_ignore_ascii_case("aptos"));
+        let s = &self.doc.styles;
+        let uses = aptos(&self.doc.settings.minor_font)
+            || aptos(&self.doc.settings.major_font)
+            || s.default_chr.font.as_deref().is_some_and(aptos)
+            || s.styles.iter().any(|st| st.chr.font.as_deref().is_some_and(aptos));
+        uses && !wordcraft_fonts::FontDb::global().has_family("Aptos")
+    }
+
     /// The unit rulers and dialogs show lengths in: the user's choice, else the region's.
     pub fn units(&self) -> wordcraft_geom::Unit {
         self.prefs.units.unwrap_or_else(|| self.region().units())

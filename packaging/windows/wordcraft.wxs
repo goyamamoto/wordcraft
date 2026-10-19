@@ -61,6 +61,7 @@
 
     <Feature Id="Main" Title="WordCraft" Level="1">
       <ComponentGroupRef Id="WordcraftFiles" />
+      <ComponentGroupRef Id="JapaneseDictionary" />
     </Feature>
   </Package>
 
@@ -153,6 +154,12 @@
       <Component Id="WordcraftCli">
         <File Id="WordcraftCliExe" Source="$(var.BinDir)\wordcraft-cli.exe" KeyPath="yes" />
       </Component>
+    </ComponentGroup>
+
+    <!-- The Japanese dictionary package.ps1 stages beside the program (dict\lindera-ipadic, with
+         its NOTICE.txt), read by wordcraft-jaseg for Japanese words. -->
+    <ComponentGroup Id="JapaneseDictionary" Directory="INSTALLFOLDER" Subdirectory="dict\lindera-ipadic">
+      <Files Include="$(var.BinDir)\dict\lindera-ipadic\**" />
     </ComponentGroup>
   </Fragment>
 </Wix>

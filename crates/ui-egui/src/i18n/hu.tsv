@@ -219,6 +219,7 @@
 	Document Text	Dokumentum szövege
 	Document Title	Dokumentum címe
 	Documents you open will show up here.	A megnyitott dokumentumaid itt jelennek meg.
+	Don't show again	Ne jelenjen meg többé
 	Dot-dash	Pont-vonal
 	Dot-dot-dash	Pont-pont-vonal
 	Dotted	Pontozott
@@ -299,6 +300,7 @@
 	Formatting at Selection	A kijelölés formázása
 	Formula	Képlet
 	General	Általános
+	Get Aptos from Microsoft	Aptos letöltése a Microsofttól
 	Go To	Ugrás
 	Go to	Ugrás
 	Go To (⌘⌥G)	Ugrás (⌘⌥G)
@@ -769,6 +771,7 @@
 	Themes	Témák
 	Thesaurus	Szinonimaszótár
 	Thick	Vastag
+	This document uses the Aptos font, which isn't installed. Lines and pages may break differently from Word.	Ez a dokumentum az Aptos betűtípust használja, amely nincs telepítve. A sor- és oldaltörések eltérhetnek a Wordtől.
 	Three	Három
 	Tight	Szoros
 	Title	Cím

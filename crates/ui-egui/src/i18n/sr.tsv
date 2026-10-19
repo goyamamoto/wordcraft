@@ -112,6 +112,7 @@
 	Crop marks	Ознаке за опсецање
 	Custom dictionary	Прилагођени речник
 	Dark page (white text on black)	Тамна страница (бео текст на црном)
+	Don't show again	Не приказуј поново
 	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	Превуците правоугаоник да нацртате табелу или линију преко ћелија да их поделите. Esc завршава.
 	Draw Table	Нацртај табелу
 	Define New Multilevel List	Дефиниши нову вишенивоску листу
@@ -184,6 +185,7 @@
 	Delete Table Style	Обриши стил табеле
 	Encrypt with Password…	Шифруј лозинком…
 	Font: {font}	Фонт: {font}
+	Get Aptos from Microsoft	Преузми Aptos од Microsoft-а
 	Glow	Сјај
 	Glow Colors	Боје сјаја
 	Hide from style lists	Сакриј са листа стилова
@@ -269,6 +271,7 @@
 	Page Border	Ивица стране
 	Apply to:	Примени на:
 	These marks show even when Show/Hide ¶ is off.	Ове ознаке се приказују и када је Прикажи/сакриј ¶ искључено.
+	This document uses the Aptos font, which isn't installed. Lines and pages may break differently from Word.	Овај документ користи фонт Aptos који није инсталиран. Преломи редова и страница могу се разликовати од Word-а.
 	Title Bar	Насловна трака
 	Typing replaces selected text	Откуцано замењује изабрани текст
 	Update fields before printing	Ажурирај поља пре штампања
