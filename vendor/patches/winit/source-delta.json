@@ -9,7 +9,7 @@
         "01"
       ],
       "pristine_sha256": "c6685a9e320715b00124d66eb5e9be088cf1f165678e832a86459f0026d215e9",
-      "vendor_sha256": "18dd4771a7ac04250672cfe04595b8f33aab2ac3c815720bd201ffca4fe7f2da"
+      "vendor_sha256": "64f23daaf866e6e5d4ec49d0947e1be59b6a7f2d797177b00ca65a44435f0c57"
     },
     {
       "path": "src/platform_impl/macos/mod.rs",
@@ -17,7 +17,7 @@
         "01"
       ],
       "pristine_sha256": "584af72536847910a3e461fb40b9a0f9a375da3200f7ecf38f5d989b3c143d9d",
-      "vendor_sha256": "3fc02f9a4dc263b9e922b2ee153d6eddf2c3a1eafc9ed6234fb9d02f7aa3cf5f"
+      "vendor_sha256": "7a864aebfd7015ccc79a411349bf2701aae5c41f80a956a22ddd57a83f516481"
     },
     {
       "path": "src/platform_impl/macos/view.rs",
@@ -25,7 +25,7 @@
         "01"
       ],
       "pristine_sha256": "de63351d7a757d58883600c3f1702fc369cb77b2ae323a4efca7cb520e9da90e",
-      "vendor_sha256": "3dd37beb2a2de212f0a0ebf39f323e57692bd2a37e947cee066c10d229e61ed9"
+      "vendor_sha256": "5505c30ac1e0275782bfbca25631e6f370eb57604f279fce3599c2e00c85cde7"
     }
   ]
 }
