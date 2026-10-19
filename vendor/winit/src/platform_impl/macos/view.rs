@@ -113,6 +113,85 @@ pub struct ImeSurroundingText {
     pub selected: Range<usize>,
 }
 
+/// WordCraft patch: the marked text's place in the surrounding text — where it lies and its
+/// length, in UTF-16 code units, and the committed text it stands for (a reconverted selection,
+/// or nothing).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ImeMarked {
+    pub location: usize,
+    pub len: usize,
+    pub replaced: String,
+}
+
+impl ImeSurroundingText {
+    /// WordCraft patch: this text as the input method has just changed it, until the
+    /// application reports it again: `text` put in place of `range` — UTF-16 code units of
+    /// this text, the marked text `marked` included, as the input method counts — as marked
+    /// text with the input method's selection `selected` within it, or committed (`None`).
+    /// A range reaching into the marked text counts it as the committed text it stands for.
+    /// Empty marked text takes the marked text out and selects what it stood for, as the
+    /// application does. Returns the new text with its selection, and the marked text's place
+    /// in it, if any.
+    pub fn apply(
+        &self,
+        marked: Option<&ImeMarked>,
+        range: Range<usize>,
+        text: &str,
+        selected: Option<Range<usize>>,
+    ) -> (ImeSurroundingText, Option<ImeMarked>) {
+        // The committed text: the marked text replaced by what it stands for, the range mapped
+        // onto it (what lies before keeps its place, the marked text is what it stood for, what
+        // follows moves by the difference).
+        let mut units: Vec<u16> = self.text.encode_utf16().collect();
+        let (m, l, r) = match marked {
+            Some(k) => {
+                let m = k.location.min(units.len());
+                let l = k.len.min(units.len() - m);
+                let put_back: Vec<u16> = k.replaced.encode_utf16().collect();
+                let r = put_back.len();
+                units.splice(m..m + l, put_back);
+                (m, l, r)
+            }
+            None => (0, 0, 0),
+        };
+        let map = |x: usize| {
+            if x <= m {
+                x
+            } else if x < m.saturating_add(l) {
+                m.saturating_add(r)
+            } else {
+                x.saturating_sub(l).saturating_add(r)
+            }
+        };
+        let start = map(range.start).min(units.len());
+        let end = map(range.end).clamp(start, units.len());
+        let replaced = String::from_utf16_lossy(&units[start..end]);
+        let new: Vec<u16> = text.encode_utf16().collect();
+        let n = new.len();
+        match selected {
+            // Dismissed: the committed text is back, what the marked text stood for selected.
+            Some(_) if n == 0 => {
+                (ImeSurroundingText { text: String::from_utf16_lossy(&units), selected: start..end }, None)
+            }
+            Some(sel) => {
+                units.splice(start..end, new);
+                let a = sel.start.min(n);
+                let b = sel.end.clamp(a, n);
+                let text = String::from_utf16_lossy(&units);
+                (
+                    ImeSurroundingText { text, selected: start + a..start + b },
+                    Some(ImeMarked { location: start, len: n, replaced }),
+                )
+            }
+            None => {
+                units.splice(start..end, new);
+                let caret = start + n;
+                (ImeSurroundingText { text: String::from_utf16_lossy(&units), selected: caret..caret }, None)
+            }
+        }
+    }
+}
+
 static IME_SURROUNDING: Mutex<Option<ImeSurroundingText>> = Mutex::new(None);
 static IME_REPLACEMENT: Mutex<Option<Range<usize>>> = Mutex::new(None);
 
@@ -132,6 +211,60 @@ pub fn take_ime_replacement_range() -> Option<Range<usize>> {
 
 fn ime_surrounding() -> Option<ImeSurroundingText> {
     IME_SURROUNDING.lock().ok().and_then(|s| s.clone())
+}
+
+/// What the input method is told lies around the caret right now.
+pub fn ime_surrounding_text() -> Option<ImeSurroundingText> {
+    ime_surrounding()
+}
+
+impl WinitView {
+    /// WordCraft patch: the marked text's place in the surrounding text, while there is one.
+    fn ime_marked(&self) -> Option<ImeMarked> {
+        let len = self.ivars().marked_text.borrow().length() as usize;
+        (len > 0).then(|| ImeMarked {
+            location: self.ivars().marked_location.get(),
+            len,
+            replaced: self.ivars().marked_replaced.borrow().clone(),
+        })
+    }
+
+    /// WordCraft patch: the range of the surrounding text (marked text included) an edit by the
+    /// input method takes the place of: the replacement range it named, else the marked text,
+    /// else the selection.
+    fn ime_edit_range(&self, replacement_range: NSRange) -> Range<usize> {
+        if replacement_range.location != NSNotFound as NSUInteger {
+            let start = replacement_range.location as usize;
+            return start..start.saturating_add(replacement_range.length as usize);
+        }
+        if let Some(k) = self.ime_marked() {
+            return k.location..k.location.saturating_add(k.len);
+        }
+        ime_surrounding().map_or(0..0, |s| {
+            let start = s.selected.start.min(s.selected.end);
+            start..s.selected.end.max(start)
+        })
+    }
+
+    /// WordCraft patch: the surrounding text follows an edit by the input method at once
+    /// (`ImeSurroundingText::apply`), so what it reads next, before the application reports
+    /// the text again, is the state it just made.
+    fn ime_update_surrounding(&self, range: Range<usize>, text: &str, selected: Option<NSRange>) {
+        let Some(s) = ime_surrounding() else { return };
+        let selected = selected.map(|r| {
+            let start = r.location as usize;
+            start..start.saturating_add(r.length as usize)
+        });
+        let (next, marked) = s.apply(self.ime_marked().as_ref(), range, text, selected);
+        set_ime_surrounding_text(Some(next));
+        match marked {
+            Some(k) => {
+                self.ivars().marked_location.set(k.location);
+                *self.ivars().marked_replaced.borrow_mut() = k.replaced;
+            }
+            None => self.ivars().marked_replaced.borrow_mut().clear(),
+        }
+    }
 }
 
 /// `range` of the UTF-16 form of `text`, clamped to it, as an `NSString`.
@@ -181,6 +314,11 @@ pub struct ViewState {
     /// and the input method's selection within the marked text.
     marked_location: Cell<usize>,
     marked_selected: Cell<NSRange>,
+    /// WordCraft patch: the committed text the marked text stands for (`ImeMarked::replaced`).
+    marked_replaced: RefCell<String>,
+    /// WordCraft patch: a key event is being interpreted (`interpretKeyEvents`): an
+    /// `insertText:` then is the key's own text, which the key event reports.
+    in_key_event: Cell<bool>,
     accepts_first_mouse: bool,
 
     // Weak reference because the window keeps a strong reference to the view
@@ -348,6 +486,9 @@ declare_class!(
             // selection when there is none. The application reads the range from
             // `take_ime_replacement_range` when the `Ime::Preedit` event arrives.
             let had_marked_text = unsafe { self.hasMarkedText() };
+            // The range of the surrounding text (marked text included) the new marked text
+            // takes the place of: the one named, else the marked text, else the selection.
+            let replaces = self.ime_edit_range(replacement_range);
             if replacement_range.location != NSNotFound as NSUInteger {
                 let start = replacement_range.location as usize;
                 let end = start.saturating_add(replacement_range.length as usize);
@@ -379,6 +520,10 @@ declare_class!(
                     string.copy(),
                 )
             };
+
+            // WordCraft patch: what the input method reads next answers from the text as it
+            // stands now — the application reports it again after the next frame.
+            self.ime_update_surrounding(replaces, &string.to_string(), Some(selected_range));
 
             // Update marked text.
             *self.ivars().marked_text.borrow_mut() = marked_text;
@@ -422,12 +567,22 @@ declare_class!(
         #[method(unmarkText)]
         fn unmark_text(&self) {
             trace_scope!("unmarkText");
+            // WordCraft patch: `unmarkText` commits the marked text as it stands (the
+            // `NSTextInputClient` contract, what `NSTextView` and Word do); winit dropped it.
+            let committed = self.ivars().marked_text.borrow().string().to_string();
+            if !committed.is_empty() {
+                let range = self.ime_edit_range(NSRange::new(NSNotFound as NSUInteger, 0));
+                self.ime_update_surrounding(range, &committed, None);
+            }
             *self.ivars().marked_text.borrow_mut() = NSMutableAttributedString::new();
 
             let input_context = self.inputContext().expect("input context");
             input_context.discardMarkedText();
 
             self.queue_event(WindowEvent::Ime(Ime::Preedit(String::new(), None)));
+            if !committed.is_empty() && self.is_ime_enabled() {
+                self.queue_event(WindowEvent::Ime(Ime::Commit(committed)));
+            }
             if self.is_ime_enabled() {
                 // Leave the Preedit self.ivars()
                 self.ivars().ime_state.set(ImeState::Ground);
@@ -517,9 +672,22 @@ declare_class!(
 
             // Commit only if we have marked text.
             if unsafe { self.hasMarkedText() } && self.is_ime_enabled() && !is_control {
+                // WordCraft patch: the committed text takes the marked text's place (or the
+                // named range's) in the surrounding text at once, and the marked text is gone:
+                // what the input method reads next is the committed state.
+                let range = self.ime_edit_range(replacement_range);
+                self.ime_update_surrounding(range, &string, None);
+                *self.ivars().marked_text.borrow_mut() = NSMutableAttributedString::new();
                 self.queue_event(WindowEvent::Ime(Ime::Preedit(String::new(), None)));
                 self.queue_event(WindowEvent::Ime(Ime::Commit(string)));
                 self.ivars().ime_state.set(ImeState::Committed);
+            } else if !self.ivars().in_key_event.get() && self.is_ime_enabled() && !is_control && !string.is_empty() {
+                // WordCraft patch: text an input method inserts on its own, outside any key
+                // event and without marking it first (a direct insertion), is a commit too;
+                // within a key event the key's own text comes with the key event, as before.
+                let range = self.ime_edit_range(replacement_range);
+                self.ime_update_surrounding(range, &string, None);
+                self.queue_event(WindowEvent::Ime(Ime::Commit(string)));
             }
         }
 
@@ -548,6 +716,7 @@ declare_class!(
     unsafe impl WinitView {
         #[method(keyDown:)]
         fn key_down(&self, event: &NSEvent) {
+            // (WordCraft patch: see `in_key_event`.)
             trace_scope!("keyDown:");
             {
                 let mut prev_input_source = self.ivars().input_source.borrow_mut();
@@ -573,7 +742,10 @@ declare_class!(
             // is not handled by IME and should be handled by the application)
             if self.ivars().ime_allowed.get() {
                 let events_for_nsview = NSArray::from_slice(&[&*event]);
+                // WordCraft patch: `insertText:` within is the key's own text (see `insertText:`).
+                self.ivars().in_key_event.set(true);
                 unsafe { self.interpretKeyEvents(&events_for_nsview) };
+                self.ivars().in_key_event.set(false);
 
                 // If the text was committed we must treat the next keyboard event as IME related.
                 if self.ivars().ime_state.get() == ImeState::Committed {
@@ -914,6 +1086,8 @@ impl WinitView {
             marked_text: Default::default(),
             marked_location: Cell::new(0),
             marked_selected: Cell::new(NSRange::new(0, 0)),
+            marked_replaced: RefCell::new(String::new()),
+            in_key_event: Cell::new(false),
             accepts_first_mouse,
             _ns_window: WeakId::new(&window.retain()),
             option_as_alt: Cell::new(option_as_alt),
