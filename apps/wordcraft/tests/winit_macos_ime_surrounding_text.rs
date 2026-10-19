@@ -33,6 +33,21 @@ fn winit_answers_the_input_method_from_the_reported_surrounding_text() {
         "setMarkedText reads its replacement range"
     );
     assert!(!view.contains("TODO: Use _replacement_range"), "the replacement range is no longer ignored");
+    // Committing a conversion clause by clause (2026-10-20): within a key event, text other than
+    // the key's own characters is the input method's commit, and marked text is committed (not
+    // dropped) when the application stops taking input.
+    assert!(view.contains("&& string != *self.ivars().key_text.borrow()"), "insertText within a key event commits the input method's text");
+    assert!(view.contains("*self.ivars().key_text.borrow_mut() = unsafe { event.characters() }"), "the key's characters are recorded");
+    assert!(
+        view.contains(
+            "input_context.discardMarkedText();
+            }
+            self.queue_event(WindowEvent::Ime(Ime::Preedit(String::new(), None)));
+            self.queue_event(WindowEvent::Ime(Ime::Commit(committed)));"
+        ),
+        "set_ime_allowed(false) commits the marked text"
+    );
+    assert!(view.contains("std::env::var_os(\"WORDCRAFT_IME_TRACE\")"), "the opt-in IME trace");
 
     let platform = std::fs::read_to_string(root.join("vendor/winit/src/platform/macos.rs")).unwrap();
     assert!(platform.contains("pub fn set_ime_surrounding_text(text: Option<ImeSurroundingText>)"), "public on winit::platform::macos");

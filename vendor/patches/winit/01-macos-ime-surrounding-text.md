@@ -57,3 +57,24 @@ text; Word for Mac and `NSTextView` answer the changed state at once).
 The in-place state is a bridge to the next frame, which overwrites it with what the document
 holds (AutoCorrect and the like included). Nothing changes for applications that never call
 `set_ime_surrounding_text`. The patch is marked `WordCraft patch` at each site.
+
+## Committing a conversion clause by clause (2026-10-20)
+
+Reported by the owner: in a conversion of several clauses, committing the first clause lost the
+rest, where Word for Mac keeps typing it. Two places in `view.rs` could drop it:
+
+- `insertText:` within a key event took any text for the key's own characters and dropped it
+  (the key event reports them). An input method committing text this view no longer held as
+  marked (the rest of the conversion) or making another character of the key (a full-width
+  space) lost it, and the key (Return) went to the application. Now text other than the key's
+  characters (`key_text`, recorded in `keyDown:`) is a commit, and the key isn't reported.
+- `set_ime_allowed(false)` cleared the marked text on this side only; the input method kept it
+  and committed it later into nothing. Now the marked text is committed (`Ime::Preedit("")`,
+  `Ime::Commit`) and the input method is told it's gone (`discardMarkedText`), as `unmarkText`
+  does. WordCraft also keeps the IME allowed every frame the document has the keyboard
+  (`CanvasState::ime_rect`), so egui doesn't turn it off between frames.
+
+`WORDCRAFT_IME_TRACE=<file>` writes each `keyDown:`, `insertText:`, `setMarkedText:`,
+`unmarkText`, `doCommandBySelector:` and `set_ime_allowed` call (text, ranges, IME state) to the
+file: an input method's real calls can't be reproduced without typing.
+

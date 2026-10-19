@@ -3952,6 +3952,9 @@ fn cell_margins_are_where_cell_text_starts() {
 /// Line count and, per line, how far the text (trailing spaces excluded) reaches.
 fn justified_lines(text: &str, compat_mode: u32, align: Align) -> (usize, Vec<f32>) {
     let mut d = Document::from_text(text);
+    // A bundled font, so the line count doesn't hang on whether Aptos is installed.
+    d.settings.minor_font = "Source Sans 3".into();
+    d.styles.default_chr.font = Some("Source Sans 3".into());
     d.settings.compat_mode = compat_mode;
     d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.align = Some(align)).unwrap();
     let l = lay(&d);
