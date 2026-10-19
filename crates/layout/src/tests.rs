@@ -8718,3 +8718,116 @@ fn words_yu_fonts_keep_words_line_metrics_whatever_face_draws_them() {
     let k = 10.5 / st.face.upem;
     assert!((st.ascent as f64 - a * k).abs() < 0.01 && (st.descent as f64 - dsc * k).abs() < 0.01, "{} {} vs {a} {dsc}", st.ascent, st.descent);
 }
+
+/// Word for Mac (`hw1`, 2026-10-19; 24 pt, no grid): in MS Mincho, MS Gothic and GulimChe every
+/// ASCII character, the Latin-1 letters and symbols and the dashes advance 12 pt — half an em —
+/// and every other character (× “ α) 24, whatever face stands in (Osaka−等幅 draws the Latin here
+/// when it is installed); MS PMincho
+/// keeps its proportional Latin, and a Times New Roman run with ＭＳ 明朝 East Asian text sets
+/// its Latin in Times.
+#[test]
+fn words_fixed_pitch_fonts_set_half_width_characters_as_word_for_mac_does() {
+    let ms = wordcraft_fonts::word::resolve("MS Mincho", false, false);
+    if !ms.face.covers('行') {
+        return;
+    }
+    let lay_text = |font: &str, ea: &str, text: &str| {
+        let chr = CharProps { font: Some(font.into()), font_ea: Some(ea.into()), size: Some(24.0), ..Default::default() };
+        let mut d = Document::from_text("");
+        d.body.clear();
+        d.body.push(wordcraft_doc::para_block(Paragraph::with_text(text, chr)));
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+        let line = &para.lines[0];
+        let lefts: Vec<f32> = (0..para.clusters.len()).map(|k| line.cl_left(k).unwrap() - line.cl_left(0).unwrap()).collect();
+        let faces: Vec<String> = para.clusters.iter().map(|c| para.styles[c.style as usize].face.family.clone()).collect();
+        (lefts, faces)
+    };
+    let osaka = wordcraft_fonts::word::half_width_latin_face(&ms.face, false, false).is_some();
+    for font in ["MS Mincho", "MS Gothic", "ＭＳ 明朝", "GulimChe"] {
+        if !wordcraft_fonts::word::resolve(font, false, false).face.covers('A') {
+            continue;
+        }
+        // A a W i 1 space . é ñ © – then × “ α … (an em each: the font's other width) and 行 (no
+        // automatic space after a symbol).
+        let (lefts, faces) = lay_text(font, font, "AaWi1 .éñ©–×“α…行");
+        let want = [0.0, 12.0, 24.0, 36.0, 48.0, 60.0, 72.0, 84.0, 96.0, 108.0, 120.0, 132.0, 156.0, 180.0, 204.0, 228.0];
+        for (k, w) in want.iter().enumerate() {
+            assert!((lefts[k] - w).abs() < 0.05, "{font}: cluster {k} at {} (Word {w}); {lefts:?}", lefts[k]);
+        }
+        if osaka {
+            assert_eq!(faces[0], "Osaka", "{font}: the Latin is drawn by Osaka−等幅; {faces:?}");
+        }
+    }
+    // The proportional MS PMincho keeps the stand-in face's widths (Word: A 0.664 em).
+    let (lefts, _) = lay_text("MS PMincho", "MS PMincho", "Aa");
+    assert!((lefts[1] - 12.0).abs() > 2.0, "MS PMincho: a at {}", lefts[1]);
+    // The Latin font rules: Times New Roman's A (0.722 em = 17.33 pt) before ＭＳ 明朝's 日.
+    let times = wordcraft_fonts::word::resolve("Times New Roman", false, false);
+    if !times.substituted {
+        let (lefts, _) = lay_text("Times New Roman", "MS Mincho", "Aa日");
+        assert!((lefts[1] - 17.33).abs() < 0.1, "Times + ＭＳ 明朝: a at {} (Word 17.33)", lefts[1]);
+    }
+}
+
+/// Word for Mac (`hw1`, `hw2`, 2026-10-19): character scaling (`w:w`) scales the glyph shapes
+/// with the advances — 日本語 at 24 pt and 50 % advances 12 pt a character drawn half as wide, at
+/// 200 % 48 and twice as wide; a 縦書き column squashes its upright characters along the column
+/// the same way. The run is drawn inside a `Draw::Scaled` from its unscaled positions.
+#[test]
+fn character_scaling_draws_the_glyphs_stretched_about_the_runs_start() {
+    let font = "Hiragino Mincho ProN";
+    if wordcraft_fonts::word::resolve(font, false, false).substituted {
+        return;
+    }
+    let doc = |scale: f32, dir: TextDirection| {
+        let chr = CharProps { font: Some(font.into()), font_ea: Some(font.into()), size: Some(24.0), scale: Some(scale), ..Default::default() };
+        let mut d = Document::from_text("");
+        d.body.clear();
+        d.body.push(wordcraft_doc::para_block(Paragraph::with_text("日本語A", chr)));
+        d.last_section.text_direction = dir;
+        d
+    };
+    for (scale, pitch) in [(50.0, 12.0), (200.0, 48.0)] {
+        let d = doc(scale, TextDirection::Horizontal);
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+        let line = &para.lines[0];
+        let left = |k: usize| line.cl_left(k).unwrap() - line.cl_left(0).unwrap();
+        assert!((left(1) - pitch).abs() < 0.05 && (left(2) - 2.0 * pitch).abs() < 0.05, "{scale} %: {} {}", left(1), left(2));
+        // The automatic Asian/Latin space scales too: a quarter em (6 pt) times the scale.
+        assert!((left(3) - 3.0 * pitch - pitch / 4.0).abs() < 0.05, "{scale} %: the A at {} (space {})", left(3), pitch / 4.0);
+        let draws = display::page_display(&d, &l.pages[0], &Default::default());
+        let Some(display::Draw::Scaled { x, sx, items }) = draws.iter().find(|x| matches!(x, display::Draw::Scaled { .. })) else {
+            panic!("{scale} %: no scaled run: {draws:?}")
+        };
+        assert!((sx - scale / 100.0).abs() < 1e-4, "{scale} %: sx {sx}");
+        let Some(display::Draw::Glyphs { glyphs, .. }) = items.first() else { panic!("{scale} %: {items:?}") };
+        assert!((glyphs[0].1 - x).abs() < 1e-3, "{scale} %: stretched about the first glyph: {x} vs {}", glyphs[0].1);
+        // Unscaled positions inside: an em apart, so the stretch lands them `pitch` apart.
+        assert!((glyphs[1].1 - glyphs[0].1 - 24.0).abs() < 0.05, "{scale} %: {glyphs:?}");
+        assert!(matches!(display::Draw::scale_matrix(*x, *sx), Some([a, 0.0, 0.0, 1.0, _, 0.0]) if (a - sx).abs() < 1e-6));
+    }
+    // 縦書き: the scaled run inside the turned column, its upright characters stood up an em apart
+    // before the stretch, the clusters 12 pt apart along the column.
+    let d = doc(50.0, TextDirection::Down);
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+    let line = &para.lines[0];
+    assert!((line.cl_left(1).unwrap() - line.cl_left(0).unwrap() - 12.0).abs() < 0.05);
+    let draws = display::page_display(&d, &l.pages[0], &Default::default());
+    let Some(display::Draw::Turned { items, .. }) = draws.iter().find(|x| matches!(x, display::Draw::Turned { .. })) else { panic!("no column") };
+    let Some(display::Draw::Scaled { sx, items, .. }) = items.iter().find(|x| matches!(x, display::Draw::Scaled { .. })) else {
+        panic!("no scaled run in the column: {items:?}")
+    };
+    assert!((sx - 0.5).abs() < 1e-4);
+    let centres: Vec<f32> = items.iter().filter_map(|i| if let display::Draw::Rotated { cx, .. } = i { Some(*cx) } else { None }).collect();
+    assert_eq!(centres.len(), 3, "{items:?}");
+    assert!((centres[1] - centres[0] - 24.0).abs() < 0.05, "{centres:?}");
+    // The matrix: nothing to do at 100 % or for a hostile scale.
+    assert_eq!(display::Draw::scale_matrix(100.0, 0.5), Some([0.5, 0.0, 0.0, 1.0, 50.0, 0.0]));
+    for sx in [1.0, 0.0, -1.0, f32::NAN, f32::INFINITY, 1e9] {
+        assert_eq!(display::Draw::scale_matrix(100.0, sx), None, "{sx}");
+    }
+    assert_eq!(display::Draw::scale_matrix(f32::NAN, 0.5), None);
+}
