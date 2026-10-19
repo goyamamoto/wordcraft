@@ -7672,6 +7672,47 @@ fn a_japanese_region_starts_from_words_japanese_normal_template() {
     for id in ["FootnoteReference", "EndnoteReference"] {
         assert_eq!(d.styles.get(id).expect(id).chr.vert_align, Some(wordcraft_doc::props::VertAlign::Superscript), "{id}");
     }
+    // Word's Japanese Normal.dotm styles (`st1`–`st3` probes, 2026-10-19): black headings in
+    // the major fonts (游ゴシック Light for Japanese text), 16/14/12 pt then the text's size, 14/8/8/4
+    // pt before and 4/4/4/2 after, never italic; Title and Subtitle centred; Caption bold only;
+    // Header and Footer off the grid; TOC 2–9 indented a character a level; TOC Heading 12 pt
+    // in the automatic colour with no spacing.
+    use wordcraft_doc::props::{Align, Rgb, TextColor};
+    let black = Some(TextColor::Rgb(Rgb(0, 0, 0)));
+    let expect = [(1, Some(16.0), 14.0, 4.0), (2, Some(14.0), 8.0, 4.0), (3, Some(12.0), 8.0, 4.0), (4, None, 4.0, 2.0), (9, None, 4.0, 2.0)];
+    for (n, size, before, after) in expect {
+        let st = d.styles.get(&format!("Heading{n}")).expect("heading");
+        assert_eq!((st.chr.size, st.para.space_before, st.para.space_after), (size, Some(before), Some(after)), "Heading {n}");
+        assert_eq!((st.chr.color, st.chr.italic, st.chr.font.as_deref()), (black, None, Some("Aptos Display")), "Heading {n}");
+        assert_eq!((st.para.keep_next, st.para.keep_lines, st.para.outline_level), (Some(true), Some(true), Some(n as u8 - 1)), "Heading {n}");
+    }
+    assert_eq!(d.settings.east_asian_font(true, None, "漢字"), Some("游ゴシック Light"), "headings' Japanese face");
+    let title = d.styles.get("Title").expect("Title");
+    assert_eq!((title.para.align, title.chr.size, title.chr.spacing, title.chr.kern), (Some(Align::Center), Some(28.0), Some(-0.5), Some(14.0)));
+    let sub = d.styles.get("Subtitle").expect("Subtitle");
+    assert_eq!(
+        (sub.para.align, sub.para.space_after, sub.chr.size, sub.chr.font.as_deref()),
+        (Some(Align::Center), Some(8.0), Some(14.0), Some("Aptos Display"))
+    );
+    let quote = d.styles.get("Quote").expect("Quote");
+    assert_eq!(
+        (quote.para.align, quote.para.space_before, quote.para.space_after, quote.chr.italic),
+        (Some(Align::Center), Some(8.0), Some(8.0), Some(true))
+    );
+    let cap = d.styles.get("Caption").expect("Caption");
+    assert_eq!((cap.chr.bold, cap.chr.italic, cap.chr.size, cap.chr.color, cap.para.space_after), (Some(true), None, None, None, None));
+    let header = d.styles.get("Header").expect("Header");
+    assert_eq!((header.para.snap_to_grid, header.para.space_after, header.para.line_spacing), (Some(false), None, None));
+    assert_eq!(header.para.tabs.as_ref().map(|t| t.iter().map(|t| t.pos).collect::<Vec<_>>()), Some(vec![234.0, 468.0]));
+    for (n, chars) in [(1, None), (2, Some(1.0)), (3, Some(2.0)), (9, Some(8.0))] {
+        let toc = d.styles.get(&format!("TOC{n}")).expect("TOC");
+        assert_eq!((toc.para.indent_left_chars, toc.para.indent_left, toc.para.space_after), (chars, None, None), "TOC {n}");
+    }
+    let th = d.styles.get("TOCHeading").expect("TOC Heading");
+    assert_eq!(
+        (th.based_on.as_deref(), th.para.space_before, th.para.space_after, th.para.keep_lines, th.chr.size, th.chr.color),
+        (Some("Heading1"), Some(0.0), Some(0.0), Some(false), Some(12.0), None)
+    );
     // Word's Japanese Normal.dotm sets these compatibility switches (settings.xml of a document
     // it saved); its English one sets none of them.
     let s7 = &d.settings;
