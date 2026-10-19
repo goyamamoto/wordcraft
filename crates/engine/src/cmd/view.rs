@@ -52,6 +52,10 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"value"?: bool}"#)
         .pure(),
+        // Dotted boxes around the paragraphs' slots (screen only; Word › Preferences › View).
+        CommandSpec::new("view.textBoundaries", "Text boundaries", "File › Options › Display", |s, v| toggle(s, v, |x| &mut x.text_boundaries))
+            .params(r#"{"value"?: bool}"#)
+            .pure(),
         // The drawing grid over the page (screen only; never printed or exported).
         CommandSpec::new("view.gridlines", "Gridlines", "View › Show", |s, v| toggle(s, v, |x| &mut x.gridlines))
             .params(r#"{"value"?: bool}"#)

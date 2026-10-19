@@ -258,6 +258,10 @@ fn display(app: &mut WordApp, ui: &mut Ui) {
     if ui.checkbox(&mut crop, tl!("Crop marks")).changed() {
         let _ = app.run("view.cropMarks", json!({"value": crop}));
     }
+    let mut bounds = app.session.view.text_boundaries;
+    if ui.checkbox(&mut bounds, tl!("Text boundaries")).changed() {
+        let _ = app.run("view.textBoundaries", json!({"value": bounds}));
+    }
     numeral_picker(app, ui);
     ui.add_space(8.0);
     section(ui, "Printing");

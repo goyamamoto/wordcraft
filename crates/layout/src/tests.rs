@@ -2898,7 +2898,17 @@ fn split_row_rejects_a_hostile_cut() {
     let Some(Placed::Lines { story, path, para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })).cloned() else {
         panic!("no line")
     };
-    let line = |y: f32| Placed::Lines { story, path: path.clone(), para: para.clone(), l0: 0, l1: 1, x: 0.0, y, turn: TextDirection::Horizontal };
+    let line = |y: f32| Placed::Lines {
+        story,
+        path: path.clone(),
+        para: para.clone(),
+        l0: 0,
+        l1: 1,
+        x: 0.0,
+        y,
+        turn: TextDirection::Horizontal,
+        slot: Default::default(),
+    };
     let row = |height: f32, bottom: f32| RowLayout {
         height,
         items: vec![line(0.0), line(150.0)],
@@ -5173,7 +5183,7 @@ fn a_split_row_moves_shading_below_the_cut_with_it() {
         let Some(Placed::Lines { story, path, para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })).cloned() else {
             panic!("no line")
         };
-        Placed::Lines { story, path, para, l0: 0, l1: 1, x: 0.0, y, turn: TextDirection::Horizontal }
+        Placed::Lines { story, path, para, l0: 0, l1: 1, x: 0.0, y, turn: TextDirection::Horizontal, slot: Default::default() }
     };
     let fill = |y: f32, h: f32| Placed::Fill { rect: wordcraft_geom::Rect::new(0.0, y, 100.0, h), color: wordcraft_doc::props::Rgb(200, 0, 0) };
     // The row's own shading (from its top) and a nested cell's shading starting below the cut.
@@ -5935,6 +5945,98 @@ fn rotated_canvas_draws_its_clipped_members_inside_the_turn() {
             assert!(l.object_at(0, cx, cy - 80.0, 0.0).is_some());
         }
     }
+}
+
+#[test]
+fn paragraph_slots_box_the_column_with_the_space_before_and_after() {
+    // Word for Mac's text boundaries (its window observed with Japanese editing, 2026-10-19) box
+    // each paragraph's slot: the column's whole width whatever the indents, from the top of its
+    // space before to the bottom of its space after, consecutive boxes meeting edge to edge; a
+    // paragraph split over two pages keeps its space before with its first lines and its space
+    // after with its last.
+    let long: String = (0..60).map(|i| format!("paragraph three line {i} is long enough to wrap onto a line of its own ")).collect();
+    let mut d = Document::from_text(&format!("one\ntwo\n{long}"));
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+        p.indent_left = Some(36.0);
+        p.indent_right = Some(72.0);
+        p.space_before = Some(0.0);
+        p.space_after = Some(0.0);
+    })
+    .unwrap();
+    d.format_paragraphs(&Pos::body(1, 0), &Pos::body(1, 0), &|p| {
+        p.indent_first = Some(21.0);
+        p.space_before = Some(12.0);
+        p.space_after = Some(18.0);
+    })
+    .unwrap();
+    d.format_paragraphs(&Pos::body(2, 0), &Pos::body(2, 0), &|p| {
+        p.space_before = Some(6.0);
+        p.space_after = Some(9.0);
+        p.widow_control = Some(false);
+    })
+    .unwrap();
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 2, "the long paragraph runs onto a second page");
+    let body = l.pages[0].body;
+    let slots = |page: usize| -> Vec<(usize, Rect)> {
+        l.pages[page]
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Placed::Lines { story: StoryRef::Body, path, para, l0, l1, x, y, turn, slot } => {
+                    let (first, last) = (para.lines.get(*l0)?, para.lines.get(l1.checked_sub(1)?)?);
+                    let h = last.top + last.height - first.top;
+                    Some((
+                        path.0.first().copied()? as usize,
+                        turn_rect(*turn, *x, *y, Rect::new(0.0, -slot.before, slot.w, h + slot.before + slot.after)),
+                    ))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    let first = slots(0);
+    assert_eq!(first.iter().map(|(p, _)| *p).collect::<Vec<_>>(), vec![0, 1, 2], "{first:?}");
+    for (_, r) in &first {
+        assert!((r.x - body.x).abs() < 0.01 && (r.w - body.w).abs() < 0.01, "the column's whole width, indents inside it: {r:?} in {body:?}");
+    }
+    let (one, two, three) = (first[0].1, first[1].1, first[2].1);
+    assert!((one.y - body.y).abs() < 0.01, "{one:?}");
+    assert!((two.y - one.bottom()).abs() < 0.01, "boxes meet edge to edge: {one:?} {two:?}");
+    assert!((three.y - two.bottom()).abs() < 0.01, "{two:?} {three:?}");
+    let two_lines: f32 = l.pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Placed::Lines { path, para, l0, l1, .. } if path.0.first() == Some(&1) => {
+                let (f, la) = (para.lines.get(*l0)?, para.lines.get(l1.checked_sub(1)?)?);
+                Some(la.top + la.height - f.top)
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert!((two.h - (12.0 + two_lines + 18.0)).abs() < 0.01, "space before, the lines, space after: {two:?} lines {two_lines}");
+    let slack = body.bottom() - three.bottom();
+    assert!(
+        (0.0..15.0).contains(&slack),
+        "the split paragraph's first piece ends within a line of the text area's bottom, no space after: {three:?} {body:?}"
+    );
+    let second = slots(1);
+    assert_eq!(second.len(), 1, "{second:?}");
+    let rest = second[0].1;
+    assert!((rest.y - l.pages[1].body.y).abs() < 0.01, "no space before on the continued piece: {rest:?}");
+    let rest_lines: f32 = l.pages[1]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Placed::Lines { para, l0, l1, .. } => {
+                let (f, la) = (para.lines.get(*l0)?, para.lines.get(l1.checked_sub(1)?)?);
+                Some(la.top + la.height - f.top)
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert!((rest.h - (rest_lines + 9.0)).abs() < 0.01, "its space after on the last piece: {rest:?} lines {rest_lines}");
 }
 
 #[test]

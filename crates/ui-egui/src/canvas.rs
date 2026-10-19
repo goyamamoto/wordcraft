@@ -769,6 +769,45 @@ fn gridline_cells(page: &Page) -> impl Iterator<Item = wordcraft_geom::Rect> + '
     })
 }
 
+/// The pixels of a text-boundary box around the screen rectangle `r` (logical pixels), as Word
+/// for Mac dots one: its outline runs along the first and last rows and columns of pixels inside
+/// `r` (the edges rounded to pixels), one pixel wide, and a pixel of it is dark where the sum of
+/// its two coordinates is odd — so the dots of neighbouring boxes line up, and two boxes sharing
+/// an edge show as a two-pixel chequer. Only the pixels inside `clip` (the canvas) are returned,
+/// which bounds the work at any zoom; a box without a whole pixel inside it gives nothing.
+fn text_boundary_dots(r: Rect, clip: Rect) -> Vec<(i32, i32)> {
+    let mut v = Vec::new();
+    if !(r.min.x.is_finite() && r.min.y.is_finite() && r.max.x.is_finite() && r.max.y.is_finite() && clip.is_finite()) {
+        return v;
+    }
+    // `as` saturates: a far-off edge becomes a far-off pixel, never a panic.
+    let (x0, x1) = (r.min.x.round() as i32, (r.max.x.round() as i32).saturating_sub(1));
+    let (y0, y1) = (r.min.y.round() as i32, (r.max.y.round() as i32).saturating_sub(1));
+    if x1 < x0 || y1 < y0 {
+        return v;
+    }
+    let (cx0, cx1) = (clip.min.x.floor() as i32, clip.max.x.ceil() as i32);
+    let (cy0, cy1) = (clip.min.y.floor() as i32, clip.max.y.ceil() as i32);
+    let mut dot = |x: i32, y: i32| {
+        if (x.wrapping_add(y)).rem_euclid(2) == 1 && (cx0..cx1).contains(&x) && (cy0..cy1).contains(&y) {
+            v.push((x, y));
+        }
+    };
+    for x in x0.max(cx0)..=x1.min(cx1.saturating_sub(1)) {
+        dot(x, y0);
+        if y1 > y0 {
+            dot(x, y1);
+        }
+    }
+    for y in y0.saturating_add(1).max(cy0)..y1.min(cy1) {
+        dot(x0, y);
+        if x1 > x0 {
+            dot(x1, y);
+        }
+    }
+    v
+}
+
 /// The drawing grid's spacing in points at a screen scale: the document's spacing (`w:drawingGrid*Spacing`;
 /// ECMA-376's 1/8 inch when it doesn't say), doubled until the lines are at least
 /// [`DRAWING_GRID_MIN_PX`] apart on screen.
@@ -1188,12 +1227,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             }
             // Crop marks (Word › Preferences › View › Crop marks, 裁ちトンボ): an L at each corner
             // of the text area, as Word for Mac draws them (its window observed at 50, 100 and
-            // 200 %, 2026-10-19): two bars 18 pt long in page units, one logical pixel thick,
-            // grey, lying just outside the text area along its two edges and ending at the corner.
+            // 200 %, 2026-10-19, re-measured the same day): two bars 18 pt long in page units, two
+            // logical pixels thick whatever the zoom, grey, lying just outside the text area along
+            // its two edges and ending at the corner.
             if app.session.crop_marks() && app.session.view.mode == wordcraft_layout::ViewMode::Print && !app.session.view.read_mode {
                 let b = page.body;
                 let len = 18.0 * page_scale;
-                let stroke = Stroke::new(1.0, t.crop_mark);
+                let stroke = Stroke::new(2.0, t.crop_mark);
                 let at = |x: f32, y: f32| pos2(visual_sr.min.x + x * page_scale, visual_sr.min.y + y * page_scale);
                 for (c, sx, sy) in [
                     (at(b.x, b.y), -1.0, -1.0),
@@ -1201,9 +1241,47 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     (at(b.x, b.bottom()), -1.0, 1.0),
                     (at(b.right(), b.bottom()), 1.0, 1.0),
                 ] {
-                    // Each bar's centre line sits half a pixel outside the edge it runs along.
-                    painter.line_segment([pos2(c.x, c.y + sy * 0.5), pos2(c.x + sx * len, c.y + sy * 0.5)], stroke);
-                    painter.line_segment([pos2(c.x + sx * 0.5, c.y), pos2(c.x + sx * 0.5, c.y + sy * len)], stroke);
+                    // Each bar fills the two pixels outside the edge it runs along: its centre line
+                    // a pixel out.
+                    painter.line_segment([pos2(c.x, c.y + sy), pos2(c.x + sx * len, c.y + sy)], stroke);
+                    painter.line_segment([pos2(c.x + sx, c.y), pos2(c.x + sx, c.y + sy * len)], stroke);
+                }
+            }
+            // Text boundaries (Word › Preferences › View › Text boundaries, 文字列表示範囲枠): a dotted
+            // box around every paragraph of the body, as Word for Mac draws them (its window observed
+            // with Japanese editing, 2026-10-19): the box is the paragraph's slot — its column's whole
+            // width whatever its indents, from the top of its space before to the bottom of its space
+            // after, a cell's paragraph in the cell's text area, and in a 縦書き section the column's
+            // height by the paragraph's run of columns — its lines one logical pixel wide on the
+            // slot's first and last rows and columns of pixels, a pixel dark wherever the sum of its
+            // two screen coordinates is odd (so the dots of every box line up across the page),
+            // dark grey. On screen only.
+            if app.session.view.text_boundaries && app.session.view.mode == wordcraft_layout::ViewMode::Print && !app.session.view.read_mode {
+                let clip = painter.clip_rect();
+                let mut mesh = egui::Mesh::default();
+                for it in &page.items {
+                    let Placed::Lines { story: StoryRef::Body, para, l0, l1, x, y, turn, slot, .. } = it else { continue };
+                    if slot.w <= 0.0 {
+                        continue;
+                    }
+                    let (Some(first), Some(last)) = (para.lines.get(*l0), l1.checked_sub(1).and_then(|k| para.lines.get(k))) else { continue };
+                    let h = last.top + last.height - first.top;
+                    let r = wordcraft_layout::turn_rect(
+                        *turn,
+                        *x,
+                        *y,
+                        wordcraft_geom::Rect::new(0.0, -slot.before, slot.w, h + slot.before + slot.after),
+                    );
+                    let sr = Rect::from_min_max(
+                        pos2(visual_sr.min.x + r.x * page_scale, visual_sr.min.y + r.y * page_scale),
+                        pos2(visual_sr.min.x + r.right() * page_scale, visual_sr.min.y + r.bottom() * page_scale),
+                    );
+                    for (px, py) in text_boundary_dots(sr, clip) {
+                        mesh.add_colored_rect(Rect::from_min_size(pos2(px as f32, py as f32), vec2(1.0, 1.0)), t.text_boundary);
+                    }
+                }
+                if !mesh.is_empty() {
+                    painter.add(egui::Shape::mesh(mesh));
                 }
             }
             // View › Gridlines: the drawing grid over the text area (Print Layout, on screen only).
@@ -4431,6 +4509,34 @@ mod tests {
         // A grid line that lands on the margin is kept.
         let (xs, _) = drawing_grid(wordcraft_geom::Rect::new(0.0, 0.0, 100.0, 10.0), (25.0, 25.0));
         assert_eq!(xs, vec![0.0, 25.0, 50.0, 75.0, 100.0]);
+    }
+
+    #[test]
+    fn text_boundary_dots_lie_inside_the_box_where_the_coordinates_sum_odd() {
+        // A 10 × 4 box at (100, 50): the outline on its first and last rows and columns of pixels
+        // (x 100..=109, y 50..=53), dotted where x + y is odd.
+        let clip = Rect::from_min_max(pos2(0.0, 0.0), pos2(1000.0, 1000.0));
+        let dots = text_boundary_dots(Rect::from_min_max(pos2(100.0, 50.0), pos2(110.0, 54.0)), clip);
+        assert!(dots.iter().all(|(x, y)| (x + y) % 2 == 1), "{dots:?}");
+        assert!(dots.iter().all(|(x, y)| (100..=109).contains(x) && (50..=53).contains(y)), "{dots:?}");
+        assert!(dots.contains(&(101, 50)) && dots.contains(&(100, 51)) && dots.contains(&(109, 52)) && dots.contains(&(102, 53)), "{dots:?}");
+        assert!(!dots.contains(&(101, 51)) && !dots.contains(&(102, 51)), "inside the outline stays clear: {dots:?}");
+        // The top row has five dots, the bottom five, the two sides one each between them.
+        assert_eq!(dots.len(), 5 + 5 + 1 + 1, "{dots:?}");
+        // The next box down starts on the row after: its top row's dots are the other parity's
+        // columns, a two-pixel chequer with the row above.
+        let below = text_boundary_dots(Rect::from_min_max(pos2(100.0, 54.0), pos2(110.0, 72.0)), clip);
+        assert!(below.contains(&(101, 54)) && !below.contains(&(100, 54)), "{below:?}");
+        // Clipped to the canvas, and nothing from a box too thin for a pixel or from junk.
+        let clipped = text_boundary_dots(Rect::from_min_max(pos2(-5.0, -5.0), pos2(1e9, 1e9)), Rect::from_min_max(pos2(0.0, 0.0), pos2(8.0, 8.0)));
+        assert!(clipped.iter().all(|(x, y)| (0..8).contains(x) && (0..8).contains(y)) && clipped.is_empty(), "{clipped:?}");
+        let edge = text_boundary_dots(Rect::from_min_max(pos2(-5.0, 2.0), pos2(1e9, 6.0)), Rect::from_min_max(pos2(0.0, 0.0), pos2(8.0, 8.0)));
+        let mut edge = edge;
+        edge.sort();
+        assert_eq!(edge, vec![(0, 5), (1, 2), (2, 5), (3, 2), (4, 5), (5, 2), (6, 5), (7, 2)], "the top and bottom rows cross the canvas");
+        assert!(text_boundary_dots(Rect::from_min_max(pos2(3.2, 3.2), pos2(3.4, 9.0)), clip).is_empty());
+        assert!(text_boundary_dots(Rect::from_min_max(pos2(f32::NAN, 0.0), pos2(10.0, 10.0)), clip).is_empty());
+        assert!(text_boundary_dots(Rect::from_min_max(pos2(0.0, 0.0), pos2(f32::INFINITY, 10.0)), clip).is_empty());
     }
 
     #[test]
