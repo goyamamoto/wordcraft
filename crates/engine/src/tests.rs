@@ -7619,3 +7619,72 @@ fn format_state_names_the_east_asian_font_on_japanese_text() {
     // Every Chinese or Japanese character is a word, as Word counts them (#word count).
     assert_eq!(s.word_count(), 3);
 }
+
+/// The results of the fields in the body, in order.
+fn body_field_results(s: &Session) -> Vec<String> {
+    s.doc
+        .para_paths(StoryRef::Body)
+        .into_iter()
+        .filter_map(|path| s.doc.para(StoryRef::Body, &path))
+        .flat_map(|p| p.objects.iter())
+        .filter_map(|o| match o {
+            wordcraft_doc::InlineObject::Field { result, .. } => Some(result.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Word for Mac with Japanese editing: a field's `\* FORMAT` switch draws its number in the
+/// East Asian formats (`= 12 \* DBNum2` 十二, `\* DBNum3` 壱拾弐, `\* Aiueo` シ, `\* Zodiac3` 乙亥),
+/// in a formula in the body as in a table cell, in a `SEQ` field and in a `PAGE` field; a value
+/// the format can't draw and a switch word Word doesn't know show Word's error texts.
+#[test]
+fn field_format_switches_draw_east_asian_numbers_as_word_for_mac() {
+    use wordcraft_doc::field_format::{NOT_REPRESENTABLE, UNKNOWN_SWITCH};
+    let mut s = s();
+    for instr in [
+        "= 12 \\* DBNum2",
+        "= 12 \\* DBNum3",
+        "= 12 \\* Aiueo",
+        "= 12 \\* Zodiac3",
+        "= 2024 \\* DBNum1",
+        "= 3.5 \\* DBChar",
+        "= -5 \\* DBNum2",
+        "= 0.6 \\* Arabic",
+        "= 5 \\* Thai1",
+        "= 5 \\* MERGEFORMAT",
+        "= 1234.5 \\# \"0.00\" \\* MERGEFORMAT",
+    ] {
+        run(&mut s, "insert.field", json!({"instr": instr}));
+        run(&mut s, "text.insert", json!({"text": " "}));
+    }
+    run(&mut s, "insert.field", json!({"instr": "SEQ 図 \\* DBNum3"}));
+    run(&mut s, "insert.field", json!({"instr": "SEQ 図 \\* DBNum3"}));
+    run(&mut s, "insert.field", json!({"instr": "SEQ 表 \\* Zodiac3"}));
+    run(&mut s, "insert.field", json!({"instr": "SEQ 表 \\* Zodiac3"}));
+    run(&mut s, "references.updateFields", json!({}));
+    assert_eq!(
+        body_field_results(&s),
+        [
+            "十二",
+            "壱拾弐",
+            "シ",
+            "乙亥",
+            "二〇二四",
+            "３．５",
+            NOT_REPRESENTABLE,
+            NOT_REPRESENTABLE,
+            UNKNOWN_SWITCH,
+            "5",
+            "1234.50",
+            "壱",
+            "弐",
+            "甲子",
+            "乙丑"
+        ]
+    );
+    // A table formula takes the switch too.
+    let mut s = formula_table();
+    run(&mut s, "table.formula", json!({"formula": "=SUM(ABOVE) \\* DBNum2"}));
+    assert_eq!(formula_result(&s, 4, 1).as_deref(), Some("十二"));
+}

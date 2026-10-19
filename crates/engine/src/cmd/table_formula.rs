@@ -8,6 +8,7 @@
 //! the numbers are summed up to the next cell that holds none. A function needs its arguments:
 //! `=SUM()` is a syntax error, as it is in Word.
 
+use wordcraft_doc::field_format::{FieldNumFormat, Switch, UNKNOWN_SWITCH};
 use wordcraft_doc::table::{MAX_COLS, MAX_ROWS};
 use wordcraft_doc::{Cell, Table};
 
@@ -73,9 +74,17 @@ pub fn evaluate_field_with(
     instr: &str,
 ) -> Result<String, CmdError> {
     let (formula, switch) = split_switch(instr);
+    // The `\*` number format (Word's `= 12 \* DBNum2` shows 十二) is read before the formula is
+    // evaluated: a word Word doesn't know shows its error whatever the value.
+    let number_format = match FieldNumFormat::of_instr(instr) {
+        Switch::Format(f) => Some(f),
+        Switch::None => None,
+        Switch::Unknown => return Ok(UNKNOWN_SWITCH.to_string()),
+    };
     let value = evaluate_with(t, doc, default_lang, r, c, formula)?;
     Ok(match switch.and_then(picture_of) {
         Some(picture) => format_picture(value, &picture),
+        None if number_format.is_some() => number_format.map(|f| f.format_value(value)).unwrap_or_default(),
         None => {
             let out_lang = doc
                 .and_then(|d| {
@@ -100,18 +109,19 @@ pub fn evaluate_field_with(
     })
 }
 
-/// Splits a field's `\#` switch off its formula: `=SUM(ABOVE) \# "0.00"` gives the formula and the
-/// switch text (from the `\#` on).
+/// Splits a field's switches off its formula: `=SUM(ABOVE) \# "0.00"` gives the formula and the
+/// switch text (from the first `\#` or `\*` on).
 pub fn split_switch(instr: &str) -> (&str, Option<&str>) {
-    match instr.find("\\#") {
-        Some(at) => (instr[..at].trim_end(), Some(&instr[at..])),
+    match [instr.find("\\#"), instr.find("\\*")].into_iter().flatten().min() {
+        Some(at) => (instr.get(..at).unwrap_or("").trim_end(), instr.get(at..)),
         None => (instr, None),
     }
 }
 
 /// The picture a `\#` switch names: a quoted one (`"#,##0.00"`) or a single word.
 fn picture_of(switch: &str) -> Option<String> {
-    let rest = switch.strip_prefix("\\#")?.trim_start();
+    let at = switch.find("\\#")?;
+    let rest = switch.get(at + 2..)?.trim_start();
     let picture = match rest.strip_prefix('"') {
         Some(quoted) => quoted.split('"').next().unwrap_or_default(),
         None => rest.split_whitespace().next().unwrap_or_default(),
@@ -893,10 +903,14 @@ mod tests {
         let t = table(&[&["1234.5"], &[""]]);
         assert_eq!(split_switch("=A1 \\# \"0.00\""), ("=A1", Some("\\# \"0.00\"")));
         assert_eq!(split_switch("=A1"), ("=A1", None));
+        assert_eq!(split_switch("=A1 \\* DBNum2"), ("=A1", Some("\\* DBNum2")));
+        assert_eq!(split_switch("=A1 \\* MERGEFORMAT \\# 0"), ("=A1", Some("\\* MERGEFORMAT \\# 0")));
+
         let shown = |f: &str| evaluate_field(&t, 1, 0, f).unwrap_or_else(|e| panic!("{f}: {e}"));
         assert_eq!(shown("=A1 \\# \"#,##0.00\""), "1,234.50");
         assert_eq!(shown("=A1"), "1234.50");
         assert_eq!(shown("=A1 \\# 0"), "1235", "a bare picture word");
+        assert_eq!(shown("=A1 \\* MERGEFORMAT \\# 0"), "1235", "the picture is found after another switch");
         assert_eq!(shown("=A1 \\# \"\""), "1234.50", "an empty picture is none");
     }
 

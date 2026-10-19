@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use wordcraft_doc::field_format::FieldNumFormat;
 use wordcraft_doc::section::NumFormat;
 
 /// Context for fields that depend on where text lands.
@@ -94,30 +95,19 @@ pub fn field_name(instr: &str) -> String {
     instr.split_whitespace().next().unwrap_or("").trim_start_matches('=').to_ascii_uppercase()
 }
 
-/// `\* FORMAT` switch value (Arabic, roman, ROMAN, alphabetic, ALPHABETIC, CardText, Ordinal…).
-pub fn format_switch(instr: &str) -> Option<NumFormat> {
-    let mut it = instr.split_whitespace();
-    while let Some(w) = it.next() {
-        if w == "\\*" {
-            let v = it.next()?;
-            return Some(match v {
-                "roman" => NumFormat::LowerRoman,
-                "ROMAN" | "Roman" => NumFormat::UpperRoman,
-                "alphabetic" => NumFormat::LowerLetter,
-                "ALPHABETIC" | "Alphabetic" => NumFormat::UpperLetter,
-                "CardText" | "cardtext" => NumFormat::CardinalText,
-                "OrdText" | "ordtext" => NumFormat::OrdinalText,
-                "Ordinal" | "ordinal" => NumFormat::Ordinal,
-                "Arabic" | "arabic" => NumFormat::Decimal,
-                // Chinese numerals: counting (一百零一), legal (壹佰零壹), digit by digit (一〇一).
-                v if v.eq_ignore_ascii_case("ChineseNum1") => NumFormat::ChineseCountingThousand,
-                v if v.eq_ignore_ascii_case("ChineseNum2") => NumFormat::ChineseLegalSimplified,
-                v if v.eq_ignore_ascii_case("ChineseNum3") => NumFormat::IdeographDigital,
-                _ => continue,
-            });
-        }
+/// The number format a field's `\* FORMAT` switch names (`Arabic`, `roman`, `DBNum2`, `Aiueo` …),
+/// see [`FieldNumFormat`]; `None` without one or for a word Word doesn't know.
+pub fn format_switch(instr: &str) -> Option<FieldNumFormat> {
+    FieldNumFormat::switch_of(instr)
+}
+
+/// `n` under the field's `\*` switch when it has one, else in `default`; a value the switch's
+/// format can't draw shows Word's error text.
+fn numbered(fmt: Option<FieldNumFormat>, default: NumFormat, n: u32) -> String {
+    match fmt {
+        Some(f) => f.format_int(n).unwrap_or_else(|| wordcraft_doc::field_format::NOT_REPRESENTABLE.to_string()),
+        None => default.format(n),
     }
-    None
 }
 
 /// The light grey behind a field shown as its code.
@@ -138,12 +128,12 @@ pub fn field_text_on(instr: &str, result: &str, ctx: &FieldCtx, page: u32) -> (S
     let name = field_name(instr);
     let fmt = format_switch(instr);
     match name.as_str() {
-        "PAGE" => (format!("{}{}", ctx.chapter.as_deref().unwrap_or(""), fmt.unwrap_or(ctx.page_format).format(page)), true),
-        "NUMPAGES" => (fmt.unwrap_or(NumFormat::Decimal).format(ctx.pages), true),
-        "SECTIONPAGES" => (fmt.unwrap_or(NumFormat::Decimal).format(ctx.section_pages), true),
-        "SECTION" => (fmt.unwrap_or(NumFormat::Decimal).format(ctx.section), true),
+        "PAGE" => (format!("{}{}", ctx.chapter.as_deref().unwrap_or(""), numbered(fmt, ctx.page_format, page)), true),
+        "NUMPAGES" => (numbered(fmt, NumFormat::Decimal, ctx.pages), true),
+        "SECTIONPAGES" => (numbered(fmt, NumFormat::Decimal, ctx.section_pages), true),
+        "SECTION" => (numbered(fmt, NumFormat::Decimal, ctx.section), true),
         "PAGEREF" => match pageref_page(instr, ctx) {
-            Some((n, page_format)) => (fmt.unwrap_or(page_format).format(n), true),
+            Some((n, page_format)) => (numbered(fmt, page_format, n), true),
             None => (result.to_string(), false),
         },
         "TITLE" if result.is_empty() => (ctx.title.to_string(), false),
@@ -186,7 +176,16 @@ mod tests {
         let ctx = FieldCtx { page: 4, pages: 12, ..Default::default() };
         assert_eq!(field_text("PAGE", "", &ctx), ("4".into(), true));
         assert_eq!(field_text(" PAGE \\* ROMAN ", "", &ctx).0, "IV");
-        assert_eq!(field_text("NUMPAGES \\* CardText", "", &ctx).0, "Twelve");
+        assert_eq!(field_text("NUMPAGES \\* CardText", "", &ctx).0, "twelve");
+        // Word for Mac with Japanese editing: `{ PAGE \* DBNum2 }` on page 1 shows 一, `\* Aiueo` ア.
+        assert_eq!(field_text("PAGE \\* DBNum2", "", &ctx).0, "四");
+        assert_eq!(field_text("PAGE \\* Aiueo", "", &ctx).0, "エ");
+        assert_eq!(field_text("NUMPAGES \\* DBNum3", "", &ctx).0, "壱拾弐");
+        assert_eq!(
+            field_text("PAGE \\* Hebrew1", "", &FieldCtx { page: 400, ..Default::default() }).0,
+            wordcraft_doc::field_format::NOT_REPRESENTABLE
+        );
+        assert_eq!(field_text("PAGE \\* Thai1", "", &ctx).0, "4");
         assert_eq!(field_text("NUMPAGES \\* CHINESENUM1", "", &ctx).0, "十二");
         assert_eq!(field_text("PAGE \\* ChineseNum2", "", &ctx).0, "肆");
         assert_eq!(field_text("DATE \\@ \"M/d/yyyy\"", "1/2/2026", &ctx), ("1/2/2026".into(), false));
