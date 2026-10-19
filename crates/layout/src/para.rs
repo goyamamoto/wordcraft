@@ -387,6 +387,11 @@ pub struct ParaLayout {
     /// Clusters that are full-width opening brackets (「（『…), sorted: with `w:topLinePunct`
     /// one that starts a line takes half its cell (see `break_lines`).
     pub openings: Vec<u32>,
+    /// Clusters that are closing marks Word compresses or hangs at the end of a justified line
+    /// (`LINE_END_COMPRESS`) and ones it keeps at their width (`LINE_END_SQUEEZE`), sorted; filled
+    /// for justified and distributed paragraphs (see `break_lines`).
+    pub tail_compress: Vec<u32>,
+    pub tail_squeeze: Vec<u32>,
     /// Snapping to characters (`snapToChars`): what each cluster is to the cell layout, and the
     /// automatic space folded into each cluster's advance; empty otherwise (see
     /// `distribute_cells`).
@@ -938,6 +943,34 @@ const FULL_WIDTH_PUNCT: &str = "、。，．・：；！？）」』】〕〉》
 /// あ×44、「 wraps as あ×43 / あ、「 — the 、 keeps its width, so it is the bracket that shrinks).
 /// With `w:topLinePunct` one at the start of a line takes half its cell (see `break_lines`).
 const OPENING: &str = "（「『【〔〈《〘〖〝［｛";
+
+/// Closing marks that end a justified or distributed line as Word for Mac ends it (`hp1`–`hp7`
+/// probes with Japanese editing, 2026-10-19; see `break_lines`): one that doesn't fit the line
+/// stays on it at half its width when that fits (its glyph whole, the blank right half past the
+/// edge, the line spread to the edge), else hangs whole past the edge — 句読点のぶら下げ,
+/// `w:overflowPunct` — one a line, the line spread to the edge before it; with the option off
+/// it stays only at its full width where the half would fit, and the line is not spread. A
+/// left-, centre- or right-aligned line moves it on with the character before it, as every
+/// 縦書き column does (`hp8`); ！ and ？ move on too; … ー and small kana start the next line
+/// (standard kinsoku).
+const LINE_END_COMPRESS: &str = "、。，．」』）］｝】";
+/// Closing marks Word for Mac keeps at the end of a justified line at their full width where
+/// half an em would fit, the line not spread, with the option on or off (〕〉》 and ：；・ after
+/// 44 あ at 10.5 pt; 〙〗〟 by their kind).
+const LINE_END_SQUEEZE: &str = "〕〉》〙〗〟：；・";
+
+/// How a closing mark that doesn't fit stays at the end of a line (`LINE_END_COMPRESS`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tail {
+    No,
+    /// At half its width, its glyph whole: the line's content ends half an em before its end.
+    Half,
+    /// Whole, past the line's end: it takes no room on the line and sits at the edge once the
+    /// line is spread.
+    Hang,
+    /// At its full width, past the edge: the line is over-full and not spread.
+    Squeeze,
+}
 
 /// `cells`: the paragraph snaps to characters, where Word for Mac was measured (`cg2`/`cg9`,
 /// 2026-10-19) to compress a closing mark only before another closing mark (。、) and to keep an
@@ -2460,6 +2493,8 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         enclosures,
         tcy: b.tcy,
         openings: Vec::new(),
+        tail_compress: Vec::new(),
+        tail_squeeze: Vec::new(),
         cell_classes,
         cell_autos,
         ea_flags,
@@ -2474,6 +2509,18 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
             .filter(|(_, c)| cluster_char(&p.text, c).is_some_and(|ch| OPENING.contains(ch)))
             .map(|(k, _)| k as u32)
             .collect();
+    }
+    if matches!(pl.rp.align, Align::Justify | Align::Distribute) {
+        let marks = |set: &str| -> Vec<u32> {
+            pl.clusters
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| cluster_char(&p.text, c).is_some_and(|ch| set.contains(ch)))
+                .map(|(k, _)| k as u32)
+                .collect()
+        };
+        pl.tail_compress = marks(LINE_END_COMPRESS);
+        pl.tail_squeeze = marks(LINE_END_SQUEEZE);
     }
     let auto = env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens;
     pl.hyph_after = hyphenation_points(&text, to_para, &pl, auto, env.doc.settings.hyphenate_caps, &runs);
@@ -2534,6 +2581,15 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
     // Snapping to characters: the cell the lines are fitted to (`distribute_cells`).
     let snap_cells = env.grid.cell.filter(|c| rp.snap_to_grid && c.is_finite() && *c > 0.0 && pl.cell_classes.len() == pl.clusters.len());
     let bidi = rtl_para || !pl.bidi_levels.is_empty();
+    // Word's closing marks at the end of a line (`LINE_END_COMPRESS`): on justified and
+    // distributed lines — not on a character grid with kinsoku off, where the mark starts the
+    // next line (`hp5`), not in 縦書き, where Word for Mac moves the mark on with the character
+    // before it (`hp8`), nor in snapped cells or right-to-left paragraphs (not measured).
+    let tail_rule = !rtl_para
+        && !pl.vertical
+        && snap_cells.is_none()
+        && matches!(rp.align, Align::Justify | Align::Distribute)
+        && (rp.kinsoku || !(rp.snap_to_grid && env.grid.chars.is_some()));
     let mirrored: Vec<Exclusion>;
     let exclusions: &[Exclusion] = if rtl_para {
         mirrored = env
@@ -2671,6 +2727,9 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
         let mut pending_tab: Option<(usize, TabStop, f32)> = None; // tab cluster, stop, x where tab started
         let mut space_w = 0.0f32; // width of the spaces so far on this line
         let mut has_tab = false;
+        // A closing mark hung past the edge, and one kept at half its width (with its advance).
+        let mut hung: Option<usize> = None;
+        let mut half_at: Option<(usize, f32)> = None;
         while j < n {
             let Some(c) = pl.clusters.get(j).cloned() else { break };
             match c.kind {
@@ -2740,10 +2799,37 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 }
             });
             let shrink = if shrink_spaces && !has_tab { space_w * MAX_SPACE_SHRINK } else { 0.0 };
-            let fits = absorbs || x + c.adv <= right_edge + shrink + 0.01 || c.kind == ClKind::Space || c.kind == ClKind::Marker;
+            let mut fits = absorbs || x + c.adv <= right_edge + shrink + 0.01 || c.kind == ClKind::Space || c.kind == ClKind::Marker;
+            // (Scanned only when something doesn't fit: a long run of hidden text is markers.)
+            let has_content = || (c0..j).any(|k| pl.clusters.get(k).is_some_and(|c| c.kind != ClKind::Marker));
+            // A closing mark that doesn't fit may still end the line (Word for Mac, `hp4`–`hp7`):
+            // 。、」… at half its width when that fits, else hung whole past the edge, one a line
+            // (句読点のぶら下げ); with the option off, or for 〕〉》：；・, at its full width where
+            // the half would fit. Anything else moves on with the character before it (kinsoku).
+            let mut tail = Tail::No;
+            if !fits && tail_rule && c.kind == ClKind::Text && has_content() {
+                let compress = pl.tail_compress.binary_search(&(j as u32)).is_ok();
+                let squeeze = compress || pl.tail_squeeze.binary_search(&(j as u32)).is_ok();
+                let half = c.adv / 2.0;
+                let half_fits = half.is_finite() && x + half <= right_edge + 0.01;
+                tail = if compress && rp.overflow_punct {
+                    if half_fits {
+                        Tail::Half
+                    } else if hung.is_none() {
+                        Tail::Hang
+                    } else {
+                        Tail::No
+                    }
+                } else if squeeze && half_fits {
+                    Tail::Squeeze
+                } else {
+                    Tail::No
+                };
+                fits = tail != Tail::No;
+            }
             // A line's first item stays on it even when it doesn't fit; markers before it
             // (a content control's start, a bookmark) take no room and don't count (Word).
-            if !fits && (c0..j).any(|k| pl.clusters.get(k).is_some_and(|c| c.kind != ClKind::Marker)) {
+            if !fits && has_content() {
                 // Wrap: back up to the last break opportunity on this line.
                 end = LineEnd::Wrap;
                 // Hyphenate only when the plain break leaves more than the hyphenation zone empty.
@@ -2758,6 +2844,14 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 if let Some(bk) = last_break.filter(|bk| *bk >= c0) {
                     xs.truncate(bk + 1 - c0);
                     j = bk + 1;
+                    // A closing mark kept past the break moves on at its full width.
+                    if let Some((k, adv)) = half_at.filter(|(k, _)| *k >= j) {
+                        if let Some(cl) = pl.clusters.get_mut(k) {
+                            cl.adv = adv;
+                        }
+                        half_at = None;
+                    }
+                    hung = hung.filter(|k| *k < j);
                     // Recompute x for the kept clusters.
                     x = xs.last().copied().unwrap_or(line_start_x) + pl.clusters.get(bk).map(|c| c.adv).unwrap_or(0.0);
                 } else {
@@ -2780,7 +2874,18 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 break;
             }
             xs.push(x);
-            x += c.adv;
+            match tail {
+                Tail::Half => {
+                    let half = c.adv / 2.0;
+                    if let Some(cl) = pl.clusters.get_mut(j) {
+                        cl.adv = half;
+                    }
+                    half_at = Some((j, c.adv));
+                    x += half;
+                }
+                Tail::Hang => hung = Some(j),
+                Tail::No | Tail::Squeeze => x += c.adv,
+            }
             if c.kind == ClKind::Space {
                 space_w += c.adv;
             }
@@ -3057,6 +3162,11 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
         // Alignment / justification (trailing spaces hang).
         let mut content_end = xs.last().copied().unwrap_or(line_start_x);
         for k in (c0..c1).rev() {
+            if hung == Some(k) {
+                // The hung mark takes no room: the content ends where it starts.
+                content_end = xs.get(k - c0).copied().unwrap_or(content_end);
+                continue;
+            }
             match pl.clusters.get(k).map(|c| c.kind) {
                 Some(ClKind::Space) | Some(ClKind::Marker) | Some(ClKind::LineBreak) | Some(ClKind::PageBreak) | Some(ClKind::ColumnBreak) => {
                     content_end = xs.get(k - c0).copied().unwrap_or(content_end);
@@ -3094,7 +3204,11 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
         // the document says not to (`w:doNotExpandShiftReturn`, set by Word's Japanese
         // template); a line ending with a page or column break, and the paragraph's last line,
         // keep their spacing. Distributed text spreads every line.
-        let expands = end == LineEnd::Wrap || (end == LineEnd::LineBreak && !env.doc.settings.do_not_expand_shift_return);
+        // A line ending with a compressed or hung closing mark is spread even as the paragraph's
+        // last line (Word for Mac: 44 あ and 。 alone in a paragraph, the 。 half an em into the
+        // margin and the あ spread by the leftover).
+        let tail_end = hung.is_some_and(|k| k < c1) || half_at.is_some_and(|(k, _)| k < c1);
+        let expands = end == LineEnd::Wrap || tail_end || (end == LineEnd::LineBreak && !env.doc.settings.do_not_expand_shift_return);
         let justify = display.is_none() && !distributed && ((rp.align == Align::Justify && expands) || rp.align == Align::Distribute);
         // A line that only fits with shrunk spaces is shrunk, the last line of the paragraph too.
         let shrink = display.is_none() && shrink_spaces && slack < 0.0 && last_tab.is_none();
@@ -3137,6 +3251,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
             // em box at the edge: Word puts it 1.8 pt back from its share.
             if rp.align == Align::Justify
                 && let Some(&last) = content.last()
+                && half_at.is_none_or(|(k, _)| k != last)
                 && let Some(c) = pl.clusters.get(last)
                 && pl.ea_flags.get(last).is_some_and(|f| f & EA_CLOSING != 0)
                 && let Some(width) = last_width
