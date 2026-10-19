@@ -854,6 +854,35 @@ pub fn is_half_width_family(family: &str) -> bool {
     )
 }
 
+/// Is `c` half an em wide in Word's fixed-pitch East Asian fonts ([`is_half_width_family`])?
+/// Measured in Word for Mac (`hw1`, 2026-10-19, 24 pt): in MS Mincho, MS Gothic and GulimChe every
+/// ASCII character (letters, digits, punctuation, the space), the Latin-1 letters and symbols
+/// (é ñ ü © ¥ £) and the en and em dashes advance 0.50 em, as do the half-width katakana;
+/// × and ÷, Greek, Cyrillic, … and the curly quotes a whole em. MS PMincho, MS PGothic, MS UI
+/// Gothic, Gulim and Batang are proportional (A 0.664, 0.633 and 0.736 em) and take their
+/// faces' widths here.
+pub fn is_half_width_char(c: char) -> bool {
+    matches!(c, '\u{20}'..='\u{7E}' | '\u{A0}'..='\u{FF}' | '\u{2013}' | '\u{2014}' | '\u{FF61}'..='\u{FF9F}') && !matches!(c, '×' | '÷')
+}
+
+/// The face that draws the half-width Latin of a fixed-pitch Office East Asian font
+/// ([`is_half_width_family`]) when the face standing in for it (游明朝 or Hiragino for ＭＳ 明朝
+/// on a Mac) has proportional Latin: Osaka−等幅, Apple's monospaced Japanese font, whose ASCII,
+/// © and ¥ are 0.50 em and centred in their cells like MS Gothic's. `None` when it isn't
+/// installed or isn't half-width (the characters are then centred in 0.5-em cells in the
+/// stand-in face), or when the stand-in's own A is already half an em (the real MS Gothic).
+pub fn half_width_latin_face(primary: &FaceRef, bold: bool, italic: bool) -> Option<FaceRef> {
+    let half = |f: &FaceRef| {
+        let gid = f.glyph_for('A');
+        gid != 0 && (f.advance(gid) / f.upem.max(1.0) - 0.5).abs() < 1e-3
+    };
+    if half(primary) {
+        return None;
+    }
+    let r = resolve("Osaka Regular-Mono", bold, italic);
+    (!r.substituted && half(&r.face)).then_some(r.face)
+}
+
 fn is_office_ms_mincho(family: &str) -> bool {
     named_in(family, &["MS Mincho", "MS PMincho", "ＭＳ 明朝", "ＭＳ Ｐ明朝"])
 }
@@ -1060,6 +1089,31 @@ mod tests {
     /// Mincho's metrics by name, their underlines 0.7 of the descent + 0.53 pt down and MS
     /// Mincho's strikethrough 0.258 em up; Latin faces keep the gap above the ascent and their
     /// `post` underline.
+    /// Word for Mac (`hw1`, 2026-10-19): MS Mincho, MS Gothic and the 체 fonts set ASCII, Latin-1
+    /// and the dashes half an em wide, × ÷ and Greek a whole one; Osaka−等幅 stands in for their
+    /// Latin where installed, never for a face whose A is half an em already.
+    #[test]
+    fn half_width_characters_of_words_fixed_pitch_fonts() {
+        for c in ['A', 'a', 'W', 'i', '1', ' ', '.', '@', '~', 'é', 'ñ', '©', '¥', '£', '–', '—', 'ｱ', 'ﾞ'] {
+            assert!(is_half_width_char(c), "{c}");
+        }
+        for c in ['×', '÷', 'α', 'Д', '…', '“', '’', '‐', '〜', '日', 'ア', '　', 'Ａ'] {
+            assert!(!is_half_width_char(c), "{c}");
+        }
+        let yu = resolve("Yu Mincho", false, false);
+        if yu.substituted {
+            return;
+        }
+        if let Some(f) = half_width_latin_face(&yu.face, false, false) {
+            assert_eq!(f.get().family, "Osaka");
+            for c in ['A', 'W', 'i', ' ', '©', '¥'] {
+                assert!((f.advance(f.glyph_for(c)) / f.upem - 0.5).abs() < 1e-3, "{c}");
+            }
+            // A face with half-width Latin of its own needs no stand-in.
+            assert!(half_width_latin_face(&f, false, false).is_none());
+        }
+    }
+
     #[test]
     fn hangul_fallback_is_batang_for_oldstyle_serifs_and_malgun_gothic_otherwise() {
         if let (Some((s, sn)), Some((g, gn))) = (hangul_fallback(true, false, false), hangul_fallback(false, false, false)) {

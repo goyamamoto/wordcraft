@@ -1486,3 +1486,56 @@ fn bundled_unicode_glyphs_are_visible_and_extractable() {
     assert!(String::from_utf8_lossy(&bytes).contains("/ToUnicode"));
     assert_eq!(squash(&extract_text(&bytes).concat()), TEXT);
 }
+
+/// Character scaling (`w:w`): the glyphs are drawn stretched (a `cm` about the run's start) and
+/// stay text — extractable, and each glyph's transform half as wide at 50 %, twice at 200 %.
+#[test]
+fn character_scaling_stretches_the_glyphs_in_the_pdf() {
+    use hayro_interpret::font::Glyph;
+    use hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        interpret_page,
+    };
+    use hayro_syntax::Pdf;
+    /// Each glyph's text and the x scale of its transform.
+    struct Ex(Vec<(String, f64)>);
+    impl Device<'_> for Ex {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &kurbo::BezPath, _: kurbo::Affine, _: &Paint<'_>, _: &PathDrawMode) {}
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, g: &Glyph<'_>, t: kurbo::Affine, gt: kurbo::Affine, _: &Paint<'_>, mode: &GlyphDrawMode) {
+            if matches!(mode, GlyphDrawMode::Stroke(_)) {
+                return;
+            }
+            let s = match g.as_unicode() {
+                Some(hayro_cmap::BfString::Char(c)) => c.to_string(),
+                Some(hayro_cmap::BfString::String(s)) => s.to_string(),
+                None => String::new(),
+            };
+            let c = (t * gt).as_coeffs();
+            self.0.push((s, c[0].hypot(c[1])));
+        }
+        fn draw_image(&mut self, _: Image<'_, '_>, _: kurbo::Affine) {}
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+    let widths = |scale: Option<f32>| {
+        let chr = CharProps { size: Some(24.0), scale, ..Default::default() };
+        let mut d = Document::from_text("");
+        d.body = vec![para_block(Paragraph::with_text("Wide", chr))];
+        let bytes = export(&d, &PdfOptions::default()).unwrap();
+        let pdf = Pdf::new(bytes).expect("parse");
+        let cache = InterpreterCache::new();
+        let page = &pdf.pages()[0];
+        let mut ctx = Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 1.0, 1.0), &cache, pdf.xref(), InterpreterSettings::default());
+        let mut ex = Ex(Vec::new());
+        interpret_page(page, &mut ctx, &mut ex);
+        let text: String = ex.0.iter().map(|(s, _)| s.as_str()).collect();
+        assert!(text.contains("Wide"), "{text:?}");
+        ex.0.iter().find(|(s, _)| s == "W").map(|(_, w)| *w).expect("a W")
+    };
+    let (plain, half, double) = (widths(None), widths(Some(50.0)), widths(Some(200.0)));
+    assert!(plain > 0.0 && (half / plain - 0.5).abs() < 0.02 && (double / plain - 2.0).abs() < 0.05, "{plain} {half} {double}");
+}

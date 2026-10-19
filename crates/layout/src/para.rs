@@ -90,6 +90,11 @@ pub struct StyleRun {
     /// here (Malgun Gothic, Batang, MS Mincho…), whatever face stands in
     /// (`wordcraft_fonts::word::named_ea_metrics`).
     pub named: Option<wordcraft_fonts::word::NamedEa>,
+    /// The run's Latin font is one of Word's fixed-pitch East Asian fonts (ＭＳ 明朝, ＭＳ
+    /// ゴシック, the 체 fonts): its ASCII, Latin-1, dashes and half-width katakana take half an em
+    /// each, as Word for Mac sets them, whatever face stands in
+    /// (`wordcraft_fonts::word::is_half_width_char`).
+    pub half: bool,
 }
 
 /// A positioned glyph inside its cluster.
@@ -815,7 +820,9 @@ fn auto_space(b: &mut Builder, text: &str, letters: bool, digits: bool, grid: &G
         if !((ea_letter(pc) && latin(nc)) || (latin(pc) && ea_letter(nc))) {
             continue;
         }
-        let size = b.styles.get(prev.style as usize).map_or(0.0, |st| st.size);
+        // Character scaling (`w:w`) scales the space with the characters (Word for Mac: 3 pt beside
+        // 24-pt 游明朝 at 50 %, 12 at 200 %, across a line and along a column — `hw1`, `hw2`).
+        let size = b.styles.get(prev.style as usize).map_or(0.0, |st| st.size * (st.rc.scale / 100.0).clamp(0.01, 6.0));
         // The East Asian character's advance per em scales the space: an em for a full-width
         // character; 0.865 for Apple SD Gothic Neo's Hangul across a line and 1.2 standing in a
         // column (Word for Mac: 5.19 and 7.2 pt beside its 24-pt Hangul, 2026-10-19).
@@ -1183,6 +1190,7 @@ impl<'a> Builder<'a> {
             deco: wordcraft_fonts::word::decoration_metrics(ea_family.unwrap_or(&rc.font), &face, size),
             v_centre: ((wordcraft_fonts::word::vertical_em_centre(ea_family.unwrap_or(&rc.font), &face) - (a - d) / 2.0) * k) as f32,
             named: wordcraft_fonts::word::named_ea_metrics(ea_family.unwrap_or(&rc.font)),
+            half: wordcraft_fonts::word::is_half_width_family(&rc.font),
         };
         // A `u32` index (like the glyph ranges) counts more distinct formats than a paragraph can
         // hold in memory, so every format keeps its own style.
@@ -1265,6 +1273,16 @@ impl<'a> Builder<'a> {
             } else {
                 None
             };
+        // The half-width Latin of a fixed-pitch Office East Asian font (ＭＳ 明朝, ＭＳ ゴシック, the
+        // 체 fonts) is drawn by Osaka−等幅 when the face standing in has proportional Latin
+        // (`half_width_latin_face`); its cells are half an em either way (the glyph loop).
+        let half: Option<FaceRef> = if wordcraft_fonts::word::is_half_width_family(&rc.font)
+            && text.chars().any(|c| wordcraft_fonts::word::is_half_width_char(c) && !c.is_whitespace())
+        {
+            wordcraft_fonts::word::half_width_latin_face(&primary, rc.bold, rc.italic)
+        } else {
+            None
+        };
         // Split by font coverage (fallback faces), small caps case, script formatting and direction.
         let mut seg_start = 0;
         let mut cur: Option<SegKey> = None;
@@ -1286,6 +1304,7 @@ impl<'a> Builder<'a> {
             let face = match cur {
                 Some(k) if mark => k.face,
                 _ if !complex && east_asian(c) && primary_ea.is_some_and(|f| f.covers(c)) => primary_ea,
+                _ if !complex && half.is_some_and(|f| f.covers(dc)) && !c.is_whitespace() && wordcraft_fonts::word::is_half_width_char(dc) => half,
                 _ if prim.covers(dc) || c.is_whitespace() || c.is_control() || c == SOFT_HYPHEN => None,
                 // Hangul the fonts lack: Word's Korean face for the run's East Asian font.
                 _ if !complex && hangul.is_some() && is_hangul(c) => hangul.map(|h| h.0),
@@ -1415,9 +1434,16 @@ impl<'a> Builder<'a> {
                     // Word's own table fonts named (Malgun Gothic, Batang, ＭＳ 明朝…) advances its
                     // East Asian characters as Word does whatever face stands in (`named`): an em
                     // across a line, the glyph centred in it; its own pitch along a column.
+                    // A fixed-pitch Office font (ＭＳ 明朝, ＭＳ ゴシック, the 체 fonts) has two widths:
+                    // its half-width characters (ASCII, Latin-1, dashes, half-width kana) take half
+                    // an em across a line and lying along a column, everything else — Greek,
+                    // Cyrillic, × ÷ … and the curly quotes included — a whole em (Word for Mac,
+                    // `hw1`/`hw2`: 12 and 24 pt at 24 pt), the glyph centred in its cell.
                     let upem = st.face.upem.max(1.0) as f32;
                     let standing = self.env.vertical && crate::display::stands_in_vertical(ch, &st.face, g.gid);
-                    let named = st.named.filter(|_| ea_char);
+                    let half = st.half && !standing && wordcraft_fonts::word::is_half_width_char(ch);
+                    let full = st.half && !standing && !half && g.x_advance > 0 && !ch.is_control() && (!ch.is_whitespace() || ch == '\u{3000}');
+                    let named = st.named.filter(|_| ea_char && !half);
                     let (x_advance, centre) = match (standing, named) {
                         (true, Some(n)) => ((n.v_advance as f32 * upem).clamp(0.0, upem * 4.0), 0.0),
                         (true, None) => (st.face.vertical_advance(g.gid).map_or(g.x_advance as f32, |v| v as f32), 0.0),
@@ -1425,6 +1451,8 @@ impl<'a> Builder<'a> {
                             let cell = (a as f32 * upem).clamp(0.0, upem * 4.0);
                             (cell, (cell - g.x_advance as f32) / 2.0)
                         }
+                        (false, _) if half => (upem / 2.0, (upem / 2.0 - g.x_advance as f32) / 2.0),
+                        (false, _) if full => (upem, (upem - g.x_advance as f32) / 2.0),
                         _ => (g.x_advance as f32, 0.0),
                     };
                     self.glyphs.push(Glyph { gid: g.gid, dx: adv + (g.x_offset as f32 + centre) * k * hscale, dy: g.y_offset as f32 * k });
