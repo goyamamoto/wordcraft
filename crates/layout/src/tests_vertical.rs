@@ -764,3 +764,47 @@ fn half_width_characters_lie_half_an_em_apart_along_a_column_as_word_for_mac_set
         }
     }
 }
+
+/// In a 縦書き column the ideographic-space mark turns with the column (Word for Mac, 24 pt
+/// Yu Mincho, 2026-10-19: 38 × 42 px on screen where the horizontal square is 42 × 38): the same
+/// square inside the column's turned frame, centred on the cell along the column and on the
+/// em squares across it.
+#[test]
+fn ideographic_space_marks_turn_with_a_vertical_column() {
+    let yu = wordcraft_fonts::word::resolve("Yu Mincho", false, false);
+    if !yu.face.covers('あ') {
+        return;
+    }
+    let chr = CharProps { font: Some("Yu Mincho".into()), font_ea: Some("Yu Mincho".into()), size: Some(24.0), ..Default::default() };
+    let mut d = Document::from_text("");
+    d.body.clear();
+    d.body.push(wordcraft_doc::para_block(Paragraph::with_text("あ\u{3000}い", chr)));
+    d.last_section.text_direction = TextDirection::Down;
+    let l = lay(&d);
+    use crate::display::{DisplayOptions, Draw, page_display};
+    let items = page_display(&d, &l.pages[0], &DisplayOptions { marks: true, ..Default::default() });
+    fn boxes(items: &[Draw], out: &mut Vec<(Rect, bool)>, turned: bool) {
+        for i in items {
+            match i {
+                Draw::MarkBox { rect, .. } => out.push((*rect, turned)),
+                Draw::Turned { items, .. } => boxes(items, out, true),
+                Draw::Scaled { items, .. } | Draw::Rotated { items, .. } => boxes(items, out, turned),
+                _ => {}
+            }
+        }
+    }
+    let mut found = Vec::new();
+    boxes(&items, &mut found, false);
+    assert_eq!(found.len(), 1, "{found:?}");
+    let (r, turned) = found[0];
+    assert!(turned, "inside the column's turned frame");
+    assert!((r.w - 21.0).abs() < 1e-3 && (r.h - 19.0).abs() < 1e-3, "{r:?}");
+    // Inside the frame the line starts at the origin: cell and baseline positions are relative.
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+    let line = &para.lines[0];
+    let (cl, cr) = (line.cl_left(1).unwrap(), line.cl_right(1).unwrap());
+    assert!((r.x + r.w / 2.0 - (cl + cr) / 2.0).abs() < 0.01, "centred on the cell along the column: {r:?} {cl} {cr}");
+    let base = line.baseline - line.top;
+    let centre = base - para.styles[para.clusters[1].style as usize].v_centre;
+    assert!((r.y + r.h / 2.0 - centre).abs() < 0.01, "centred on the em squares across the column: {} vs {centre}", r.y + r.h / 2.0);
+}
