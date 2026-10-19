@@ -24,6 +24,14 @@ pub struct Resolved {
 /// Substitutes to try, in order, for a family that isn't installed. Open fonts that are
 /// metric-compatible come first (Carlito ↔ Calibri, Caladea ↔ Cambria, Liberation ↔ Arial /
 /// Times New Roman / Courier New), then common system fonts, then our bundled families.
+///
+/// A font Word for Mac doesn't have either is drawn as Word draws it (observed with Japanese
+/// editing, `fj1`–`fj3` probes, 2026-10-19): one with a Chinese, Japanese or Korean name (小塚明朝
+/// Pr6N R, HGP創英角ﾎﾟｯﾌﾟ体, 方正书宋简体, 함초롬바탕, 游ゴシック体, ヒラギノ丸ゴ ProN…) in 游ゴシック
+/// for every character, Latin included; one with a Latin name (Frutiger, Klee, Noto Sans JP,
+/// Kozuka Mincho Pr6N, a nonsense name — whatever the font table says of it) in Cambria, its
+/// East Asian characters in ＭＳ 明朝 ([`han_fallback`]); a Helvetica (Helvetica Neue LT Std) in
+/// Arial. UD デジタル 教科書体 is Word's one named exception: Hiragino Sans W4.
 fn substitutes(family: &str) -> &'static [&'static str] {
     const SANS: &[&str] = &["Carlito", "Helvetica Neue", "Arial", "Liberation Sans", "Noto Sans", "DejaVu Sans", "Source Sans 3"];
     const SERIF: &[&str] = &["Caladea", "Times New Roman", "Liberation Serif", "Georgia", "Noto Serif", "DejaVu Serif", "Source Serif 4"];
@@ -70,6 +78,9 @@ fn substitutes(family: &str) -> &'static [&'static str] {
     if let Some(cjk) = cjk_substitutes(&f) {
         return cjk;
     }
+    if !f.is_ascii() {
+        return GOTHIC;
+    }
     if is_hebrew(&f) {
         return HEBREW;
     }
@@ -81,7 +92,8 @@ fn substitutes(family: &str) -> &'static [&'static str] {
     }
     match f.as_str() {
         "palatino linotype" | "book antiqua" | "palatino" => PALATINO,
-        "arial" | "helvetica" | "arial nova" => ARIAL,
+        "arial" | "arial nova" => ARIAL,
+        _ if f.starts_with("helvetica") => ARIAL,
         "times new roman" | "times" => TIMES,
         "courier new" | "courier" | "consolas" | "lucida console" | "cascadia code" | "cascadia mono" => MONO,
         "symbol" | "wingdings" | "wingdings 2" | "wingdings 3" | "segoe ui symbol" | "webdings" => SYMBOL,
@@ -97,9 +109,77 @@ fn substitutes(family: &str) -> &'static [&'static str] {
         | "sitka text"
         | "sitka"
         | "aptos serif" => SERIF,
-        _ if f.contains("mono") || f.contains("code") => MONO,
-        _ if f.contains("serif") && !f.contains("sans") => SERIF,
-        _ => SANS,
+        // The sans fonts Office, Windows and macOS ship: Word has them, so they take a sans
+        // stand-in; any other Latin name is a font Word lacks too, drawn in Cambria.
+        "calibri"
+        | "calibri light"
+        | "aptos"
+        | "aptos display"
+        | "aptos narrow"
+        | "aptos light"
+        | "aptos semibold"
+        | "aptos extrabold"
+        | "aptos black"
+        | "segoe ui"
+        | "segoe ui light"
+        | "segoe ui semilight"
+        | "segoe ui semibold"
+        | "segoe ui black"
+        | "segoe ui historic"
+        | "segoe ui variable"
+        | "segoe print"
+        | "segoe script"
+        | "verdana"
+        | "tahoma"
+        | "trebuchet ms"
+        | "candara"
+        | "candara light"
+        | "corbel"
+        | "corbel light"
+        | "franklin gothic book"
+        | "franklin gothic medium"
+        | "franklin gothic demi"
+        | "franklin gothic heavy"
+        | "franklin gothic medium cond"
+        | "franklin gothic demi cond"
+        | "century gothic"
+        | "gill sans mt"
+        | "gill sans nova"
+        | "gill sans"
+        | "bahnschrift"
+        | "bahnschrift light"
+        | "bahnschrift semibold"
+        | "arial black"
+        | "arial narrow"
+        | "arial rounded mt bold"
+        | "impact"
+        | "lucida sans"
+        | "lucida sans unicode"
+        | "lucida grande"
+        | "microsoft sans serif"
+        | "ms sans serif"
+        | "helvetica neue"
+        | "avenir"
+        | "avenir next"
+        | "avenir next condensed"
+        | "optima"
+        | "futura"
+        | "geneva"
+        | "tw cen mt"
+        | "berlin sans fb"
+        | "abadi"
+        | "abadi extra light"
+        | "leelawadee"
+        | "leelawadee ui"
+        | "nirmala ui"
+        | "ebrima"
+        | "gadugi"
+        | "dejavu sans"
+        | "liberation sans"
+        | "carlito"
+        | "noto sans"
+        | "source sans 3" => SANS,
+        _ => SERIF,
     }
 }
 
@@ -217,6 +297,21 @@ const GOTHIC: &[&str] = &[
     "IPAGothic",
     "VL Gothic",
 ];
+/// Word for Mac's stand-in for the UD デジタル 教科書体 fonts: Hiragino Sans (W4), then the gothic
+/// chain.
+const UD_KYOKASHO: &[&str] = &[
+    "Hiragino Sans",
+    "Yu Gothic",
+    "YuGothic",
+    "Hiragino Kaku Gothic ProN",
+    "Meiryo",
+    "BIZ UDPGothic",
+    "BIZ UDGothic",
+    "Noto Sans CJK JP",
+    "Noto Sans JP",
+    "Source Han Sans JP",
+    "IPAexGothic",
+];
 const SANS_SC: &[&str] = &[
     "Microsoft YaHei",
     "DengXian",
@@ -309,12 +404,6 @@ fn cjk_chain(base: &str) -> Option<&'static [&'static str]> {
         | "biz udpmincho"
         | "biz udmincho medium"
         | "biz udpmincho medium"
-        | "ud デジタル 教科書体 n-r"
-        | "ud デジタル 教科書体 nk-r"
-        | "ud デジタル 教科書体 np-r"
-        | "ud digi kyokasho n-r"
-        | "ud digi kyokasho nk-r"
-        | "ud digi kyokasho np-r"
         | "hgp明朝e"
         | "hg明朝e"
         | "hgs明朝e"
@@ -365,6 +454,19 @@ fn cjk_chain(base: &str) -> Option<&'static [&'static str]> {
         | "noto sans cjk jp"
         | "noto sans jp"
         | "source han sans jp" => GOTHIC,
+        // Word for Mac draws the UD デジタル 教科書体 fonts it lacks in Hiragino Sans W4 (`fj1`).
+        "ud デジタル 教科書体 n-r"
+        | "ud デジタル 教科書体 nk-r"
+        | "ud デジタル 教科書体 np-r"
+        | "ud デジタル 教科書体 n-b"
+        | "ud デジタル 教科書体 nk-b"
+        | "ud デジタル 教科書体 np-b"
+        | "ud digi kyokasho n-r"
+        | "ud digi kyokasho nk-r"
+        | "ud digi kyokasho np-r"
+        | "ud digi kyokasho n-b"
+        | "ud digi kyokasho nk-b"
+        | "ud digi kyokasho np-b" => UD_KYOKASHO,
         "等线" | "dengxian" | "等线 light" | "dengxian light" | "微软雅黑" | "microsoft yahei" | "microsoft yahei ui" | "黑体" | "simhei"
         | "pingfang sc" | "苹方-简" | "hiragino sans gb" | "noto sans cjk sc" | "noto sans sc" | "source han sans sc" | "source han sans cn" => {
             SANS_SC
@@ -445,11 +547,12 @@ fn cjk_chain(base: &str) -> Option<&'static [&'static str]> {
     Some(chain)
 }
 
-/// Is `family` a Chinese, Japanese or Korean document font by name (one with CJK substitutes)?
-/// A run's East Asian font that isn't installed is then drawn with its substitute instead of the
-/// per-character fallback faces.
+/// Is `family` a Chinese, Japanese or Korean document font by name (one with CJK substitutes, or
+/// any name written in those scripts — Word for Mac draws such a font it lacks in 游ゴシック,
+/// `fj1`/`fj2`)? A run's East Asian font that isn't installed is then drawn with its substitute
+/// instead of the per-character fallback faces.
 pub fn is_cjk_family(family: &str) -> bool {
-    cjk_substitutes(&family.to_ascii_lowercase()).is_some()
+    cjk_substitutes(&family.to_ascii_lowercase()).is_some() || (!family.is_ascii() && !family.trim().is_empty())
 }
 
 /// The font a Windows 3.1-era charset name stands for: `Times New Roman Cyr`, `Arial CE`,
@@ -647,10 +750,12 @@ fn hangul_fallback_lists() {
 
 /// The face for the Chinese and Japanese characters a run's fonts lack: Word for Mac draws them
 /// in ＭＳ 明朝 whatever the run's language (Times New Roman, Arial and Georgia text tagged ja-JP,
-/// zh-CN, zh-TW, ko-KR and en-US alike, 2026-10-19) — here its substitute, when it covers them
-/// all.
-pub fn han_fallback(chars: &[char], bold: bool, italic: bool) -> Option<FaceRef> {
-    let r = resolve("MS Mincho", bold, italic);
+/// zh-CN, zh-TW, ko-KR and en-US alike, 2026-10-19) — in ＭＳ ゴシック when the run's East Asian
+/// font is one of Word's sans CJK families (맑은 고딕 and 나눔고딕 text's half-width katakana,
+/// `fj2`; 바탕, SimSun and the Latin fonts take ＭＳ 明朝) — here its substitute, when it covers
+/// them all.
+pub fn han_fallback(chars: &[char], gothic: bool, bold: bool, italic: bool) -> Option<FaceRef> {
+    let r = resolve(if gothic { "MS Gothic" } else { "MS Mincho" }, bold, italic);
     (r.face.is_east_asian() && chars.iter().all(|c| r.face.covers(*c))).then_some(r.face)
 }
 
@@ -1142,7 +1247,7 @@ mod tests {
         for f in ["Yu Gothic", "游ゴシック", "Malgun Gothic", "Meiryo", "Arial", "Times New Roman"] {
             assert!(!is_cjk_serif_family(f), "{f}");
         }
-        if let Some(f) = han_fallback(&['日', '本'], false, false) {
+        if let Some(f) = han_fallback(&['日', '本'], false, false, false) {
             assert!(f.is_east_asian() && f.covers('語'));
         }
     }
@@ -1315,6 +1420,44 @@ mod tests {
         assert!(is_cjk_family("ＭＳ 明朝") && is_cjk_family("yu gothic ui") && !is_cjk_family("Arial") && !is_cjk_family(""));
         // A CJK name resolves to a face (installed, a substitute, or the last resort) without panicking.
         let _ = resolve("游明朝", true, false);
+    }
+
+    /// Word for Mac (`fj1`–`fj3`, 2026-10-19): a font it lacks is drawn in 游ゴシック when its name
+    /// is Chinese, Japanese or Korean, in Cambria (East Asian characters in ＭＳ 明朝) when its
+    /// name is Latin, in Arial when it is a Helvetica; UD デジタル 教科書体 in Hiragino Sans.
+    #[test]
+    fn fonts_word_for_mac_lacks_substitute_as_it_draws_them() {
+        for name in [
+            "小塚明朝 Pr6N R",
+            "HGP創英角ﾎﾟｯﾌﾟ体",
+            "方正书宋简体",
+            "함초롬바탕",
+            "游ゴシック体",
+            "ヒラギノ丸ゴ ProN",
+            "Osaka−等幅",
+            "不存在フォント",
+            "DFP平成明朝体W3",
+        ] {
+            assert_eq!(substitutes(name), GOTHIC, "{name}");
+            assert!(is_cjk_family(name) && !is_cjk_serif_family(name), "{name}");
+        }
+        for name in ["Frutiger", "Klee", "Kozuka Mincho Pr6N", "Definitely Not A Font 123", "Foo Mono", "Brand Sans", "Open Sans", "Roboto"] {
+            assert_eq!(substitutes(name).first(), Some(&"Caladea"), "{name}: Cambria's metric twin first");
+            assert!(!is_cjk_family(name), "{name}");
+        }
+        assert_eq!(substitutes("Helvetica Neue LT Std").first(), Some(&"Liberation Sans"));
+        // Office's own sans fonts keep a sans stand-in (Word has them).
+        for name in ["Calibri", "Aptos", "Segoe UI", "Verdana", "Tahoma", "Century Gothic", "Segoe Print"] {
+            assert_eq!(substitutes(name).first(), Some(&"Carlito"), "{name}");
+        }
+        assert_eq!(substitutes("Helvetica").first(), Some(&"Liberation Sans"));
+        for name in ["UD デジタル 教科書体 N-R", "UD デジタル 教科書体 NP-B", "UD Digi Kyokasho NK-R"] {
+            assert_eq!(substitutes(name).first(), Some(&"Hiragino Sans"), "{name}");
+            assert!(is_cjk_family(name) && !is_cjk_serif_family(name), "{name}");
+        }
+        assert!(!is_cjk_family("") && !is_cjk_family("  "));
+        // Office's own fonts keep their substitutes by style.
+        assert!(is_cjk_serif_family("ＭＳ Ｐ明朝") && is_cjk_serif_family("游明朝") && !is_cjk_serif_family("メイリオ"));
     }
 
     #[test]
