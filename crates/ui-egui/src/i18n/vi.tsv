@@ -1425,9 +1425,6 @@
 	Select a picture, shape, chart or table to describe it.	Chọn ảnh, hình, biểu đồ hoặc bảng để mô tả.
 	Document Grid	Lưới tài liệu
 	No grid	Không lưới
-	Lines only	Chỉ dòng
-	Lines and characters	Dòng và ký tự
-	Text snaps to characters	Văn bản căn theo ký tự
 	Characters per line:	Số ký tự mỗi dòng:
 	Lines per page:	Số dòng mỗi trang:
 	Moved from	Đã di chuyển từ
@@ -2709,3 +2706,12 @@ template	Letter	Thư
 	Baseline	Đường cơ sở
 	Snap to grid when document grid is defined	Bám lưới khi lưới tài liệu được xác định
 	Automatically adjust right indent when document grid is defined	Tự động điều chỉnh thụt lề phải khi lưới tài liệu được xác định
+	Text direction:	Hướng văn bản:
+	Specify line grid only	Chỉ định lưới dòng
+	Specify line and character grid	Chỉ định lưới dòng và ký tự
+	Text snaps to character grid	Văn bản bám theo lưới ký tự
+	Pitch:	Bước:
+	Use default pitch	Dùng bước mặc định
+direction	Horizontal	Ngang
+direction	Vertical	Dọc
+lines	Pitch:	Bước:
