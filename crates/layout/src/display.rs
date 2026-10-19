@@ -128,6 +128,10 @@ pub enum Draw {
     /// An ideographic space (U+3000) with Show/Hide ¶ on: the hollow grey square Word for Mac
     /// draws in its cell, a hairline on screen only (see [`ideographic_space_mark`]).
     MarkBox { rect: Rect, color: Rgb },
+    /// A formatting mark drawn as strokes and filled polygons in the UI's mark colour, or in
+    /// `color`: Word's Japanese paragraph mark (↵) and line break (↓), see [`return_mark`] and
+    /// [`line_break_mark`]. On screen only.
+    MarkLines { lines: Vec<Vec<(f32, f32)>>, fills: Vec<Vec<(f32, f32)>>, width: f32, color: Option<Rgb> },
     /// Turned text (a table cell's text direction): `items` are drawn in a frame turned `turn`
     /// whose origin is page point (`x`, `y`) (see [`crate::turn_point`]).
     Turned { x: f32, y: f32, turn: TextDirection, items: Vec<Draw> },
@@ -225,6 +229,10 @@ pub struct DisplayOptions {
     pub hide_ink: bool,
     /// How tracked changes and comments are marked when `markup` is on (Track Changes Options).
     pub revisions: MarkupOptions,
+    /// Word's Japanese editing marks: the paragraph mark is a small ↵ of a fixed size and a
+    /// manual line break a ↓ of the text's size, as Word for Mac draws them with Japanese as the
+    /// East Asian editing language (2026-10-19); off, ¶ and ↵ as in English Word.
+    pub japanese_marks: bool,
 }
 
 impl Default for DisplayOptions {
@@ -238,6 +246,7 @@ impl Default for DisplayOptions {
             placeholders: false,
             hide_ink: false,
             revisions: MarkupOptions::default(),
+            japanese_marks: false,
         }
     }
 }
@@ -1295,7 +1304,6 @@ fn lines(
                 let cx = x + line.cl_left(k).unwrap_or(0.0);
                 let nx = x + line.cl_right(k).unwrap_or(cx - x);
                 let size = pl.styles.get(c.style as usize).map(|s| s.size).unwrap_or(msize);
-                let arrow = if line.rtl { '←' } else { '→' };
                 match c.kind {
                     ClKind::Space if marks.spaces && is_ideographic_space(pl, c) => {
                         if let Some(st) = pl.styles.get(c.style as usize) {
@@ -1306,9 +1314,8 @@ fn lines(
                     ClKind::Space if marks.spaces => {
                         out.push(Draw::Mark { x: (cx + nx) / 2.0 - size * 0.12, baseline: base - size * 0.08, size, ch: '·', color: None })
                     }
-                    ClKind::Tab if marks.tabs => {
-                        out.push(Draw::Mark { x: cx + ((nx - cx) / 2.0 - size * 0.3).max(0.0), baseline: base, size, ch: arrow, color: None })
-                    }
+                    ClKind::Tab if marks.tabs => out.push(tab_mark(cx, nx, base, size, line.rtl)),
+                    ClKind::LineBreak if marks.paragraphs && opts.japanese_marks => out.push(line_break_mark(cx + 1.0, base, size)),
                     ClKind::LineBreak if marks.paragraphs => out.push(Draw::Mark { x: cx + 1.0, baseline: base, size, ch: '↵', color: None }),
                     ClKind::PageBreak | ClKind::ColumnBreak if marks.paragraphs => {
                         let label = if c.kind == ClKind::PageBreak { '⤓' } else { '⇥' };
@@ -1334,7 +1341,8 @@ fn lines(
                 let ex = x + line.visual_end_x();
                 let size = pl.lines.first().map(|_| msize).unwrap_or(msize);
                 // A right-to-left paragraph's mark sits at its end, on the left.
-                let mx = if line.rtl { ex - 1.0 - size * 0.6 } else { ex + 1.0 };
+                let mark_w = if opts.japanese_marks { RETURN_MARK_W } else { size * 0.6 };
+                let mx = if line.rtl { ex - 1.0 - mark_w } else { ex + 1.0 };
                 // A tracked (inserted or deleted) paragraph mark is drawn in its author's colour.
                 let m = &opts.revisions;
                 let color = para.filter(|_| opts.markup && m.insertions_deletions).and_then(|p| match (p.mark.ins, p.mark.del) {
@@ -1353,6 +1361,8 @@ fn lines(
                 if let Some(start) = section_break_after(doc, story, path) {
                     let (x0, x1) = if line.rtl { (x + line.left, ex - 2.0) } else { (ex + 2.0, x + line.right) };
                     section_break_mark(start, x0, x1, base, size, alpha, out);
+                } else if opts.japanese_marks {
+                    out.push(return_mark(mx, base, color));
                 } else {
                     out.push(Draw::Mark { x: mx, baseline: base, size, ch: '¶', color });
                 }
@@ -1360,6 +1370,63 @@ fn lines(
         }
         let _ = bottom;
     }
+}
+
+/// Word's tab mark (→) as Word for Mac draws it (12–72 pt, `sp4` probe, 2026-10-19): an arrow
+/// 0.6 em long and 0.46 em tall centred in the tab's cell from `cx` to `nx`, its shaft 0.083 em
+/// thick to the tip and an open head whose two strokes reach 0.28 em back from the tip; in a
+/// narrow cell the arrow shrinks to the cell's width less 3.5 pt (a 48-pt tab in an 18-pt cell
+/// is 14.5 pt long: its head alone), and below twice its height it shrinks in height too (a
+/// 72-pt tab in a 6-pt cell is a 2 × 4 pt head). In a right-to-left line it points left.
+pub fn tab_mark(cx: f32, nx: f32, base: f32, size: f32, rtl: bool) -> Draw {
+    let size = if size.is_finite() { size.clamp(1.0, 1638.0) } else { 11.0 };
+    let (cx, nx) = (if cx.is_finite() { cx } else { 0.0 }, if nx.is_finite() { nx } else { 0.0 });
+    let (left, right) = (cx.min(nx), cx.max(nx));
+    let cell = right - left;
+    let w = (size * 0.6).min(cell - 3.5).max(1.0);
+    let h = (size * 0.46).min(2.0 * w);
+    let head = (size * 0.28).min(w);
+    let stroke = (size * 0.083).min(h / 2.0).max(0.1);
+    let mid = (left + right) / 2.0;
+    let (tail, tip) = if rtl { (mid + w / 2.0, mid - w / 2.0) } else { (mid - w / 2.0, mid + w / 2.0) };
+    let back = if rtl { tip + head } else { tip - head };
+    let y = base - h / 2.0;
+    let lines = vec![vec![(tail, y), (tip, y)], vec![(back, y - h / 2.0), (tip, y), (back, y + h / 2.0)]];
+    Draw::MarkLines { lines, fills: Vec::new(), width: stroke, color: None }
+}
+
+/// The width and height of Word's Japanese paragraph mark, points (6.5 × 6 pt at every size).
+pub const RETURN_MARK_W: f32 = 6.5;
+pub const RETURN_MARK_H: f32 = 6.0;
+
+/// Word's paragraph mark with Japanese editing (段落記号 ↵) as Word for Mac draws it at 12, 24, 48
+/// and 72 pt alike (2026-10-19): a fixed 6.5 × 6 pt hooked arrow in 1-pt strokes standing on
+/// the baseline — the stem down the right edge from the top to the bar 2.75 pt above the
+/// baseline, the bar leftwards to the tip, and the head's two diagonals 2.25 pt long. `x` is
+/// its left edge; `color` a tracked paragraph mark's reviser colour.
+pub fn return_mark(x: f32, base: f32, color: Option<Rgb>) -> Draw {
+    let (x, base) = (if x.is_finite() { x } else { 0.0 }, if base.is_finite() { base } else { 0.0 });
+    let top = base - RETURN_MARK_H;
+    let bar = base - 2.75;
+    let lines = vec![
+        vec![(x + 6.0, top), (x + 6.0, bar)],
+        vec![(x + 0.25, bar), (x + 6.0, bar)],
+        vec![(x + 2.5, bar - 2.25), (x + 0.25, bar), (x + 2.5, bar + 2.25)],
+    ];
+    Draw::MarkLines { lines, fills: Vec::new(), width: 1.0, color }
+}
+
+/// Word's manual line break mark with Japanese editing (↓) as Word for Mac draws it (12–72 pt,
+/// 2026-10-19): 0.4375 em wide and 0.708 em tall above the baseline, a stem 0.056 em thick down
+/// to a filled triangular head 0.2 em tall. `x` is its left edge, `size` the text's size.
+pub fn line_break_mark(x: f32, base: f32, size: f32) -> Draw {
+    let size = if size.is_finite() { size.clamp(1.0, 1638.0) } else { 11.0 };
+    let (x, base) = (if x.is_finite() { x } else { 0.0 }, if base.is_finite() { base } else { 0.0 });
+    let cx = x + size * 0.21875;
+    let head = base - size * 0.2;
+    let lines = vec![vec![(cx, base - size * 0.708), (cx, head)]];
+    let fills = vec![vec![(cx - size * 0.21875, head), (cx + size * 0.21875, head), (cx, base - size * 0.01)]];
+    Draw::MarkLines { lines, fills, width: (size * 0.056).max(0.5), color: None }
 }
 
 /// The grey of Word for Mac's ideographic-space mark (read from its window, 2026-10-19).
