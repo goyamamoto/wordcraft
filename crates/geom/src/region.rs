@@ -145,7 +145,15 @@ impl Region {
 
     /// The unit lengths are shown in by default: inches in the US, centimetres elsewhere.
     pub fn units(&self) -> Unit {
-        if self.inches.unwrap_or_else(|| INCHES.contains(&self.territory.as_str())) { Unit::Inches } else { Unit::Centimeters }
+        if self.inches.unwrap_or_else(|| INCHES.contains(&self.territory.as_str())) {
+            Unit::Inches
+        } else if self.territory == "JP" {
+            // Word for Mac in Japan measures in millimetres (its `measurement unit of settings`
+            // read with the system region en_JP, 2026-10-20; its rulers count 20, 40, 60 mm).
+            Unit::Millimeters
+        } else {
+            Unit::Centimeters
+        }
     }
 
     /// The decimal separator numbers are written with here (`,` or `.`).
@@ -206,6 +214,8 @@ mod tests {
         assert_eq!(Region::from_tag("de-CH").decimal(), '.');
         assert_eq!(Region::from_tag("es-MX").paper().0, "Letter");
         assert_eq!(Region::from_tag("ja-JP").paper().0, "A4");
+        assert_eq!(Region::from_tag("ja-JP").units(), Unit::Millimeters, "Word for Mac in Japan");
+        assert_eq!(Region::from_tag("en-JP").units(), Unit::Millimeters);
         assert_eq!(pl.format(Unit::Centimeters, 72.0), "2,54 cm");
         // Unix sets paper and measurement apart from the number locale.
         let mixed = Region::from_tag("pl_PL.UTF-8").with_paper_and_measurement(Some("en_US.UTF-8"), None);
