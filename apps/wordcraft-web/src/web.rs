@@ -57,9 +57,15 @@ pub fn start() {
                     // decimal separator (#838).
                     let region = wordcraft_ui_egui::i18n::system_region();
                     let sample = query().contains("sample");
-                    let doc = if sample { wordcraft_engine::sample::sample_document() } else { wordcraft_engine::blank_document(&region) };
+                    let east_asian = wordcraft_ui_egui::i18n::system_east_asian_language();
+                    let doc = if sample {
+                        wordcraft_engine::sample::sample_document()
+                    } else {
+                        wordcraft_engine::blank_document_in(&region, east_asian.as_deref())
+                    };
                     let mut session = Session::new(doc);
                     session.system_region = region;
+                    session.east_asian_editing = east_asian;
                     let messages = Rc::new(RefCell::new(Vec::new()));
                     let mut app = WordApp::new(session, services(inbox.clone(), cc.egui_ctx.clone(), dirty, saves.clone(), messages.clone()));
                     // Pasted pictures wait apart from dropped files: the app inserts one only when the page is the edit target (#1349).

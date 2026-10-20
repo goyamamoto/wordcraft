@@ -28,3 +28,12 @@ pub fn system() -> wordcraft_engine::Region {
     }
     region
 }
+
+/// The East Asian editing language ([`wordcraft_ui_egui::i18n::system_east_asian_language`]);
+/// none in runs without preferences, so they behave the same on every machine.
+pub fn east_asian() -> Option<String> {
+    if std::env::var_os("WORDCRAFT_NO_PREFS").is_some() {
+        return None;
+    }
+    wordcraft_ui_egui::i18n::system_east_asian_language()
+}

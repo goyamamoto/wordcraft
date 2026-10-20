@@ -335,6 +335,17 @@ pub fn system_region() -> wordcraft_engine::Region {
     wordcraft_engine::Region::from_locale_vars(|name| std::env::var(name).ok(), sys_locale::get_locale)
 }
 
+/// The East Asian editing language (Word for Mac's East Asian Languages preference): the first
+/// Japanese, Chinese or Korean language among the system's preferred languages (macOS lists
+/// `en-JP`, `ja-JP` for an English Mac that also takes Japanese), else none. `None` in tests.
+pub fn system_east_asian_language() -> Option<String> {
+    if cfg!(test) {
+        return None;
+    }
+    let tags: Vec<String> = sys_locale::get_locales().take(16).collect();
+    wordcraft_engine::east_asian_editing_language(tags.iter().map(String::as_str))
+}
+
 thread_local! {
     // Per thread: parallel test harnesses must not change each other's language.
     static CURRENT: Cell<Lang> = const { Cell::new(Lang::EN) };

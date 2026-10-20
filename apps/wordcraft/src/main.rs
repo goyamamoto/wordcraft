@@ -435,10 +435,18 @@ fn main() -> eframe::Result {
             // The system region picks the new document's paper, the units and the decimal
             // separator (#838).
             let region = region::system();
-            let doc = if sample { wordcraft_engine::sample::sample_document() } else { wordcraft_engine::blank_document(&region) };
+            // Japanese among the system's languages starts from Word's Japanese Normal template
+            // and puts Japanese text in Japanese, as Word for Mac's East Asian Languages does.
+            let east_asian = region::east_asian();
+            let doc = if sample {
+                wordcraft_engine::sample::sample_document()
+            } else {
+                wordcraft_engine::blank_document_in(&region, east_asian.as_deref())
+            };
             let (file_dialog, dialogs) = file_dialogs::hook(&cc.egui_ctx);
             let mut session = Session::new(doc);
             session.system_region = region;
+            session.east_asian_editing = east_asian;
             let mut app = WordApp::new(session, services(file_dialog, &cc.egui_ctx));
             load_prefs(&mut app);
             load_user_dictionary(&mut app);
