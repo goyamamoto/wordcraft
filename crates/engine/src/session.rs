@@ -457,6 +457,13 @@ pub struct Session {
     /// `None` is WordCraft's default, US English. The front end sets it from the interface
     /// language with [`Session::set_editing_language`] (a Polish interface writes Polish).
     pub editing_lang: Option<String>,
+    /// The East Asian editing language, a BCP 47 tag (`ja-JP`): Word for Mac's East Asian
+    /// Languages preference. With Japanese, new blank documents start from Word's Japanese Normal
+    /// template whatever the region, and a document that names no East Asian language is in
+    /// Japanese (see [`fill_east_asian_language`]). The front end sets it from the system's
+    /// preferred languages ([`east_asian_editing_language`]); `None` (headless sessions) leaves
+    /// both to the region.
+    pub east_asian_editing: Option<String>,
     /// Editing inside an equation: which one and the caret in it.
     pub math: Option<MathEdit>,
     /// Equations are typed in LaTeX rather than the linear format.
@@ -660,6 +667,7 @@ impl Session {
             keymap: crate::KeyMap::default(),
             ribbon: crate::RibbonLayout::default(),
             editing_lang: None,
+            east_asian_editing: None,
             read_aloud: Default::default(),
             password: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -1030,7 +1038,7 @@ impl Session {
     /// A new blank document (the Normal template) on the region's paper: Letter in the US and
     /// other Letter regions, A4 elsewhere (#838). Margins stay 2.54 cm (1") all round.
     pub fn blank_document(&self) -> Document {
-        blank_document(&self.region())
+        blank_document_in(&self.region(), self.east_asian_editing.as_deref())
     }
 
     /// Replace the document (open/new).
@@ -1040,6 +1048,9 @@ impl Session {
         self.bib_style = doc_bib_style(&doc);
         self.doc = doc;
         self.doc.ensure_nonempty();
+        if let Some(tag) = &self.east_asian_editing {
+            fill_east_asian_language(&mut self.doc, tag);
+        }
         self.password = None;
         self.file_name = None;
         self.sel = Selection::caret(self.doc.start_of(StoryRef::Body));
@@ -1129,6 +1140,7 @@ impl Session {
             ribbon: _,
             // A preference for new documents, like `prefs`: not part of this document.
             editing_lang: _,
+            east_asian_editing: _,
             // Equation editing mode, like `view`: not part of the document or its history.
             math: _,
             math_latex: _,
@@ -1403,18 +1415,60 @@ impl Session {
 /// region gets Word's Japanese Normal template ([`japanese_normal`]); Chinese and Korean ones
 /// the theme font language that picks their script's theme font for Han text.
 pub fn blank_document(region: &wordcraft_geom::Region) -> Document {
+    blank_document_in(region, None)
+}
+
+/// [`blank_document`] with `east_asian` as the East Asian editing language
+/// ([`Session::east_asian_editing`]), which wins over the region's language: Japanese editing on
+/// an English Mac in Japan starts from Word's Japanese Normal template, as Word for Mac does
+/// there (observed 2026-10-20, interface English, region `en-JP`, East Asian Languages Japanese).
+pub fn blank_document_in(region: &wordcraft_geom::Region, east_asian: Option<&str>) -> Document {
     let mut d = Document::new();
     let (_, w, h) = region.paper();
     d.last_section.page_w = w;
     d.last_section.page_h = h;
     let territory = region.territory.to_ascii_uppercase();
-    match region.language.to_ascii_lowercase().as_str() {
-        "ja" => japanese_normal(&mut d),
-        "zh" => d.settings.theme_font_lang_ea = Some(if matches!(territory.as_str(), "TW" | "HK" | "MO") { "zh-TW" } else { "zh-CN" }.into()),
-        "ko" => d.settings.theme_font_lang_ea = Some("ko-KR".into()),
-        _ => {}
+    match east_asian {
+        Some(tag) if tag.to_ascii_lowercase().starts_with("ja") => japanese_normal(&mut d),
+        Some(tag) => d.settings.theme_font_lang_ea = Some(tag.into()),
+        None => match region.language.to_ascii_lowercase().as_str() {
+            "ja" => japanese_normal(&mut d),
+            "zh" => d.settings.theme_font_lang_ea = Some(if matches!(territory.as_str(), "TW" | "HK" | "MO") { "zh-TW" } else { "zh-CN" }.into()),
+            "ko" => d.settings.theme_font_lang_ea = Some("ko-KR".into()),
+            _ => {}
+        },
     }
     d
+}
+
+/// The East Asian editing language among the system's preferred languages (BCP 47 tags, most
+/// preferred first): the first Japanese, Chinese or Korean one, as `ja-JP`, `zh-CN` (`zh-TW` for
+/// Traditional Chinese, Taiwan, Hong Kong and Macao) or `ko-KR`; `None` when there is none.
+pub fn east_asian_editing_language<'a>(tags: impl IntoIterator<Item = &'a str>) -> Option<String> {
+    tags.into_iter().find_map(|tag| {
+        let tag = tag.to_ascii_lowercase();
+        let mut parts = tag.split(['-', '_', '.', '@']);
+        match parts.next()? {
+            "ja" => Some("ja-JP".into()),
+            "ko" => Some("ko-KR".into()),
+            "zh" => Some(if parts.any(|p| matches!(p, "hant" | "tw" | "hk" | "mo")) { "zh-TW" } else { "zh-CN" }.into()),
+            _ => None,
+        }
+    })
+}
+
+/// Give `doc` the East Asian language `tag` where it names none — in its document defaults and
+/// as its theme font language — as Word for Mac does with that East Asian editing language: a
+/// file whose defaults say only `w:lang w:val="en-US"` has its Japanese text in Japanese (the
+/// object model's `language ID` of the paragraph), and Word saves it back with
+/// `w:eastAsia="ja-JP"` in both (`lg1` probe, 2026-10-20). A language the file names stays.
+pub fn fill_east_asian_language(doc: &mut Document, tag: &str) {
+    if doc.styles.default_chr.lang_ea.is_none() {
+        doc.styles.default_chr.lang_ea = Some(tag.into());
+    }
+    if doc.settings.theme_font_lang_ea.is_none() {
+        doc.settings.theme_font_lang_ea = Some(tag.into());
+    }
 }
 
 /// Word's Normal template with Japanese as the East Asian editing language, measured in Word
