@@ -7689,6 +7689,52 @@ fn vertical_align_command_sets_justified() {
 }
 
 #[test]
+fn japanese_editing_puts_japanese_text_in_japanese_as_word_for_mac_does() {
+    // The East Asian editing language comes from the system's preferred languages: an English
+    // Mac in Japan that also takes Japanese lists `en-JP`, `ja-JP`.
+    assert_eq!(crate::east_asian_editing_language(["en-JP", "ja-JP"]).as_deref(), Some("ja-JP"));
+    assert_eq!(crate::east_asian_editing_language(["en-US", "zh-Hant-TW"]).as_deref(), Some("zh-TW"));
+    assert_eq!(crate::east_asian_editing_language(["zh_CN.UTF-8"]).as_deref(), Some("zh-CN"));
+    assert_eq!(crate::east_asian_editing_language(["ko"]).as_deref(), Some("ko-KR"));
+    assert_eq!(crate::east_asian_editing_language(["en-JP", "fr-FR"]), None);
+    // With Japanese editing an English Mac in Japan starts from Word's Japanese Normal template,
+    // as Word for Mac does there (observed 2026-10-20).
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.system_region = wordcraft_geom::Region::from_tag("en-JP");
+    assert_eq!(s.blank_document().styles.default_chr.lang_ea, None, "no East Asian editing: the region's language decides");
+    s.east_asian_editing = Some("ja-JP".into());
+    let d = s.blank_document();
+    assert_eq!((d.styles.default_chr.size, d.styles.default_chr.lang_ea.as_deref()), (Some(10.5), Some("ja-JP")));
+    assert_eq!(
+        crate::blank_document_in(&wordcraft_geom::Region::from_tag("en-US"), Some("ko-KR")).settings.theme_font_lang_ea.as_deref(),
+        Some("ko-KR")
+    );
+    // A file whose defaults name no East Asian language (`w:lang w:val="en-US"` only): Word
+    // reports its Japanese paragraph's language as Japanese and saves it back with
+    // `w:eastAsia="ja-JP"` in the defaults and the theme font language (`lg1` probe, 2026-10-20);
+    // its Latin language stays US English.
+    let mut plain = wordcraft_doc::Document::new();
+    plain.styles.default_chr.lang = Some("en-US".into());
+    plain.body = wordcraft_doc::Document::from_text("日本語を書く").body;
+    let file = wordcraft_docx::write(&plain).unwrap();
+    let opened = wordcraft_docx::read(&file).unwrap();
+    assert_eq!(opened.styles.default_chr.lang_ea, None);
+    s.set_document(opened);
+    assert!(!s.dirty, "filling in the language isn't an edit");
+    assert_eq!((s.doc.styles.default_chr.lang.as_deref(), s.doc.styles.default_chr.lang_ea.as_deref()), (Some("en-US"), Some("ja-JP")));
+    assert_eq!(s.doc.settings.theme_font_lang_ea.as_deref(), Some("ja-JP"));
+    run(&mut s, "select.all", json!({}));
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["langEastAsia"], json!("ja-JP"));
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+    assert_eq!((back.styles.default_chr.lang_ea.as_deref(), back.settings.theme_font_lang_ea.as_deref()), (Some("ja-JP"), Some("ja-JP")));
+    // A language the file names stays.
+    let mut korean = plain.clone();
+    korean.styles.default_chr.lang_ea = Some("ko-KR".into());
+    s.set_document(korean);
+    assert_eq!(s.doc.styles.default_chr.lang_ea.as_deref(), Some("ko-KR"));
+}
+
+#[test]
 fn a_japanese_region_starts_from_words_japanese_normal_template() {
     use wordcraft_doc::props::LineSpacing;
     use wordcraft_doc::section::DocGridType;
