@@ -56,8 +56,11 @@ impl Session {
     }
 
     /// Show `text` as the composition at the caret, replacing the one shown. `active` is the
-    /// clause being converted (a character range of `text`), drawn with a thick underline. Empty
-    /// text takes the composition out (the input method was dismissed).
+    /// input method's selection in it (a character range of `text`): the clause being converted,
+    /// drawn with a thick underline, or — empty — where the input method's own caret stands in
+    /// text not yet converted (moved with the arrow keys, to type into the middle of the
+    /// composition); the document's caret goes to its end. Empty text takes the composition out
+    /// (the input method was dismissed).
     pub fn set_composition(&mut self, text: &str, active: Option<std::ops::Range<usize>>) -> Result<(), CmdError> {
         let text: String = text.chars().filter(|c| !c.is_control() || *c == '\t').take(MAX_COMPOSITION).collect();
         let (sel_before, dirty_before) = match self.composition.take() {
@@ -93,7 +96,8 @@ impl Session {
         props.del = None;
         let mark_before = self.doc.para_at(&start).map(|p| p.mark.clone()).unwrap_or_default();
         let n = text.chars().count();
-        let active = active.map(|r| r.start.min(n)..r.end.min(n)).filter(|r| r.start < r.end);
+        let selected = active.map(|r| r.start.min(n)..r.end.min(n).max(r.start.min(n)));
+        let active = selected.clone().filter(|r| r.start < r.end);
         // Up to three runs: before the clause, the clause (thick), after it.
         let mut at = start.clone();
         let mut parts: Vec<(String, bool)> = Vec::new();
@@ -114,8 +118,9 @@ impl Session {
         })();
         match result {
             Ok(end) => {
-                // The caret follows the clause being converted (the candidate window opens there).
-                let caret = match &active {
+                // The caret follows the input method's: the end of the clause being converted, or
+                // its caret in text not yet converted (the candidate window opens there).
+                let caret = match &selected {
                     Some(r) => Pos { off: start.off.saturating_add(text.chars().take(r.end).map(char::len_utf8).sum()), ..start.clone() },
                     None => end.clone(),
                 };
@@ -227,6 +232,32 @@ mod tests {
         assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().props_of_char(1).underline, None, "no underline survives");
         run(&mut s, "edit.undo", json!({}));
         assert_eq!(text(&s), "ab");
+    }
+
+    /// The input method's caret in text not yet converted (an empty selection in the composition,
+    /// moved with the arrow keys): the document's caret stands there, and nothing is drawn thick;
+    /// what the input method types there comes as the whole composition again.
+    #[test]
+    fn the_caret_stands_where_the_input_method_moved_it_in_the_composition() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("ab"));
+        run(&mut s, "caret.right", json!({}));
+        s.set_composition("にほご", Some(3..3)).unwrap();
+        assert_eq!(s.sel.focus.off, "aにほご".len(), "typing: the caret at the end");
+        // Left arrow twice: the input method's caret after に.
+        s.set_composition("にほご", Some(1..1)).unwrap();
+        assert_eq!(text(&s), "aにほごb");
+        assert_eq!(s.sel.focus.off, "aに".len(), "the caret follows the input method's");
+        let p = s.doc.para_at(&s.sel.focus).unwrap();
+        assert!((1.."aにほご".len()).step_by(3).all(|i| p.props_of_char(i).underline == Some(Underline::Single)), "no clause is being converted");
+        // ん typed there: the input method sends the whole composition with its caret after ん.
+        s.set_composition("にほんご", Some(3..3)).unwrap();
+        assert_eq!(text(&s), "aにほんごb");
+        assert_eq!(s.sel.focus.off, "aにほん".len());
+        // A range past the end stays in the composition.
+        s.set_composition("にほんご", Some(9..9)).unwrap();
+        assert_eq!(s.sel.focus.off, "aにほんご".len());
+        s.clear_composition();
+        assert_eq!((text(&s), s.sel.focus.off), ("ab".to_string(), 1));
     }
 
     /// A selection within one paragraph is replaced by the composition (the input method's marked
