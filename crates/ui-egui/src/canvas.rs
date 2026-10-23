@@ -4886,6 +4886,49 @@ mod tests {
         assert_eq!(tabs(&h), 1, "in horizontal text the click sets a tab stop");
     }
 
+    /// The input method's caret moved with the arrow keys inside text not yet converted (an
+    /// empty selection in its marked text): the caret and the candidate window's position go
+    /// there, and what is typed there arrives as the whole composition again, as in Word.
+    #[test]
+    fn the_caret_follows_the_input_methods_caret_inside_the_composition() {
+        use egui::{Event, ImeEvent};
+        let a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..8 {
+            h.step();
+        }
+        let ime_x = |h: &egui_kittest::Harness<'_, WordApp>| h.output().platform_output.ime.as_ref().map(|ime| ime.cursor_rect.min.x);
+        let caret = |h: &egui_kittest::Harness<'_, WordApp>| h.state().session.sel.focus.off;
+        h.event(Event::Ime(ImeEvent::Preedit { text: "にほご".into(), active_range_chars: Some(3..3) }));
+        h.step();
+        h.step();
+        let at_end = ime_x(&h).expect("IME position");
+        assert_eq!(caret(&h), "にほご".len());
+        // Left arrow twice.
+        h.event(Event::Ime(ImeEvent::Preedit { text: "にほご".into(), active_range_chars: Some(1..1) }));
+        h.step();
+        h.step();
+        assert_eq!(caret(&h), "に".len(), "the caret stands after に");
+        let inside = ime_x(&h).expect("IME position");
+        assert!(inside < at_end - 10.0, "the candidate window follows the caret: {inside} vs {at_end}");
+        // ん typed there, then committed.
+        h.event(Event::Ime(ImeEvent::Preedit { text: "にほんご".into(), active_range_chars: Some(3..3) }));
+        h.step();
+        assert_eq!(caret(&h), "にほん".len());
+        h.event(Event::Ime(ImeEvent::Preedit { text: String::new(), active_range_chars: None }));
+        h.event(Event::Ime(ImeEvent::Commit("日本語".into())));
+        h.step();
+        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "日本語");
+        assert_eq!(caret(&h), "日本語".len(), "after the commit the caret ends the committed text");
+    }
+
     /// Committing the first clause of a multi-clause conversion: the input method commits it and
     /// marks the rest again (`insertText:` then `setMarkedText:`, the events in one frame or the
     /// next), and later commits the rest. Every clause reaches the document, and the input
