@@ -10336,12 +10336,19 @@ fn window_commands_need_a_host_and_name_an_open_window() {
         assert!(s.why_disabled(id).is_some(), "{id} is disabled without a window host");
         assert!(matches!(s.run(id, &json!({})), Err(CmdError::Disabled(_))), "{id}");
     }
-    // New Window and Split need two views of one document, which a session doesn't have yet.
-    assert!(s.why_disabled("view.newWindow").is_some() && s.why_disabled("view.split").is_some());
+    // New Window needs the host too; Split is this window's own (the front end draws the panes).
+    assert!(s.why_disabled("view.newWindow").is_some() && s.why_disabled("view.split").is_none());
 
-    let entry = |id: u64, title: &str| crate::WindowEntry { id, title: title.into(), path: None };
+    let entry = |id: u64, title: &str| crate::WindowEntry { id, title: title.into(), path: None, document: 0 };
     s.windows = crate::Windows { host: true, this: 7, list: vec![entry(7, "Document1"), entry(9, "letter")], ..Default::default() };
     assert!(s.why_disabled("view.arrangeAll").is_none() && s.why_disabled("view.switchWindows").is_none());
+    assert!(s.why_disabled("view.newWindow").is_none(), "New Window works with a host");
+    assert!(s.windows.others_on_this_document().next().is_none(), "one window per document so far");
+    s.windows.list[0].document = 5;
+    s.windows.list[1].document = 5;
+    assert_eq!(s.windows.others_on_this_document().map(|w| w.id).collect::<Vec<_>>(), vec![9]);
+    s.windows.list[0].document = 0;
+    s.windows.list[1].document = 0;
     assert!(s.why_disabled("view.sideBySide").is_none(), "another window is open");
     assert!(s.why_disabled("view.syncScroll").is_some(), "only while side by side");
     assert_eq!(run(&mut s, "view.arrangeAll", json!({}))["windows"], 2);
@@ -10377,4 +10384,42 @@ fn window_commands_need_a_host_and_name_an_open_window() {
     // No window host reports a single window with no partner to compare with.
     s.windows.list.truncate(1);
     assert_eq!(s.why_disabled("view.sideBySide"), Some("Open another document first"));
+}
+
+/// Two views of one document (View › New Window, Split): each has its own caret, selection and
+/// view settings; the document, its undo history and its unsaved state are shared. Swapping a
+/// view in clamps its caret to the document as it is now and ends the typing in progress.
+#[test]
+fn views_of_one_document_take_turns_with_their_own_carets() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello world"}));
+    run(&mut s, "view.zoom", json!({"value": 150.0}));
+    // A second view: at the start, with the same zoom.
+    let mut other = s.new_view();
+    assert_eq!(other.view.zoom, s.view.zoom);
+    assert_eq!(other.sel.focus.off, 0);
+    let first_caret = s.sel.focus.off;
+    assert_eq!(first_caret, "Hello world".len());
+    // The other view's turn: its caret, typing there edits the shared document.
+    s.swap_view(&mut other);
+    assert_eq!(s.sel.focus.off, 0);
+    run(&mut s, "text.insert", json!({"text": "Oh, "}));
+    assert_eq!(text(&s), "Oh, Hello world");
+    run(&mut s, "view.zoom", json!({"value": 80.0}));
+    // Back to the first view: its caret moved on with the text it was after? No: it is clamped,
+    // not shifted (Word keeps each window's caret where the text now is), and the zoom is its own.
+    s.swap_view(&mut other);
+    assert_eq!(s.view.zoom, 1.5);
+    assert!(s.sel.focus.off <= text(&s).len());
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.insert", json!({"text": "!"}));
+    assert_eq!(text(&s), "Oh, Hello world!");
+    // One undo history: undoing here takes back the other view's typing after this one's.
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(text(&s), "Hello world");
+    // A view whose caret was past the end of a shrunk document is clamped when it comes back.
+    s.swap_view(&mut other);
+    assert_eq!(s.view.zoom, 0.8);
+    assert!(s.sel.focus.off <= text(&s).len());
 }

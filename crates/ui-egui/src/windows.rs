@@ -34,7 +34,7 @@ use std::sync::mpsc::Receiver;
 
 use egui::{Rect, Vec2, ViewportBuilder, ViewportCommand, ViewportId, pos2, vec2};
 use serde_json::{Value, json};
-use wordcraft_engine::{WindowEntry, Windows};
+use wordcraft_engine::{ViewSlot, WindowEntry, Windows};
 
 use crate::native_menu::{self, NativeMenu};
 use crate::window_geometry::{MIN_SIZE, WindowGeometry};
@@ -72,6 +72,10 @@ pub enum WindowRequest {
     Close,
     /// Quit the app: every window closes, asking about unsaved changes (`app.quit`).
     Quit,
+    /// View › New Window: another window on this window's document.
+    NewWindow,
+    /// File › Close on a document with several windows: the other windows on it close too.
+    CloseDocumentWindows,
 }
 
 /// A window and the `WordApp` it shows.
@@ -98,6 +102,23 @@ pub struct Window {
     /// the next change is the partner's scroll arriving (not to be passed back).
     scroll_seen: Option<Vec2>,
     scroll_applied: bool,
+    /// View › New Window: the document group this window belongs to, its number in it (the
+    /// title's `:2`) and its view of the document while another window of the group holds the
+    /// session (`Session::swap_view`).
+    group: Option<u64>,
+    view_number: Option<u32>,
+    view: Option<ViewSlot>,
+}
+
+/// The windows on one document (View › New Window): they share one session, which the one that
+/// last drew holds; the others keep their view and a placeholder session until their turn.
+struct Group {
+    id: u64,
+    members: Vec<WindowId>,
+    holder: WindowId,
+    /// What the others last saw: the document's revision, dirty flag and file. A change repaints them.
+    seen: (u64, bool, Option<std::path::PathBuf>),
+    next_number: u32,
 }
 
 /// View Side by Side: the two windows, and where to put them back.
@@ -133,6 +154,8 @@ pub struct Host {
     frames: u64,
     active: WindowId,
     pair: Option<Pair>,
+    groups: Vec<Group>,
+    next_group: u64,
     quit: Quit,
     new_app: NewApp,
     template: ViewportBuilder,
@@ -170,6 +193,8 @@ impl Host {
             frames: 0,
             active: 1,
             pair: None,
+            groups: Vec::new(),
+            next_group: 1,
             quit: Quit::No,
             new_app,
             template,
@@ -277,7 +302,15 @@ impl Host {
             .windows
             .iter()
             .filter(|w| !w.closing)
-            .map(|w| WindowEntry { id: w.id, title: w.app.title_stem(), path: w.app.session.path.as_ref().map(|p| p.to_string_lossy().into_owned()) })
+            .map(|w| {
+                let app = &self.holder_of(w).app;
+                WindowEntry {
+                    id: w.id,
+                    title: app.title_stem(),
+                    path: app.session.path.as_ref().map(|p| p.to_string_lossy().into_owned()),
+                    document: w.group.unwrap_or(0),
+                }
+            })
             .collect();
         let pair = self.pair.as_ref();
         let partner = pair.and_then(|p| {
@@ -292,6 +325,152 @@ impl Host {
         Windows { host: true, this, list, side_by_side: partner, sync_scroll: partner.is_some() && pair.is_some_and(|p| p.sync) }
     }
 
+    /// The window whose app holds `w`'s document: `w` itself, or the window of its group that
+    /// drew last (View › New Window).
+    fn holder_of<'a>(&'a self, w: &'a Window) -> &'a Window {
+        w.group
+            .and_then(|g| self.groups.iter().find(|group| group.id == g))
+            .and_then(|group| self.windows.iter().find(|h| h.id == group.holder))
+            .unwrap_or(w)
+    }
+
+    /// The window at `i` takes its turn with its document (View › New Window): the group's
+    /// session moves from the window that drew last into this one, each keeping its own view.
+    fn take_turn(&mut self, i: usize) {
+        let id = self.windows[i].id;
+        let Some(g) = self.windows[i].group else { return };
+        let Some(gi) = self.groups.iter().position(|group| group.id == g) else { return };
+        let holder = self.groups[gi].holder;
+        if holder == id {
+            return;
+        }
+        let Some(h) = self.windows.iter().position(|w| w.id == holder) else {
+            self.groups[gi].holder = id;
+            return;
+        };
+        let (a, b) = if h < i { (h, i) } else { (i, h) };
+        let (first, rest) = self.windows.split_at_mut(b);
+        let (holder_w, this_w) = if h < i { (&mut first[a], &mut rest[0]) } else { (&mut rest[0], &mut first[a]) };
+        holder_w.app.swap_document_state(&mut this_w.app);
+        // The session carries the holder's view: keep it for the holder, give this window its own.
+        if let Some(mut view) = this_w.view.take() {
+            this_w.app.session.swap_view(&mut view);
+            holder_w.view = Some(view);
+        }
+        this_w.app.view_number = this_w.view_number;
+        holder_w.app.view_number = holder_w.view_number;
+        self.groups[gi].holder = id;
+    }
+
+    /// After a window's frame: the others on its document see what changed (View › New Window).
+    fn sync_group(&mut self, i: usize, ctx: &egui::Context) {
+        let Some(g) = self.windows[i].group else { return };
+        let Some(group) = self.groups.iter_mut().find(|group| group.id == g) else { return };
+        let app = &self.windows[i].app;
+        let now = (app.session.rev(), app.session.dirty, app.session.path.clone());
+        if group.seen == now {
+            return;
+        }
+        group.seen = now;
+        let id = self.windows[i].id;
+        for w in self.windows.iter().filter(|w| w.id != id && w.group == Some(g) && !w.closing) {
+            ctx.request_repaint_of(w.viewport);
+        }
+    }
+
+    /// View › New Window: another window on the window's document, opening where that window
+    /// is; the two (or more) share the document, each with its own caret, scroll and zoom, and
+    /// their titles are numbered (`Document1:1`, `Document1:2`), as Word's.
+    fn new_window_on(&mut self, origin: WindowId, ctx: &egui::Context) {
+        let Some(oi) = self.index(origin) else { return };
+        self.take_turn(oi);
+        let mut app = (self.new_app)();
+        let (geometry, work) = {
+            let o = &self.windows[oi];
+            app.adopt_settings(&o.app.prefs());
+            app.integrated_titlebar = o.app.integrated_titlebar;
+            app.mac_titlebar = o.app.mac_titlebar;
+            app.autosave = o.app.autosave;
+            (o.app.ui.window, self.work_area_of(o))
+        };
+        app.session.windows.host = true;
+        let view = self.windows[oi].app.session.clone_view();
+        app.canvas.scroll_to_caret = true;
+        let g = match self.windows[oi].group {
+            Some(g) => g,
+            None => {
+                let g = self.next_group;
+                self.next_group = self.next_group.wrapping_add(1).max(1);
+                let seen = (self.windows[oi].app.session.rev(), self.windows[oi].app.session.dirty, self.windows[oi].app.session.path.clone());
+                self.groups.push(Group { id: g, members: vec![origin], holder: origin, seen, next_number: 2 });
+                self.windows[oi].group = Some(g);
+                self.windows[oi].view_number = Some(1);
+                self.windows[oi].app.view_number = Some(1);
+                g
+            }
+        };
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1).max(2);
+        let number = self.groups.iter_mut().find(|group| group.id == g).map(|group| {
+            group.members.push(id);
+            let n = group.next_number;
+            group.next_number += 1;
+            n
+        });
+        app.view_number = number;
+        let viewport = ViewportId::from_hash_of(("wordcraft-window", id));
+        let title = format!("{}:{} - WordCraft", app.title_stem(), number.unwrap_or(1));
+        let mut builder = self.template.clone().with_title(title);
+        if let Some(geometry) = geometry.map(|geometry| cascade(geometry, work)) {
+            builder = geometry.apply(builder);
+        }
+        let mut window = Window::new(id, viewport, app, builder);
+        window.group = Some(g);
+        window.view = Some(view);
+        window.view_number = number;
+        window.focused_at = self.frames;
+        self.windows.push(window);
+        self.active = id;
+        ctx.request_repaint_of(ViewportId::ROOT);
+    }
+
+    /// A window leaves its document group before closing: the session goes to another member
+    /// when it held it, and a group of one is no group (its window's title loses its number).
+    fn leave_group(&mut self, id: WindowId) {
+        let Some(i) = self.index(id) else { return };
+        let Some(g) = self.windows[i].group.take() else { return };
+        let Some(gi) = self.groups.iter().position(|group| group.id == g) else { return };
+        self.groups[gi].members.retain(|m| *m != id);
+        let holder = self.groups[gi].holder;
+        if holder == id
+            && let Some(next) = self.groups[gi].members.first().copied()
+            && let Some(ni) = self.index(next)
+        {
+            let (a, b) = if ni < i { (ni, i) } else { (i, ni) };
+            let (first, rest) = self.windows.split_at_mut(b);
+            let (next_w, this_w) = if ni < i { (&mut first[a], &mut rest[0]) } else { (&mut rest[0], &mut first[a]) };
+            this_w.app.swap_document_state(&mut next_w.app);
+            if let Some(mut view) = next_w.view.take() {
+                next_w.app.session.swap_view(&mut view);
+            }
+            self.groups[gi].holder = next;
+        }
+        self.windows[i].view = None;
+        self.windows[i].view_number = None;
+        self.windows[i].app.view_number = None;
+        if self.groups[gi].members.len() <= 1 {
+            for m in std::mem::take(&mut self.groups[gi].members) {
+                if let Some(w) = self.get_mut(m) {
+                    w.group = None;
+                    w.view = None;
+                    w.view_number = None;
+                    w.app.view_number = None;
+                }
+            }
+            self.groups.remove(gi);
+        }
+    }
+
     /// The window's frame, before it is drawn: the engine's view of the windows, the pooled
     /// fonts, the app's own logic, then the window's geometry, focus, close button and requests.
     pub fn logic(&mut self, vp: ViewportId, ctx: &egui::Context) {
@@ -299,6 +478,7 @@ impl Host {
             self.ctx = Some(ctx.clone());
         }
         let Some(i) = self.index_of_viewport(vp) else { return };
+        self.take_turn(i);
         self.frames += 1;
         let id = self.windows[i].id;
         crate::set_window_salt(id);
@@ -379,6 +559,7 @@ impl Host {
             crate::set_window_is_root(vp == ViewportId::ROOT);
             self.windows[i].app.ui(ui);
             self.sync_scroll_tick(i, &ctx);
+            self.sync_group(i, &ctx);
             if self.is_active_viewport(vp)
                 && let Some(menu) = &mut self.menu
             {
@@ -435,6 +616,7 @@ impl Host {
     /// the window in use (the one the menu shows), then the window's own hook runs.
     pub fn raw_input_hook(&mut self, raw: &mut egui::RawInput) {
         let Some(i) = self.index_of_viewport(raw.viewport_id) else { return };
+        self.take_turn(i);
         if self.is_active_viewport(raw.viewport_id)
             && let Some(menu) = &mut self.menu
         {
@@ -520,6 +702,14 @@ impl Host {
                 }
             }
             WindowRequest::Quit => self.request_quit(ctx),
+            WindowRequest::NewWindow => self.new_window_on(from, ctx),
+            WindowRequest::CloseDocumentWindows => {
+                let Some(g) = self.get(from).and_then(|w| w.group) else { return };
+                let others: Vec<WindowId> = self.windows.iter().filter(|w| w.id != from && w.group == Some(g) && !w.closing).map(|w| w.id).collect();
+                for id in others {
+                    self.close_window(id, ctx);
+                }
+            }
         }
     }
 
@@ -600,6 +790,7 @@ impl Host {
         if self.pair.as_ref().is_some_and(|p| p.left == id || p.right == id) {
             self.pair = None;
         }
+        self.leave_group(id);
         if self.windows[i].viewport == ViewportId::ROOT {
             let successor = self.windows.iter().enumerate().filter(|(j, w)| *j != i && !w.closing).max_by_key(|(_, w)| w.focused_at).map(|(j, _)| j);
             let Some(j) = successor else {
@@ -749,12 +940,14 @@ impl Host {
             "active": active,
             "windows": self.windows.iter().filter(|w| !w.closing).map(|w| json!({
                 "id": w.id,
-                "title": w.app.title_stem(),
-                "path": w.app.session.path.as_ref().map(|p| p.to_string_lossy()),
-                "dirty": w.app.session.dirty,
+                "title": self.holder_of(w).app.title_stem(),
+                "path": self.holder_of(w).app.session.path.as_ref().map(|p| p.to_string_lossy()),
+                "dirty": self.holder_of(w).app.session.dirty,
                 "active": Some(w.id) == active,
                 "root": w.viewport == ViewportId::ROOT,
                 "sideBySide": self.pair.as_ref().is_some_and(|p| p.left == w.id || p.right == w.id),
+                "document": w.group,
+                "viewNumber": w.view_number,
             })).collect::<Vec<_>>(),
             "syncScroll": self.pair.as_ref().is_some_and(|p| p.sync),
         })
@@ -930,6 +1123,9 @@ impl Window {
             closing: false,
             scroll_seen: None,
             scroll_applied: false,
+            group: None,
+            view_number: None,
+            view: None,
         }
     }
 }
@@ -1490,6 +1686,97 @@ mod tests {
         let far = cascade(WindowGeometry { position: Some([700.0, 300.0]), ..from }, Some(Rect::from_min_size(Pos2::ZERO, vec2(1920.0, 1080.0))));
         assert_eq!(far.position, Some([22.0, 22.0]), "back to the corner when it would run off the screen");
         assert_eq!(cascade(WindowGeometry { position: None, ..from }, None).position, None, "no position: the system places it");
+    }
+
+    /// View › New Window (#322): a second window on the same document, as Word's. Typing in
+    /// either shows in both, one undo history serves both, each keeps its own caret and zoom, the
+    /// titles are numbered `:1` and `:2`, closing one window closes a view (no prompt, the document
+    /// stays open in the other), and File › Close closes the document's windows together. A
+    /// command runs in a window during its frame, when it holds the document: the test gives a
+    /// window a frame before running one there.
+    #[test]
+    fn new_window_shows_the_same_document_with_its_own_view() {
+        let (mut h, ctx) = host();
+        settle(&mut h, &ctx);
+        let r1 = Rect::from_min_size(pos2(40.0, 40.0), vec2(1280.0, 800.0));
+        let r2 = Rect::from_min_size(pos2(300.0, 200.0), vec2(1000.0, 700.0));
+        let first = h.active().unwrap().id;
+        h.get_mut(first).unwrap().app.run("text.insert", json!({"text": "Shared text"})).unwrap();
+        h.get_mut(first).unwrap().app.run("view.zoom", json!({"value": 150.0})).unwrap();
+        assert!(h.get_mut(first).unwrap().app.run("view.newWindow", json!({})).unwrap()["anchor"].is_object());
+        settle(&mut h, &ctx);
+        assert_eq!(ids(&h).len(), 2);
+        let second = ids(&h)[1];
+        assert_eq!((h.get(first).unwrap().view_number, h.get(second).unwrap().view_number), (Some(1), Some(2)));
+        assert_eq!(h.get(first).unwrap().app.view_number, Some(1));
+        // The second window's turn: it holds the document, with the first's view kept aside.
+        pass_id(&mut h, &ctx, second, r2, true, vec![], vec![]);
+        let w = &h.get(second).unwrap().app.session.windows;
+        assert_eq!(w.others_on_this_document().map(|e| e.id).collect::<Vec<_>>(), vec![first]);
+        assert_eq!(w.list[1].title, "Document1", "the list names the document");
+        assert!(body(h.get(second).unwrap()).contains("Shared text"));
+        assert_eq!(h.get(second).unwrap().app.session.view.zoom, 1.5, "the new window opens with the same zoom");
+
+        // Typing in the second window shows in the first on its next frame, and the first's
+        // undo takes it back: one document, one history.
+        h.get_mut(second).unwrap().app.run("caret.docEnd", json!({})).unwrap();
+        h.get_mut(second).unwrap().app.run("text.insert", json!({"text": " and more"})).unwrap();
+        pass(&mut h, &ctx, ViewportId::ROOT, r1, true, vec![], vec![]);
+        assert!(body(h.get(first).unwrap()).contains("Shared text and more"), "the first window shows the edit");
+        h.get_mut(first).unwrap().app.run("view.zoom", json!({"value": 80.0})).unwrap();
+        h.get_mut(first).unwrap().app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(body(h.get(first).unwrap()).trim(), "Shared text");
+        pass_id(&mut h, &ctx, second, r2, true, vec![], vec![]);
+        assert_eq!(body(h.get(second).unwrap()).trim(), "Shared text", "the second window shows the undo");
+        assert_eq!(h.get(second).unwrap().app.session.view.zoom, 1.5, "its zoom is its own");
+        assert!(h.get(second).unwrap().app.session.dirty, "the document is dirty in both");
+
+        // The close button on one window closes that view without asking; the document stays.
+        let sent = pass_id(&mut h, &ctx, second, r2, true, vec![ViewportEvent::Close], vec![]);
+        assert!(sent.get(&vp(&h, second)).is_none_or(|c| !c.contains(&ViewportCommand::CancelClose)), "{sent:?}");
+        settle(&mut h, &ctx);
+        assert_eq!(ids(&h), vec![first]);
+        assert!(body(h.get(first).unwrap()).contains("Shared text"), "the document moved back to the first window");
+        assert!(h.get(first).unwrap().app.session.dirty, "with its unsaved change");
+        assert_eq!(h.get(first).unwrap().app.view_number, None, "a lone window has no number");
+        assert!(h.get(first).unwrap().app.session.windows.others_on_this_document().next().is_none());
+
+        // New Window again, then File › Close in one: the document closes, both windows go, and
+        // the last window stays empty, as a lone document's Close leaves it.
+        h.get_mut(first).unwrap().app.session.dirty = false;
+        h.get_mut(first).unwrap().app.run("view.newWindow", json!({})).unwrap();
+        settle(&mut h, &ctx);
+        let third = ids(&h)[1];
+        assert_eq!(h.get(third).unwrap().view_number, Some(2));
+        pass_id(&mut h, &ctx, third, r2, true, vec![], vec![]);
+        h.get_mut(third).unwrap().app.run("file.close", json!({})).unwrap();
+        settle(&mut h, &ctx);
+        assert_eq!(ids(&h).len(), 1, "the document's other window closed with it: {:?}", ids(&h));
+        assert!(!h.active().unwrap().app.has_document(), "the last window stays, empty");
+    }
+
+    /// The root window closing while its document is shown in another window: that window's
+    /// document moves into the root (the root takes over the last-used window) and the group goes
+    /// on with the remaining member only.
+    #[test]
+    fn closing_the_root_of_a_document_group_keeps_the_document() {
+        let (mut h, ctx) = host();
+        settle(&mut h, &ctx);
+        let first = h.active().unwrap().id;
+        h.get_mut(first).unwrap().app.run("text.insert", json!({"text": "Grouped"})).unwrap();
+        h.get_mut(first).unwrap().app.session.dirty = false;
+        h.get_mut(first).unwrap().app.run("view.newWindow", json!({})).unwrap();
+        settle(&mut h, &ctx);
+        let second = ids(&h)[1];
+        let r2 = Rect::from_min_size(pos2(300.0, 200.0), vec2(1000.0, 700.0));
+        pass_id(&mut h, &ctx, second, r2, true, vec![], vec![]);
+        pass(&mut h, &ctx, ViewportId::ROOT, Rect::from_min_size(pos2(40.0, 40.0), vec2(1280.0, 800.0)), true, vec![ViewportEvent::Close], vec![]);
+        settle(&mut h, &ctx);
+        assert_eq!(ids(&h), vec![second]);
+        assert_eq!(vp(&h, second), ViewportId::ROOT);
+        assert!(body(h.get(second).unwrap()).contains("Grouped"));
+        assert_eq!(h.get(second).unwrap().app.view_number, None);
+        assert!(h.groups.is_empty(), "a group of one is no group");
     }
 
     /// Fixed widget ids are kept apart per window, and are the plain ids outside a window host.

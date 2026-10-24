@@ -322,6 +322,9 @@ pub struct WindowEntry {
     /// The document's file, when it has one: a file already open comes to the front instead of
     /// opening twice.
     pub path: Option<String>,
+    /// The document the window shows, when several windows show one (View › New Window): the
+    /// host's key for it, the same in each of them; 0 for a document with one window.
+    pub document: u64,
 }
 
 impl Windows {
@@ -333,6 +336,16 @@ impl Windows {
     pub fn others(&self) -> impl Iterator<Item = &WindowEntry> {
         self.list.iter().filter(|w| w.id != self.this)
     }
+    /// This window's document key ([`WindowEntry::document`]); 0 when it alone shows its document.
+    pub fn document_of_this(&self) -> u64 {
+        self.list.iter().find(|w| w.id == self.this).map_or(0, |w| w.document)
+    }
+    /// The other windows showing this window's document (View › New Window): closing this
+    /// window then closes a view, not the document.
+    pub fn others_on_this_document(&self) -> impl Iterator<Item = &WindowEntry> {
+        let document = self.document_of_this();
+        self.list.iter().filter(move |w| w.id != self.this && document != 0 && w.document == document)
+    }
     /// The window `n` names: an id in the list, or else a 1-based position in it.
     pub fn resolve(&self, n: u64) -> Option<u64> {
         if self.list.iter().any(|w| w.id == n) {
@@ -340,6 +353,33 @@ impl Windows {
         }
         usize::try_from(n).ok().and_then(|i| i.checked_sub(1)).and_then(|i| self.list.get(i)).map(|w| w.id)
     }
+}
+
+/// One view of the document (#322): the caret and selection, the View tab's state and what hangs
+/// off the caret (the typed word, the equation being edited, the column selection, Go Back's
+/// places…). A window, or a split pane, has one; the document, its undo history, its file and its
+/// unsaved state are the session's, which several views share by taking turns
+/// ([`Session::swap_view`]).
+pub struct ViewSlot {
+    pub sel: Selection,
+    pub view: ViewState,
+    pending: Option<CharProps>,
+    find: FindState,
+    goal_x: Option<f32>,
+    page_hint: usize,
+    painter: Option<(CharProps, wordcraft_doc::props::ParaProps, bool)>,
+    hf_return: Option<Selection>,
+    autocap: Option<crate::cmd::tools::AutoCap>,
+    typing: Option<TypedWord>,
+    math: Option<MathEdit>,
+    math_latex: bool,
+    math_normal_text: bool,
+    also_selected: Vec<Pos>,
+    column: Option<ColumnBlock>,
+    column_mode: bool,
+    widened: Option<Widened>,
+    edit_marks: Vec<Pos>,
+    go_back_step: usize,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -1486,6 +1526,79 @@ impl Session {
     }
 
     /// Make the selection valid for the current document.
+    /// A new view of the document ([`ViewSlot`]): the caret at the start, with this view's
+    /// settings (zoom, mode, panes).
+    pub fn new_view(&self) -> ViewSlot {
+        ViewSlot {
+            sel: Selection::caret(self.doc.start_of(StoryRef::Body)),
+            view: self.view.clone(),
+            pending: None,
+            find: FindState::default(),
+            goal_x: None,
+            page_hint: 0,
+            painter: None,
+            hf_return: None,
+            autocap: None,
+            typing: None,
+            math: None,
+            math_latex: self.math_latex,
+            math_normal_text: self.math_normal_text,
+            also_selected: Vec::new(),
+            column: None,
+            column_mode: false,
+            widened: None,
+            edit_marks: Vec::new(),
+            go_back_step: 0,
+        }
+    }
+
+    /// A copy of this view, at the same place: what a new window or split pane on the document
+    /// opens with, as Word's does.
+    pub fn clone_view(&self) -> ViewSlot {
+        let mut v = self.new_view();
+        v.sel = self.sel.clone();
+        v.goal_x = self.goal_x;
+        v.page_hint = self.page_hint;
+        v
+    }
+
+    /// Give the session `slot`'s view and take this one into `slot`: another window or pane on
+    /// the document takes its turn. Typing in progress ends (the next word starts an undo step of
+    /// its own) and the incoming selection is clamped to the document as it is now. While the
+    /// input method composes, the composition's caret is the document's for every view: only the
+    /// view settings and the find state change hands.
+    pub fn swap_view(&mut self, slot: &mut ViewSlot) {
+        self.close_typing();
+        self.join_next = false;
+        std::mem::swap(&mut self.view, &mut slot.view);
+        std::mem::swap(&mut self.find, &mut slot.find);
+        std::mem::swap(&mut self.goal_x, &mut slot.goal_x);
+        std::mem::swap(&mut self.page_hint, &mut slot.page_hint);
+        if self.composition.is_some() {
+            return;
+        }
+        std::mem::swap(&mut self.sel, &mut slot.sel);
+        std::mem::swap(&mut self.pending, &mut slot.pending);
+        std::mem::swap(&mut self.painter, &mut slot.painter);
+        std::mem::swap(&mut self.hf_return, &mut slot.hf_return);
+        std::mem::swap(&mut self.autocap, &mut slot.autocap);
+        std::mem::swap(&mut self.typing, &mut slot.typing);
+        std::mem::swap(&mut self.math, &mut slot.math);
+        std::mem::swap(&mut self.math_latex, &mut slot.math_latex);
+        std::mem::swap(&mut self.math_normal_text, &mut slot.math_normal_text);
+        std::mem::swap(&mut self.also_selected, &mut slot.also_selected);
+        std::mem::swap(&mut self.column, &mut slot.column);
+        std::mem::swap(&mut self.column_mode, &mut slot.column_mode);
+        std::mem::swap(&mut self.widened, &mut slot.widened);
+        std::mem::swap(&mut self.edit_marks, &mut slot.edit_marks);
+        std::mem::swap(&mut self.go_back_step, &mut slot.go_back_step);
+        self.clamp_selection();
+        self.also_selected.retain(|p| self.doc.clamp(p) == *p);
+        if self.hf_return.as_ref().is_some_and(|r| self.doc.clamp(&r.focus) != r.focus) {
+            self.hf_return = None;
+        }
+    }
+
     pub fn clamp_selection(&mut self) {
         self.sel.anchor = self.doc.clamp(&self.sel.anchor);
         self.sel.focus = self.doc.clamp(&self.sel.focus);

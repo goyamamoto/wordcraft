@@ -139,20 +139,20 @@ pub fn specs() -> Vec<CommandSpec> {
         // that list and queue a request the front end carries out; without a window host
         // (headless sessions, the browser, the CLI) they are disabled.
         //
-        // New Window (a second window on the same document) and Split (two panes on it) need
-        // two views of one document, which a session doesn't have yet: disabled, with the reason.
+        // New Window: a second window on this document (the host shares the session between
+        // them, each window with a view of its own, `Session::swap_view`); Split: two panes on it
+        // in this window. The front end carries both out.
         CommandSpec::new("view.newWindow", "New Window", "View › Window", |s, _| {
             s.push_ui_request(json!({"open": "newWindow"}));
             sel_result(s)
         })
-        .when(|_| Some("A second window on the same document isn't available yet"))
+        .when(needs_window_host)
         .pure(),
         CommandSpec::new("view.split", "Split", "View › Window", |s, _| {
             s.push_ui_request(json!({"toggle": "split"}));
             sel_result(s)
         })
         .key("Mod+Alt+S")
-        .when(|_| Some("Splitting the window into two panes isn't available yet"))
         .pure(),
         CommandSpec::new("view.arrangeAll", "Arrange All", "View › Window", |s, _| {
             s.push_ui_request(json!({"window": "arrangeAll"}));

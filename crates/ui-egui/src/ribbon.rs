@@ -2373,7 +2373,9 @@ fn view(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Window", None, app, |ui, app| {
         big(ui, app, "newWindow", "New\nWindow", "view.newWindow", json!({}), false);
         big(ui, app, "arrangeAll", "Arrange\nAll", "view.arrangeAll", json!({}), false);
-        big(ui, app, "split", "Split", "view.split", json!({}), false);
+        // Split reads Remove Split while the window is split, as in Word.
+        let split_label = if app.split.is_some() { "Remove\nSplit" } else { "Split" };
+        big(ui, app, "split", split_label, "view.split", json!({}), app.split.is_some());
         // View Side by Side, Synchronous Scrolling and Reset Window Position stacked, then Switch
         // Windows, as Word lays the group out (#322). With three or more windows open, View Side
         // by Side asks which to compare with (the engine opens the dialog).
