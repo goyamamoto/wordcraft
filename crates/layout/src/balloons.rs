@@ -21,7 +21,7 @@ use wordcraft_doc::{Document, Paragraph, Pos, StoryRef};
 use wordcraft_geom::Rect;
 
 use crate::display::revision_color;
-use crate::{BoxContext, BoxLayout, Ctx, DocLayout, Placed, Slot, fit_box, layout_box, push_para};
+use crate::{BoxContext, BoxLayout, Ctx, DocLayout, Edges, Placed, Slot, fit_box, layout_box, push_para};
 
 /// Width of the markup area beside each page (points): the editor's.
 pub const MARKUP_AREA: f32 = 216.0;
@@ -158,7 +158,19 @@ pub(crate) fn add(ctx: &mut Ctx, lay: &mut DocLayout) {
             );
             let pl = ctx.para_labelled(&head, inner, None, &[], None);
             let lead = pl.lines.first().map_or(0.0, |l| l.top.max(0.0));
-            push_para(&mut items, story, &[HEADER_PATH], &pl, 0, pl.lines.len(), x, y + lead, inner, Slot { w: inner, before: 0.0, after: 0.0 });
+            push_para(
+                &mut items,
+                story,
+                &[HEADER_PATH],
+                &pl,
+                0,
+                pl.lines.len(),
+                x,
+                y + lead,
+                inner,
+                Edges::own(&pl, 0, pl.lines.len()),
+                Slot { w: inner, before: 0.0, after: 0.0 },
+            );
             y += pl.height + 2.0;
             // The comment itself, as written (its own formatting).
             if let Some(part) = doc.parts.get(&cm.part) {

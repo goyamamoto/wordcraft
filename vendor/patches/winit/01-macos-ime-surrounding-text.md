@@ -1,7 +1,7 @@
 # macOS: the input method reads the text around the caret (再変換)
 
 **Files:** `src/platform_impl/macos/view.rs`, `src/platform_impl/macos/mod.rs`,
-`src/platform/macos.rs`. **Guard:** `apps/wordcraft/tests/winit_macos_ime_surrounding_text.rs`.
+`src/platform/macos.rs`. **Guard:** `apps/wordcraft/tests/it/winit_macos_ime_surrounding_text.rs`.
 
 winit 0.30.13's `NSTextInputClient` tells the input method nothing about the document:
 `selectedRange` answers `{NSNotFound, 0}`, `attributedSubstringForProposedRange:actualRange:`

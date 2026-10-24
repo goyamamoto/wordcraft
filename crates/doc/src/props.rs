@@ -47,12 +47,37 @@ impl Rgb {
     }
     /// Parse `RRGGBB` or `#RRGGBB`.
     pub fn parse(s: &str) -> Option<Rgb> {
-        let s = s.trim().trim_start_matches('#');
-        if s.len() != 6 || !s.is_ascii() {
+        let s = s.trim();
+        let s = s.strip_prefix('#').unwrap_or(s);
+        if s.len() != 6 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
             return None;
         }
         let p = |i: usize| s.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok());
         Some(Rgb(p(0)?, p(2)?, p(4)?))
+    }
+    /// This colour with the DrawingML colour modifier `name` (`lumMod`, `lumOff`, `tint`,
+    /// `shade`, `satMod`, ECMA-376 §20.1.2.3) at `v` (1.0 = 100%); other names leave it
+    /// unchanged.
+    pub fn modified(self, name: &str, v: f64) -> Rgb {
+        match name {
+            "lumMod" => adjust_lum(self, |l| l * v),
+            "lumOff" => adjust_lum(self, |l| l + v),
+            "tint" => mix(self, 255.0, v),
+            "shade" => mix(self, 0.0, v),
+            "satMod" => {
+                let (h, sat, l) = to_hsl(self);
+                from_hsl(h, (sat * v).clamp(0.0, 1.0), l)
+            }
+            _ => self,
+        }
+    }
+    /// The colour with hue `h` (0..1 of a turn), saturation `s` and lightness `l` (0..1).
+    pub fn from_hsl(h: f64, s: f64, l: f64) -> Rgb {
+        from_hsl(h, s, l)
+    }
+    /// This colour with its HSL luminance changed by `f`.
+    pub fn with_lum(self, f: impl Fn(f64) -> f64) -> Rgb {
+        adjust_lum(self, f)
     }
     pub fn luma(self) -> f32 {
         0.299 * self.0 as f32 + 0.587 * self.1 as f32 + 0.114 * self.2 as f32
@@ -307,6 +332,92 @@ impl EastAsianLayout {
     pub const COMBINE_CHARS_MAX: usize = 6;
 }
 
+/// The OpenType ligatures a run asks for ([MS-DOCX] `w14:ligatures`; Font › Advanced › OpenType
+/// Features › Ligatures): standard (`liga`), contextual (`clig`), historical (`hlig`) and
+/// discretional (`dlig`). Word for Mac shapes a run that asks for no OpenType feature at all —
+/// the default of every document that never set one — by its legacy text path: no ligatures or
+/// contextual forms, and Kerning for fonts takes the pairs of the font's `kern` table only. A run
+/// that asks for one is shaped by OpenType: GSUB ligatures of the kinds asked for, GPOS kerning
+/// (measured 2026-10-19, `kn1`–`kn5` probes; see `layout::para::shaping_features`).
+///
+/// Serialised as its `w14:val` name (`"standardContextual"`); the flags object reads too.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub struct Ligatures {
+    pub standard: bool,
+    pub contextual: bool,
+    pub historical: bool,
+    pub discretional: bool,
+}
+
+impl Ligatures {
+    /// None of them (`none`).
+    pub const NONE: Ligatures = Ligatures { standard: false, contextual: false, historical: false, discretional: false };
+    /// Standard and contextual (`standardContextual`): Word's Normal template's choice.
+    pub const STANDARD_CONTEXTUAL: Ligatures = Ligatures { standard: true, contextual: true, historical: false, discretional: false };
+    /// Every combination of the four flags.
+    pub fn all() -> impl Iterator<Item = Ligatures> {
+        (0u8..16).map(|b| Ligatures { standard: b & 1 != 0, contextual: b & 2 != 0, historical: b & 4 != 0, discretional: b & 8 != 0 })
+    }
+    /// The `w14:ligatures/@w14:val` name: `none`, `all`, or the set flags joined in camelCase
+    /// (`standardContextual`).
+    pub fn ooxml(self) -> String {
+        let on: Vec<&str> =
+            [(self.standard, "standard"), (self.contextual, "contextual"), (self.historical, "historical"), (self.discretional, "discretional")]
+                .into_iter()
+                .filter_map(|(on, n)| on.then_some(n))
+                .collect();
+        match on.len() {
+            0 => "none".into(),
+            4 => "all".into(),
+            _ => on
+                .iter()
+                .enumerate()
+                .flat_map(|(i, n)| n.chars().enumerate().map(move |(j, c)| if i > 0 && j == 0 { c.to_ascii_uppercase() } else { c }))
+                .collect(),
+        }
+    }
+    /// `None` for a name [MS-DOCX] doesn't define. Surrounding spaces don't matter, and
+    /// `discretionary` reads as `discretional` (earlier WordCraft-ja files spelled it so).
+    pub fn from_ooxml(s: &str) -> Option<Ligatures> {
+        let s = s.trim().replace("iscretionary", "iscretional");
+        Ligatures::all().find(|l| l.ooxml() == s)
+    }
+    /// Whether no ligature is asked for.
+    pub fn is_none(self) -> bool {
+        self == Ligatures::NONE
+    }
+}
+
+impl Serialize for Ligatures {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.ooxml())
+    }
+}
+
+impl<'de> Deserialize<'de> for Ligatures {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Name(String),
+            Flags {
+                #[serde(default)]
+                standard: bool,
+                #[serde(default)]
+                contextual: bool,
+                #[serde(default)]
+                historical: bool,
+                #[serde(default)]
+                discretional: bool,
+            },
+        }
+        match Repr::deserialize(d)? {
+            Repr::Name(n) => Ligatures::from_ooxml(&n).ok_or_else(|| serde::de::Error::custom(format!("unknown ligatures {n:?}"))),
+            Repr::Flags { standard, contextual, historical, discretional } => Ok(Ligatures { standard, contextual, historical, discretional }),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum VertAlign {
@@ -470,6 +581,11 @@ pub struct CharProps {
     pub style: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font: Option<String>,
+    /// The symbol's own font (OOXML `w:sym/@w:font`, ECMA-376 §17.3.3.30), set on a symbol
+    /// character from a `w:sym` or Insert › Symbol: it is shown in this font whatever `font` is,
+    /// so changing the text's font keeps the symbol. `None` = the run's font.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sym_font: Option<String>,
     /// Points.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<f32>,
@@ -653,7 +769,7 @@ impl CharProps {
     /// The fields of `self` that differ from `base` (equal ones unset): what `self` adds when
     /// overlaid on `base`.
     pub fn minus(mut self, base: &CharProps) -> CharProps {
-        drop_same_fields!(self, base; style, font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
+        drop_same_fields!(self, base; style, font, sym_font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
             shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, ligatures, num_form, num_spacing, stylistic_sets, cntxt_alts, outline, shadow, emboss, engrave, em, fit_text,
             east_asian_layout, lang, no_proof, rtl, cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, link, ins, del);
         self
@@ -664,7 +780,7 @@ impl CharProps {
     /// Plain and complex-script properties inherit independently. Commands that intend to
     /// format both scripts must set both values explicitly.
     pub fn overlay(&mut self, patch: &CharProps) {
-        overlay_fields!(self, patch; style, font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
+        overlay_fields!(self, patch; style, font, sym_font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
             shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, ligatures, num_form, num_spacing, stylistic_sets, cntxt_alts, outline, shadow, emboss, engrave, em, fit_text,
             east_asian_layout, lang, no_proof, rtl, cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, link, ins, del, fmt_change);
         if let Some(p) = &patch.text_effects {
@@ -678,10 +794,29 @@ impl CharProps {
     pub fn is_empty(&self) -> bool {
         *self == CharProps::default()
     }
+    /// The font a character of this run is shown in: the symbol's own font when it has one
+    /// ([`Self::sym_font`]), else the run's font.
+    pub fn shown_font(&self) -> Option<&str> {
+        self.sym_font.as_deref().filter(|f| !f.trim().is_empty()).or(self.font.as_deref())
+    }
+    /// The same formatting for text typed or painted next to a symbol: without the symbol's own
+    /// font.
+    pub fn without_symbol(mut self) -> CharProps {
+        self.sym_font = None;
+        self
+    }
     /// Clear direct formatting but keep what isn't "formatting" (links, revisions, character style
     /// is cleared too, as Word's Clear Formatting does).
     pub fn cleared(&self) -> CharProps {
-        CharProps { link: self.link.clone(), ins: self.ins, del: self.del, fmt_change: self.fmt_change.clone(), ..Default::default() }
+        CharProps {
+            link: self.link.clone(),
+            ins: self.ins,
+            del: self.del,
+            fmt_change: self.fmt_change.clone(),
+            // A symbol stays the symbol it is.
+            sym_font: self.sym_font.clone(),
+            ..Default::default()
+        }
     }
     /// Just the formatting: without the link, revision marks and tracked formatting change.
     pub fn formatting(&self) -> CharProps {
@@ -710,89 +845,6 @@ impl Align {
             Align::Right if rtl => Align::Left,
             a => a,
         }
-    }
-}
-
-/// OpenType ligatures a run asks for (Font › Advanced › OpenType Features › Ligatures,
-/// `w14:ligatures`). Word for Mac shapes a run that asks for no OpenType feature at all — the
-/// default of every document that never set one — by its legacy text path: no ligatures or
-/// contextual forms, and Kerning for fonts takes the pairs of the font's `kern` table only. A
-/// run that asks for one is shaped by OpenType: GSUB ligatures of the kinds asked for, GPOS
-/// kerning (measured 2026-10-19, `kn1`–`kn5` probes; see `layout::para::shaping_features`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub enum Ligatures {
-    #[default]
-    None,
-    Standard,
-    Contextual,
-    Historical,
-    Discretionary,
-    StandardContextual,
-    StandardHistorical,
-    StandardDiscretionary,
-    ContextualHistorical,
-    ContextualDiscretionary,
-    HistoricalDiscretionary,
-    All,
-}
-
-impl Ligatures {
-    /// Every kind, in the Font dialog's order.
-    pub const ALL: [Ligatures; 12] = [
-        Ligatures::None,
-        Ligatures::Standard,
-        Ligatures::Contextual,
-        Ligatures::Historical,
-        Ligatures::Discretionary,
-        Ligatures::StandardContextual,
-        Ligatures::StandardHistorical,
-        Ligatures::StandardDiscretionary,
-        Ligatures::ContextualHistorical,
-        Ligatures::ContextualDiscretionary,
-        Ligatures::HistoricalDiscretionary,
-        Ligatures::All,
-    ];
-    /// The `ST_Ligatures` value ([MS-DOCX] 2.6.3).
-    pub fn ooxml(self) -> &'static str {
-        match self {
-            Ligatures::None => "none",
-            Ligatures::Standard => "standard",
-            Ligatures::Contextual => "contextual",
-            Ligatures::Historical => "historical",
-            Ligatures::Discretionary => "discretionary",
-            Ligatures::StandardContextual => "standardContextual",
-            Ligatures::StandardHistorical => "standardHistorical",
-            Ligatures::StandardDiscretionary => "standardDiscretionary",
-            Ligatures::ContextualHistorical => "contextualHistorical",
-            Ligatures::ContextualDiscretionary => "contextualDiscretionary",
-            Ligatures::HistoricalDiscretionary => "historicalDiscretionary",
-            Ligatures::All => "all",
-        }
-    }
-    pub fn from_ooxml(s: &str) -> Option<Ligatures> {
-        let s = s.trim();
-        Ligatures::ALL.iter().copied().find(|l| l.ooxml().eq_ignore_ascii_case(s))
-    }
-    /// Standard ligatures (`liga`: fi, fl, ffi…).
-    pub fn standard(self) -> bool {
-        use Ligatures::*;
-        matches!(self, Standard | StandardContextual | StandardHistorical | StandardDiscretionary | All)
-    }
-    /// Contextual ligatures (`clig`).
-    pub fn contextual(self) -> bool {
-        use Ligatures::*;
-        matches!(self, Contextual | StandardContextual | ContextualHistorical | ContextualDiscretionary | All)
-    }
-    /// Historical ligatures (`hlig`).
-    pub fn historical(self) -> bool {
-        use Ligatures::*;
-        matches!(self, Historical | StandardHistorical | ContextualHistorical | HistoricalDiscretionary | All)
-    }
-    /// Discretionary ligatures (`dlig`).
-    pub fn discretionary(self) -> bool {
-        use Ligatures::*;
-        matches!(self, Discretionary | StandardDiscretionary | ContextualDiscretionary | HistoricalDiscretionary | All)
     }
 }
 
@@ -1145,6 +1197,16 @@ pub struct ParaProps {
     /// Drop cap: lines to drop (0 = none) — applies to the first character(s).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub drop_cap: Option<u8>,
+    /// Drop cap "In margin" (`w:dropCap="margin"`): the letter hangs in the left margin and the
+    /// text keeps its indent. Unset = dropped into the text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drop_cap_margin: Option<bool>,
+    /// The drop cap's distance from the text, in points (`w:hSpace`). Unset = 0.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drop_cap_distance: Option<f32>,
+    /// The drop cap letter's font family (the cap run's `w:rFonts`). Unset = the text's font.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drop_cap_font: Option<String>,
     /// A text frame (`w:framePr` other than a drop cap): the paragraph is placed apart from the
     /// text, which may wrap around it — a footer's page number in a frame, for instance.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1193,7 +1255,7 @@ impl ParaProps {
     pub fn overlay(&mut self, patch: &ParaProps) {
         overlay_fields!(self, patch; style, align, indent_left, indent_right, indent_first, indent_left_chars, indent_right_chars, indent_first_chars, space_before, space_after, space_before_auto, space_after_auto, space_before_lines, space_after_lines, line_spacing,
             contextual_spacing, mirror_indents, keep_next, keep_lines, page_break_before, widow_control, outline_level, numbering, tabs, shading, borders,
-            suppress_hyphens, suppress_line_numbers, bidi, drop_cap, frame, kinsoku, word_wrap, overflow_punct, top_line_punct, auto_space_de, auto_space_dn,
+            suppress_hyphens, suppress_line_numbers, bidi, drop_cap, drop_cap_margin, drop_cap_distance, drop_cap_font, frame, kinsoku, word_wrap, overflow_punct, top_line_punct, auto_space_de, auto_space_dn,
             snap_to_grid, text_alignment, adjust_right_ind);
     }
     pub fn overlaid(mut self, patch: &ParaProps) -> ParaProps {
@@ -1493,6 +1555,9 @@ pub struct CellProps {
     pub valign: Option<VAlign>,
     /// Cell margins override (top, left, bottom, right), points.
     pub margins: Option<[f32; 4]>,
+    /// Per-side overrides when `margins` is absent; omitted sides inherit table defaults.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub partial_margins: Option<[Option<f32>; 4]>,
     /// Which way the cell's text runs.
     pub text_direction: TextDirection,
     /// The file states the horizontal direction (`lrTb`) outright; saving writes it back.
@@ -1508,22 +1573,88 @@ pub struct CellProps {
     pub fmt_change: Option<Box<PropChange<CellProps>>>,
 }
 
+impl CellProps {
+    /// Resolve top, left, bottom and right margins against the current table defaults.
+    /// A complete override takes precedence over per-side overrides.
+    pub fn resolved_margins(&self, defaults: [f32; 4]) -> [f32; 4] {
+        if let Some(margins) = self.margins {
+            return margins;
+        }
+        self.partial_margins.map_or(defaults, |sides| std::array::from_fn(|i| sides[i].unwrap_or(defaults[i])))
+    }
+}
+
+/// `tint` (towards `to` = 255) and `shade` (towards 0): `v` is the share of the original colour kept.
+fn mix(c: Rgb, to: f64, v: f64) -> Rgb {
+    let f = |x: u8| (x as f64 * v + to * (1.0 - v)).round().clamp(0.0, 255.0) as u8;
+    Rgb(f(c.0), f(c.1), f(c.2))
+}
+
+/// `c` with its HSL luminance changed by `f`.
+fn adjust_lum(c: Rgb, f: impl Fn(f64) -> f64) -> Rgb {
+    let (h, s, l) = to_hsl(c);
+    from_hsl(h, s, f(l).clamp(0.0, 1.0))
+}
+
+fn to_hsl(c: Rgb) -> (f64, f64, f64) {
+    let (r, g, b) = (c.0 as f64 / 255.0, c.1 as f64 / 255.0, c.2 as f64 / 255.0);
+    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+    let l = (max + min) / 2.0;
+    if max == min {
+        return (0.0, 0.0, l);
+    }
+    let d = max - min;
+    let s = if l > 0.5 { d / (2.0 - max - min) } else { d / (max + min) };
+    let h = if max == r {
+        (g - b) / d + if g < b { 6.0 } else { 0.0 }
+    } else if max == g {
+        (b - r) / d + 2.0
+    } else {
+        (r - g) / d + 4.0
+    };
+    (h / 6.0, s, l)
+}
+
+fn from_hsl(h: f64, s: f64, l: f64) -> Rgb {
+    let byte = |v: f64| (v * 255.0).round().clamp(0.0, 255.0) as u8;
+    if s == 0.0 {
+        return Rgb(byte(l), byte(l), byte(l));
+    }
+    let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
+    let p = 2.0 * l - q;
+    let channel = |t: f64| {
+        let t = t.rem_euclid(1.0);
+        let v = if t < 1.0 / 6.0 {
+            p + (q - p) * 6.0 * t
+        } else if t < 0.5 {
+            q
+        } else if t < 2.0 / 3.0 {
+            p + (q - p) * (2.0 / 3.0 - t) * 6.0
+        } else {
+            p
+        };
+        byte(v)
+    };
+    Rgb(channel(h + 1.0 / 3.0), channel(h), channel(h - 1.0 / 3.0))
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
     fn opentype_feature_names_round_trip() {
         use super::{Ligatures, NumForm, NumSpacing};
-        for l in Ligatures::ALL {
-            assert_eq!(Ligatures::from_ooxml(l.ooxml()), Some(l));
-            assert_eq!(serde_json::to_value(l).unwrap(), serde_json::Value::String(l.ooxml().to_string()), "{l:?} serialises as its OOXML name");
+        for l in Ligatures::all() {
+            assert_eq!(Ligatures::from_ooxml(&l.ooxml()), Some(l));
+            assert_eq!(serde_json::to_value(l).unwrap(), serde_json::Value::String(l.ooxml()), "{l:?} serialises as its OOXML name");
+            assert_eq!(serde_json::from_value::<Ligatures>(serde_json::Value::String(l.ooxml())).unwrap(), l);
         }
-        assert_eq!(Ligatures::from_ooxml(" StandardContextual "), Some(Ligatures::StandardContextual));
+        assert_eq!(Ligatures::from_ooxml(" standardContextual "), Some(Ligatures::STANDARD_CONTEXTUAL));
         assert_eq!(Ligatures::from_ooxml("ligatures"), None);
-        let kinds = |l: Ligatures| (l.standard(), l.contextual(), l.historical(), l.discretionary());
-        assert_eq!(kinds(Ligatures::None), (false, false, false, false));
-        assert_eq!(kinds(Ligatures::StandardContextual), (true, true, false, false));
-        assert_eq!(kinds(Ligatures::HistoricalDiscretionary), (false, false, true, true));
-        assert_eq!(kinds(Ligatures::All), (true, true, true, true));
+        // Earlier WordCraft-ja files spelled `discretional` `discretionary`; the flags object reads too.
+        let hd = Ligatures { historical: true, discretional: true, ..Default::default() };
+        assert_eq!(Ligatures::from_ooxml("historicalDiscretionary"), Some(hd));
+        assert_eq!(serde_json::from_str::<Ligatures>(r#"{"historical":true,"discretional":true}"#).unwrap(), hd);
+        assert!(Ligatures::NONE.is_none() && !Ligatures::STANDARD_CONTEXTUAL.is_none());
         for f in [NumForm::Default, NumForm::Lining, NumForm::OldStyle] {
             assert_eq!(NumForm::from_ooxml(f.ooxml()), Some(f));
         }
@@ -1541,6 +1672,16 @@ mod tests {
         assert_eq!(Rgb::parse("#FF0010"), Some(Rgb(255, 0, 16)));
         assert_eq!(Rgb::parse("zzzzzz"), None);
         assert_eq!(Rgb::parse("é1234"), None);
+    }
+
+    #[test]
+    fn rgb_parse_rejects_non_hex() {
+        assert_eq!(Rgb::parse("+1+2+3"), None);
+        assert_eq!(Rgb::parse("-1-2-3"), None);
+        assert_eq!(Rgb::parse("##ff0000"), None);
+        assert_eq!(Rgb::parse("ff00 0"), None);
+        assert_eq!(Rgb::parse("#ff0000"), Some(Rgb(255, 0, 0)));
+        assert_eq!(Rgb::parse("ff0000"), Some(Rgb(255, 0, 0)));
     }
 
     #[test]
@@ -1576,6 +1717,37 @@ mod tests {
         }
         for h in Highlight::ALL {
             assert_eq!(Highlight::from_ooxml(h.ooxml()), h);
+        }
+    }
+
+    /// The 16 `w14:ligatures` values of [MS-DOCX], each to its flags and back.
+    #[test]
+    fn ligature_names() {
+        let l = |standard, contextual, historical, discretional| Ligatures { standard, contextual, historical, discretional };
+        for (name, flags) in [
+            ("none", l(false, false, false, false)),
+            ("standard", l(true, false, false, false)),
+            ("contextual", l(false, true, false, false)),
+            ("historical", l(false, false, true, false)),
+            ("discretional", l(false, false, false, true)),
+            ("standardContextual", l(true, true, false, false)),
+            ("standardHistorical", l(true, false, true, false)),
+            ("contextualHistorical", l(false, true, true, false)),
+            ("standardDiscretional", l(true, false, false, true)),
+            ("contextualDiscretional", l(false, true, false, true)),
+            ("historicalDiscretional", l(false, false, true, true)),
+            ("standardContextualHistorical", l(true, true, true, false)),
+            ("standardContextualDiscretional", l(true, true, false, true)),
+            ("standardHistoricalDiscretional", l(true, false, true, true)),
+            ("contextualHistoricalDiscretional", l(false, true, true, true)),
+            ("all", l(true, true, true, true)),
+        ] {
+            assert_eq!(Ligatures::from_ooxml(name), Some(flags), "{name}");
+            assert_eq!(flags.ooxml(), name);
+        }
+        assert_eq!(Ligatures::all().count(), 16);
+        for bad in ["", "Standard", "contextualStandard", "standardstandard", "allx"] {
+            assert_eq!(Ligatures::from_ooxml(bad), None, "{bad:?}");
         }
     }
 
@@ -1639,5 +1811,20 @@ mod tests {
         assert_eq!(s, r#"{"bold":true}"#);
         let back: CharProps = serde_json::from_str(&s).unwrap();
         assert_eq!(back, p);
+    }
+
+    #[test]
+    fn symbol_font_is_optional_in_json_and_survives_font_changes() {
+        // Older documents (no `symFont`) still load.
+        let old: CharProps = serde_json::from_str(r#"{"font":"Arial"}"#).unwrap();
+        assert_eq!(old.sym_font, None);
+        let p = CharProps { font: Some("Arial".into()), sym_font: Some("Wingdings".into()), ..Default::default() };
+        let s = serde_json::to_string(&p).unwrap();
+        assert!(s.contains(r#""symFont":"Wingdings""#), "{s}");
+        assert_eq!(serde_json::from_str::<CharProps>(&s).unwrap(), p);
+        // A font change keeps the symbol's own font; Clear Formatting too.
+        let changed = p.clone().overlaid(&CharProps { font: Some("Times New Roman".into()), ..Default::default() });
+        assert_eq!(changed.sym_font.as_deref(), Some("Wingdings"));
+        assert_eq!(p.cleared().sym_font.as_deref(), Some("Wingdings"));
     }
 }

@@ -98,6 +98,8 @@ impl Counting {
                     out.push(u);
                 }
             }
+            // Trailing zeros of a group are not a gap: the next group starts a new place.
+            zero_pending = false;
             match gi {
                 0 => out.extend(self.myriads.get(1)),
                 1 => out.extend(self.myriads.first()),
@@ -385,6 +387,19 @@ pub(crate) fn chosung(n: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chinese_no_zero_after_group_trailing_zeros() {
+        // No 零 after a group's trailing zeros (#3745). The rest as Word for Mac draws the format
+        // (its `list string` read for `chineseCountingThousand`, `nf1`–`nf3` probes, 2026-10-19):
+        // 一 before every 十, ○ (〇) for a zero inside a group, nothing from a million on.
+        assert_eq!(chinese_counting_thousand(201_000), "二十万一千");
+        assert_eq!(chinese_counting_thousand(120_000), "一十二万");
+        assert_eq!(chinese_counting_thousand(100_100), "一十万〇一百");
+        assert_eq!(taiwanese_counting_thousand(201_000), "二十萬一千");
+        assert_eq!(chinese_counting_thousand(100_000_001), "");
+        assert_eq!(chinese_counting_thousand(120_000_001), "");
+    }
 
     #[test]
     fn chinese_counting_systems() {
