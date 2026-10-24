@@ -136,10 +136,15 @@ impl FieldNumFormat {
     pub fn of_instr(instr: &str) -> Switch {
         let mut it = instr.split_whitespace();
         while let Some(w) = it.next() {
-            if w != "\\*" {
-                continue;
-            }
-            let Some(v) = it.next() else { break };
+            // `\* roman`, or written together, `\*roman` (and `\*roman\*MERGEFORMAT`).
+            let Some(rest) = w.strip_prefix("\\*") else { continue };
+            let v = if rest.is_empty() {
+                let Some(v) = it.next() else { break };
+                v
+            } else {
+                rest
+            };
+            let v = v.split('\\').next().unwrap_or(v);
             if is_case_switch(v) {
                 continue;
             }

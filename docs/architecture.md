@@ -15,7 +15,7 @@ winit or rfd.
 winit itself comes from `vendor/winit` (`vendor/README.md`): the published 0.30.13 crate with one
 narrow macOS patch (`vendor/patches/winit/01-macos-ime-surrounding-text.md`) so the input method
 can read the caret's paragraph and reconvert committed text. The workspace manifest patches
-crates.io to it and excludes the directory from the workspace; `apps/wordcraft/tests/winit_*.rs`
+crates.io to it and excludes the directory from the workspace; `apps/wordcraft/tests/it/winit_*.rs`
 guard the override and the patch.
 
 | Layer | Crate | Lines | Job |
