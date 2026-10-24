@@ -65,6 +65,7 @@ pub mod ink;
 pub mod keys;
 pub mod keytips;
 pub mod mini_toolbar;
+pub mod native_menu;
 pub mod objects;
 pub mod options;
 pub mod panes;
@@ -716,6 +717,9 @@ pub struct WordApp {
     /// Whether this window sets egui's zoom factor (the interface size), which every window
     /// shares: the window in use does, so two windows on screens of different scale don't fight.
     pub(crate) applies_zoom: bool,
+    /// The host installed a native menu bar ([`native_menu`]): its key equivalents reach the
+    /// window through it, and the ribbon's Switch Windows gives way to the Window menu's list.
+    pub menu_bar_installed: bool,
 }
 
 /// The answer to "Do you want to save changes?" (`ui.saveChanges`).
@@ -820,6 +824,7 @@ impl WordApp {
             window_requests: Vec::new(),
             control_inbox: Vec::new(),
             applies_zoom: true,
+            menu_bar_installed: false,
         }
     }
 

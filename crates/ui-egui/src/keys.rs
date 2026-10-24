@@ -276,6 +276,9 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
         app.canvas.paste_mods = Some(held);
     }
     for e in events {
+        if crate::native_menu::blocks_document(app) {
+            break;
+        }
         // Which presses reached the canvas, and the modifiers held with Mod, in event order: Mod
         // can go down and up within one frame, leaving the frame's modifiers without it.
         match &e {
