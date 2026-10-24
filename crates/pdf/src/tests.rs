@@ -1782,33 +1782,44 @@ fn glyph_boxes(bytes: &[u8]) -> Vec<[i64; 4]> {
 fn right_to_left_glyphs_stay_where_layout_put_them() {
     use kurbo::Shape;
     let d = rtl_sample();
-    let bytes = export(&d, &PdfOptions::default()).unwrap();
-    let got = glyph_boxes(&bytes);
     // Layout's glyphs, drawn as their outlines (y down from the page top; PDF is y up).
-    let lay = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
-    let page = &lay.pages[0];
-    let h = f64::from(page.h);
-    let db = wordcraft_fonts::FontDb::global();
-    let mut want = Vec::new();
-    for item in wordcraft_layout::display::page_display(&d, page, &DisplayOptions::default()) {
-        let Draw::Glyphs { face, size, glyphs, .. } = item else { continue };
-        let scale = f64::from(size) / face.upem.max(1.0);
-        for (g, x, y) in glyphs {
-            let mut o = (*db.outline(&face, g)).clone();
-            if o.elements().is_empty() {
-                continue;
+    let layout_boxes = || {
+        let lay = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+        let page = &lay.pages[0];
+        let h = f64::from(page.h);
+        let db = wordcraft_fonts::FontDb::global();
+        let mut want = Vec::new();
+        for item in wordcraft_layout::display::page_display(&d, page, &DisplayOptions::default()) {
+            let Draw::Glyphs { face, size, glyphs, .. } = item else { continue };
+            let scale = f64::from(size) / face.upem.max(1.0);
+            for (g, x, y) in glyphs {
+                let mut o = (*db.outline(&face, g)).clone();
+                if o.elements().is_empty() {
+                    continue;
+                }
+                o.apply_affine(
+                    kurbo::Affine::new([1.0, 0.0, 0.0, -1.0, 0.0, h])
+                        * kurbo::Affine::translate((f64::from(x), f64::from(y)))
+                        * kurbo::Affine::scale(scale),
+                );
+                let b = o.bounding_box();
+                let r = |v: f64| (v * 10.0).round() as i64;
+                want.push([r(b.x0), r(b.y0), r(b.x1), r(b.y1)]);
             }
-            o.apply_affine(
-                kurbo::Affine::new([1.0, 0.0, 0.0, -1.0, 0.0, h])
-                    * kurbo::Affine::translate((f64::from(x), f64::from(y)))
-                    * kurbo::Affine::scale(scale),
-            );
-            let b = o.bounding_box();
-            let r = |v: f64| (v * 10.0).round() as i64;
-            want.push([r(b.x0), r(b.y0), r(b.x1), r(b.y1)]);
         }
-    }
-    want.sort_unstable();
+        want.sort_unstable();
+        want
+    };
+    // Tests running alongside load families into the shared font database, which can change the
+    // Hebrew and Arabic fallback faces between the export and the layout it is checked against:
+    // compare only an export the layout before and after it agree on.
+    let (got, want) = (0..5)
+        .find_map(|_| {
+            let before = layout_boxes();
+            let got = glyph_boxes(&export(&d, &PdfOptions::default()).unwrap());
+            (layout_boxes() == before).then_some((got, before))
+        })
+        .expect("the font database settles");
     assert!(!want.is_empty());
     let close = got.len() == want.len() && got.iter().zip(&want).all(|(a, b)| a.iter().zip(b).all(|(p, q)| (p - q).abs() <= 2));
     assert!(close, "glyphs moved:\n got {got:?}\nwant {want:?}");
