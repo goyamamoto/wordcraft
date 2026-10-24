@@ -17,7 +17,7 @@ Windows, Linux/BSD and the web keep the ribbon alone, as Word for Windows has no
 | Format | Font…, Paragraph…; Bold, Italic, Underline, Strikethrough, Subscript, Superscript (checked); Grow Font, Shrink Font, Clear All Formatting; Alignment ▸ (checked); Bullets, Numbering (checked); Increase and Decrease Indent |
 | Tools | Spelling & Grammar…, Thesaurus…, Hyphenation…, Language…, Word Count…, AutoCorrect Options…; Track Changes (checked), Compare Documents…, Combine Documents…, Restrict Editing; Macros, Templates and Add-ins…, Customize Keyboard…, Customize Ribbon… |
 | Table | Insert ▸ (Table…, rows above/below, columns left/right), Delete ▸, Select ▸; Merge Cells, Split Cells…, Split Table; AutoFit, Convert ▸ (Text to Table…, Table to Text…), Sort…, Formula…; Table Properties… |
-| Window | Minimize (⌘M), Zoom; New Window, Arrange All, Split; Bring All to Front. Then what macOS adds to an app's windows menu (Minimize All, Zoom All, Fill, Center, Move & Resize ▸, Full Screen Tile ▸, …) and the open document windows, the one in front checked. Observed in Word for Mac on 2026-10-24: View Side by Side, Synchronous Scrolling and Reset Window Position are on the ribbon only |
+| Window | Minimize (⌘M), Zoom; New Window, Arrange All, Split; Bring All to Front. Then what macOS adds to an app's windows menu (Fill, Center, Move & Resize ▸, Full Screen Tile ▸, Remove Window from Set, Move to iPad) and the open document windows, the one in front checked. Observed in Word for Mac on 2026-10-24: View Side by Side, Synchronous Scrolling and Reset Window Position are on the ribbon only. Minimize and Zoom are the app's own rows, not AppKit's `performMiniaturize:`/`performZoom:` ones, because macOS puts its tiling rows right after a `performZoom:` row, where Word has them after Bring All to Front; so those two rows have no system icon. Increase Indent is ⌃⇧M on the Mac (as in Word for Mac), which leaves ⌘M to Minimize |
 | Help | Commands (command search; registered as the help menu, so macOS's menu search works), Check Accessibility |
 
 New Window and Split come from the document-windows work (#322) and are disabled with the
@@ -85,4 +85,5 @@ dialogs. It is a no-op on other platforms.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | trivial | Window: Zoom is the app's own row, so macOS's tiling rows follow Bring All to Front as in Word; Minimize is ⌘M (Increase Indent moved to ⌃⇧M on the Mac, Word for Mac's key) |
 | 2026-10-24 | major | First version, adapted from #985 with Tools, Table and the Window menu as Word for Mac has it (its own items observed in Word for Mac the same day), on the window host (#322) |
