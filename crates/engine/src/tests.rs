@@ -7,7 +7,7 @@ use serde_json::json;
 use wordcraft_doc::props::BorderStyle;
 use wordcraft_doc::{Pos, StoryRef};
 
-use crate::{Session, cmd};
+use crate::{CmdError, Session, cmd};
 
 fn s() -> Session {
     Session::new(wordcraft_doc::Document::new())
@@ -10323,4 +10323,58 @@ fn export_png_refuses_a_path_that_is_not_png() {
         assert!(std::fs::read(&target).unwrap().starts_with(b"\x89PNG"), "{name} is not a PNG");
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// View › Window (#322): the session owns no window, so Arrange All, View Side by Side,
+/// Synchronous Scrolling, Reset Window Position and Switch Windows are disabled without a window
+/// host (headless sessions, the browser, the CLI) and, with one, check their parameters against
+/// the windows the host reported before queueing a request the front end carries out.
+#[test]
+fn window_commands_need_a_host_and_name_an_open_window() {
+    let mut s = s();
+    for id in ["view.arrangeAll", "view.sideBySide", "view.syncScroll", "view.resetWindowPosition", "view.switchWindows"] {
+        assert!(s.why_disabled(id).is_some(), "{id} is disabled without a window host");
+        assert!(matches!(s.run(id, &json!({})), Err(CmdError::Disabled(_))), "{id}");
+    }
+    // New Window and Split need two views of one document, which a session doesn't have yet.
+    assert!(s.why_disabled("view.newWindow").is_some() && s.why_disabled("view.split").is_some());
+
+    let entry = |id: u64, title: &str| crate::WindowEntry { id, title: title.into(), path: None };
+    s.windows = crate::Windows { host: true, this: 7, list: vec![entry(7, "Document1"), entry(9, "letter")], ..Default::default() };
+    assert!(s.why_disabled("view.arrangeAll").is_none() && s.why_disabled("view.switchWindows").is_none());
+    assert!(s.why_disabled("view.sideBySide").is_none(), "another window is open");
+    assert!(s.why_disabled("view.syncScroll").is_some(), "only while side by side");
+    assert_eq!(run(&mut s, "view.arrangeAll", json!({}))["windows"], 2);
+    assert_eq!(s.ui_requests.pop(), Some(json!({"window": "arrangeAll"})));
+
+    // Switch Windows takes an id or the 1-based number in its list; anything else is refused.
+    assert_eq!(run(&mut s, "view.switchWindows", json!({"window": 9}))["window"], 9);
+    assert_eq!(run(&mut s, "view.switchWindows", json!({"window": 2}))["window"], 9);
+    assert_eq!(s.ui_requests.pop(), Some(json!({"window": "switch", "to": 9})));
+    assert!(matches!(s.run("view.switchWindows", &json!({})), Err(CmdError::Params(_))));
+    assert!(matches!(s.run("view.switchWindows", &json!({"window": 3})), Err(CmdError::Params(_))));
+    assert!(matches!(s.run("view.switchWindows", &json!({"window": -1})), Err(CmdError::Params(_))));
+
+    // One other window: it is the partner, and Synchronous Scrolling comes on with it, as in Word.
+    s.ui_requests.clear();
+    let r = run(&mut s, "view.sideBySide", json!({}));
+    assert_eq!((r["value"].as_bool(), r["with"].as_u64()), (Some(true), Some(9)));
+    assert_eq!(s.ui_requests.pop(), Some(json!({"window": "sideBySide", "value": true, "with": 9})));
+    assert!(s.why_disabled("view.syncScroll").is_none() && s.why_disabled("view.resetWindowPosition").is_none());
+    assert_eq!(run(&mut s, "view.syncScroll", json!({}))["value"], false);
+    assert_eq!(run(&mut s, "view.syncScroll", json!({"value": true}))["value"], true);
+    assert_eq!(run(&mut s, "view.resetWindowPosition", json!({}))["with"], 9);
+    assert_eq!(run(&mut s, "view.sideBySide", json!({}))["value"], false);
+    assert!(s.windows.side_by_side.is_none() && !s.windows.sync_scroll);
+    // Three windows: `with` names the partner, or the front end asks which.
+    s.windows.list.push(entry(12, "report"));
+    assert!(matches!(s.run("view.sideBySide", &json!({"with": 7})), Err(CmdError::Params(_))), "not with itself");
+    assert!(matches!(s.run("view.sideBySide", &json!({"with": 99})), Err(CmdError::Params(_))));
+    assert_eq!(run(&mut s, "view.sideBySide", json!({"with": 3}))["with"], 12, "a number in the list");
+    run(&mut s, "view.sideBySide", json!({"value": false}));
+    assert_eq!(run(&mut s, "view.sideBySide", json!({}))["pending"], "sideBySideWith");
+    assert_eq!(s.ui_requests.pop(), Some(json!({"window": "chooseSideBySide"})));
+    // No window host reports a single window with no partner to compare with.
+    s.windows.list.truncate(1);
+    assert_eq!(s.why_disabled("view.sideBySide"), Some("Open another document first"));
 }

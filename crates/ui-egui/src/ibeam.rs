@@ -4,7 +4,7 @@
 //! place: black on light paper, white on dark (as the caret, #299), edged in the other colour so
 //! it shows on anything. Other systems' I-beams show on any page and are left alone.
 
-use egui::{Color32, CursorIcon, Id, LayerId, Order, Pos2, Stroke};
+use egui::{Color32, CursorIcon, LayerId, Order, Pos2, Stroke};
 use wordcraft_doc::props::Rgb;
 
 /// Whether this system's I-beam is replaced by a drawn one.
@@ -18,7 +18,7 @@ pub(crate) fn replace(ctx: &egui::Context, p: Pos2, bg: Rgb) -> bool {
     }
     ctx.set_cursor_icon(CursorIcon::None);
     // Above the page and whatever floats over it, as the system pointer would be.
-    let painter = ctx.layer_painter(LayerId::new(Order::Tooltip, Id::new("wordcraft_ibeam")));
+    let painter = ctx.layer_painter(LayerId::new(Order::Tooltip, crate::wid("wordcraft_ibeam")));
     paint(&painter, p, crate::canvas::caret_contrast(bg));
     true
 }

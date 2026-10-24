@@ -55,7 +55,8 @@ and set `WORDCRAFT_CONTROL_KEY` to that app's key.
 | `engine.execute` | `command`, `params` | the command's result (any id from `engine.commands`, including UI commands `ui.tab`, `ui.dialog` (`{"name": dialog, "part"?: table style part}`; `part` opens New / Modify Table Style (`newTableStyle` / `modifyTableStyle`) on that part: `wholeTable`, `headerRow`, `firstColumn`, `bandedRows`, `nwCell`… as `table.modifyStyle` names them), `ui.backstage`, `ui.zotero.*` (see `docs/zotero.md`), `ui.language` (`{"value": "auto"\|"en"\|"zh-hans"\|"zh-hant"\|"ja"\|"pt-br"\|"es"\|"uk"\|"sr"\|"sr-latn"\|"et"\|"tr"\|"ru"\|"pl"\|"de"\|"it"\|"cs"\|"hu"\|"fr"}`), `ui.theme` (`{"value": "system"\|"light"\|"dark"}`; `system` follows the OS appearance, light when it reports none), `ui.interfaceSize` (`{"value": "auto"}` or `{"percent": 50–300}`, clamped; no value reads it; `auto` keeps the system display scale, a percentage is absolute, so 100 is one screen pixel per point (#822); the result's `percent` is the size drawn at and `auto` whether it follows the system; document zoom stays `view.zoom`), `ui.animations` (`{"value": "system"\|"on"\|"off"}`; no value reads it; `system` follows the system's animation setting, which the desktop app reads on Windows, macOS, Linux and the BSDs and the web app from `prefers-reduced-motion`, and means on where the system doesn't say; the result's `enabled` is what the setting comes to and `system` what the system reports, `null` when it doesn't say), `ui.fileBrowser` (desktop: `{"purpose": "document"\|"picture"\|"recipients"\|"save"}` opens WordCraft's own file browser, for when the system file dialog doesn't show up, #576), `ui.saveAsTemplate` (File › Save As › Save as Word Template: the Save dialog for a `.dotx`, starting in the user templates folder; the result's `dir` is that folder, `null` on the web, #2852), `ui.caretAnimation` (`{"value": true\|false}`; no value reads it; off, the caret jumps and blinks on and off instead of gliding and fading), `ui.startScreen` (`{"value": true\|false}`; no value reads it; on, the default, the desktop and web apps start on File › Home when launched with nothing to open, #766), `ui.alignmentGuides` (`{"value": true\|false}`; no value reads it; on, the default, moving a picture or shape snaps it to the page, the margins and other objects, with guide lines while dragging; Alt moves freely), `ui.quickAccessToolbar` (`{"value": true\|false}`; no value toggles it; false takes the Quick Access Toolbar out of the title bar, as its menu's Hide Quick Access Toolbar does, and true brings it back, #1945), `ui.focusRibbon` (`{"value": true\|false}`; no value toggles it; in Focus, true drops the ribbon down over the page, as the bar's ⋯ does, and false puts it away, as a click on the page does; outside Focus it stays put away, #1678), `ui.contextMenu` (opens the page's context menu below the caret, as Shift+F10 does)…) |
 | `engine.commands` | — | every command: id, label, location, shortcut, params, enabled |
 | `document.inspect` | `text?` | blocks (text, style, runs, lists, tables), parts, sections, selection, pages |
-| `ui.inspect` | — | UI state, view, dialog, window size, page rects on screen, caret, comment balloons (`balloons`: id + screen rect; `balloon`: the selected one), perf |
+| `ui.inspect` | — | UI state, view, dialog, window size, page rects on screen, caret, comment balloons (`balloons`: id + screen rect; `balloon`: the selected one), perf, `windows` (this window's id and the open windows, as the engine sees them) |
+| `ui.windows` | — | the open document windows (#322): `active` (the id of the window in use) and `windows`, each with `id`, `title`, `path`, `dirty`, `active`, `root` (the app's first window) and `sideBySide`; `syncScroll` whether Synchronous Scrolling is on |
 | `ui.click` | `x`, `y`, `button?`, `count?`, `shift?`, `cmd?`, `alt?` | real pointer input at window coordinates |
 | `ui.clickText` | `page` (0-based), `x`, `y` (points from the page's top-left), `count?` | click inside a page |
 | `ui.move` / `ui.drag` | `x`,`y` / `x`,`y`,`toX`,`toY`,`steps?` | pointer move / drag |
@@ -70,6 +71,26 @@ and set `WORDCRAFT_CONTROL_KEY` to that app's key.
 | `ui.focus` / `app.quit` | | window control |
 
 Any other method name is treated as a command id: `{"method": "format.bold"}` works.
+
+### Windows
+
+The desktop app opens each document in a window of its own, as Word does (#322). Every request
+goes to one window: the one its top-level `"window"` parameter names (an id from `ui.windows`, or
+its 1-based number in the Switch Windows list), else the window in use (the one that last had the
+focus). `{"method": "ui.windows"}` lists them; `{"method": "engine.execute", "params": {"window": 2, "command": "text.insert", "params": {"text": "Hi"}}}`
+types in window 2, and `ui.screenshot` with `"window"` takes that window's picture. A window that
+isn't open is an error. Opening a file from one window (`file.open` with a `path`) answers
+`{"pending": "window"}` and the document appears in a new window, unless the window shows no document
+or a new blank one nobody typed in, which takes it itself, or the file is already open, which brings
+that window forward (`{"alreadyOpen": true, "window": id}`). `file.new` likewise opens a window.
+`file.close` closes the document's window when another is open. `app.quit` closes every window,
+asking about unsaved changes in each; `ui.focus` with `"window"` brings that window forward. A
+window that is minimized or wholly covered by another gets no frames until it shows again, so a
+request that names it waits until then (bring it forward with `ui.focus` or `view.switchWindows`
+first); a request that names no window goes to the first window while the window in use is hidden. The View › Window commands (`view.arrangeAll`,
+`view.sideBySide {"value"?, "with"?}`, `view.syncScroll`, `view.resetWindowPosition`,
+`view.switchWindows {"window"}`) work here too; headless hosts (`wordcraft-cli`, the MCP server
+without `--connect`) have no windows and report them disabled.
 
 The `CharProps` and `ParaProps` that `format.set`, `para.set` and `styles.modify` take are listed
 in [MCP server](mcp.md#character-and-paragraph-properties).

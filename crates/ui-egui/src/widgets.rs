@@ -85,7 +85,7 @@ fn show_hint(resp: &Response, title: &str, notes: &[String]) {
     let ctx = &resp.ctx;
     let since_key = id_since_focus(resp);
     // The pass on which the pointer was last over any hinted control (see the focus hint below).
-    let hover_key = egui::Id::new("hint_pointer_over_a_control");
+    let hover_key = crate::wid("hint_pointer_over_a_control");
     let pass = ctx.cumulative_pass_nr();
     // A disabled response never reports hover, so test the pointer against its rectangle, as
     // `Tooltip::for_disabled` does.

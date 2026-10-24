@@ -293,6 +293,55 @@ impl Default for ViewState {
 }
 
 /// Find/replace state.
+/// The document windows the front end has open, one per document, as the desktop app reports
+/// them to every window's session before each frame (`wordcraft_ui_egui::windows`). The session
+/// owns no window: the View › Window commands check their parameters here and queue a request
+/// ([`Session::push_ui_request`]) the front end carries out. Headless sessions, the browser and
+/// the CLI have no window host: `host` stays false and those commands are disabled.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Windows {
+    /// The front end can open, place and switch windows.
+    pub host: bool,
+    /// This window's id.
+    pub this: u64,
+    /// Every open window, in the order Switch Windows lists them (the order they were opened in).
+    pub list: Vec<WindowEntry>,
+    /// View Side by Side is on, with this window's partner.
+    pub side_by_side: Option<u64>,
+    /// Synchronous Scrolling is on; only ever while side by side.
+    pub sync_scroll: bool,
+}
+
+/// One open window: its id and the title it shows (the document's name).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WindowEntry {
+    pub id: u64,
+    pub title: String,
+    /// The document's file, when it has one: a file already open comes to the front instead of
+    /// opening twice.
+    pub path: Option<String>,
+}
+
+impl Windows {
+    /// How many windows are open; one for a host that reported nothing.
+    pub fn count(&self) -> usize {
+        self.list.len().max(1)
+    }
+    /// The other windows, in the Switch Windows order.
+    pub fn others(&self) -> impl Iterator<Item = &WindowEntry> {
+        self.list.iter().filter(|w| w.id != self.this)
+    }
+    /// The window `n` names: an id in the list, or else a 1-based position in it.
+    pub fn resolve(&self, n: u64) -> Option<u64> {
+        if self.list.iter().any(|w| w.id == n) {
+            return Some(n);
+        }
+        usize::try_from(n).ok().and_then(|i| i.checked_sub(1)).and_then(|i| self.list.get(i)).map(|w| w.id)
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct FindState {
@@ -508,6 +557,9 @@ pub struct Session {
     /// preferred languages ([`east_asian_editing_language`]); `None` (headless sessions) leaves
     /// both to the region.
     pub east_asian_editing: Option<String>,
+    /// The document windows the front end has open, as it reports them before each frame
+    /// ([`Windows`]); the View › Window commands check their parameters against them.
+    pub windows: Windows,
     /// Editing inside an equation: which one and the caret in it.
     pub math: Option<MathEdit>,
     /// Equations are typed in LaTeX rather than the linear format.
@@ -758,6 +810,7 @@ impl Session {
             ribbon: crate::RibbonLayout::default(),
             editing_lang: None,
             east_asian_editing: None,
+            windows: Windows::default(),
             read_aloud: Default::default(),
             password: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -1375,6 +1428,8 @@ impl Session {
             // A preference for new documents, like `prefs`: not part of this document.
             editing_lang: _,
             east_asian_editing: _,
+            // What the front end reports about its windows: nothing of the document.
+            windows: _,
             // Equation editing mode, like `view`: not part of the document or its history.
             math: _,
             math_latex: _,
