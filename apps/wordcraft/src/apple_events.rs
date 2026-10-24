@@ -10,7 +10,7 @@
 //! that leaves winit's delegate alone, behind a safe main-thread API.
 
 use fmv_macos_events::{Event, Inbox, Registration};
-use wordcraft_ui_egui::WordApp;
+use wordcraft_ui_egui::windows::Host;
 
 /// Keeps the Apple-event handlers registered; hold it until the event loop returns.
 pub struct AppleEvents {
@@ -35,26 +35,18 @@ impl AppleEvents {
 }
 
 /// Open the documents and act on the quit requests that arrived since the last frame. A document
-/// opens like File › Open (asking about unsaved changes first); quitting closes the window, which
-/// asks the same.
-pub fn poll(inbox: &Inbox, app: &mut WordApp, ctx: &egui::Context) {
+/// opens like File › Open: in a window of its own, or the active window when that shows nothing
+/// yet (`Host::open_paths`); quitting closes every window, asking about unsaved changes.
+pub fn poll(inbox: &Inbox, ctx: &egui::Context) {
     for e in inbox.drain() {
         match e {
             Event::Open(paths) => {
-                for p in paths.iter().filter_map(|p| p.to_str()) {
-                    match app.run("file.open", serde_json::json!({"path": p})) {
-                        // Leave Backstage, as opening from the Open dialog does.
-                        Ok(_) => app.ui.backstage = false,
-                        Err(e) => {
-                            log::warn!("{p}: {e}");
-                            let e = e.to_string();
-                            let msg = wordcraft_ui_egui::tl!("Couldn't open {path}: {error}");
-                            app.status(wordcraft_ui_egui::i18n::fmt(msg, &[("path", p), ("error", &e)]));
-                        }
-                    }
-                }
+                let paths: Vec<String> = paths.iter().filter_map(|p| p.to_str()).map(str::to_string).collect();
+                Host::with(|h| h.open_paths(paths, ctx));
             }
-            Event::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Event::Quit => {
+                Host::with(|h| h.request_quit(ctx));
+            }
         }
     }
 }

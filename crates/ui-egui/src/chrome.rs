@@ -26,7 +26,7 @@ pub(crate) fn dictionary_problem(lang: &str, unreadable: &Option<(std::path::Pat
 
 /// The Quick Access Toolbar's button for command `id`.
 pub(crate) fn qat_button_id(id: &str) -> egui::Id {
-    egui::Id::new(("qat_button", id))
+    crate::wid(("qat_button", id))
 }
 
 fn qat_button(ui: &mut Ui, app: &mut WordApp, icon: &str, tip: &str, id: &str, enabled: bool) -> egui::Response {
@@ -101,12 +101,12 @@ fn quick_access(ui: &mut Ui, app: &mut WordApp) {
 
 /// The Undo button's drop-down arrow (#701), which opens [`undo_list`].
 pub(crate) fn undo_list_button_id() -> egui::Id {
-    egui::Id::new("qat_undo_list")
+    crate::wid("qat_undo_list")
 }
 
 /// The status bar's message, the one that says what went wrong (#2402).
 pub(crate) fn status_message_id() -> egui::Id {
-    egui::Id::new("status_message")
+    crate::wid("status_message")
 }
 
 /// Row `i` of the Undo list (0 = the newest step).
@@ -203,7 +203,7 @@ fn undo_list(ui: &mut Ui, app: &mut WordApp) {
 
 /// The Quick Access Toolbar's menu button (…), which opens [`qat_menu`].
 pub(crate) fn qat_menu_button_id() -> egui::Id {
-    egui::Id::new("qat_menu_button")
+    crate::wid("qat_menu_button")
 }
 
 /// The Quick Access Toolbar's menu: common commands to show or hide, and More Commands…
@@ -431,7 +431,7 @@ pub(crate) fn wants_aptos_notice(app: &WordApp, ctx: &egui::Context) -> bool {
         return false;
     }
     let key = (app.session.document_id(), app.session.rev());
-    let id = egui::Id::new("aptos_notice_check");
+    let id = crate::wid("aptos_notice_check");
     if let Some((k, missing)) = ctx.data(|d| d.get_temp::<((u64, u64), bool)>(id))
         && k == key
     {
@@ -579,7 +579,7 @@ pub fn screen_bar(app: &mut WordApp, ui: &mut Ui, screen: Screen) {
 /// click on the page puts it away; Focus stays on.
 pub fn focus_ribbon(app: &mut WordApp, ctx: &egui::Context) {
     let width = ctx.content_rect().width();
-    egui::Area::new(egui::Id::new("focus_ribbon")).fixed_pos(pos2(0.0, SCREEN_BAR_HEIGHT)).order(egui::Order::Middle).show(ctx, |ui| {
+    egui::Area::new(crate::wid("focus_ribbon")).fixed_pos(pos2(0.0, SCREEN_BAR_HEIGHT)).order(egui::Order::Middle).show(ctx, |ui| {
         ui.set_width(width);
         ui.set_max_width(width);
         crate::ribbon::show(app, ui);

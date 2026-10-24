@@ -325,7 +325,7 @@ fn proofing(app: &mut WordApp, ui: &mut Ui) {
 /// dictionary kept in a folder of the user's own.
 fn dictionaries(app: &mut WordApp, ui: &mut Ui) {
     let saved = app.session.prefs.dictionaries_folder.clone().unwrap_or_default();
-    let id = egui::Id::new("options_dictionaries_folder");
+    let id = crate::wid("options_dictionaries_folder");
     let mut folder = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| saved.clone());
     ui.label(tl!("Dictionaries folder:"));
     ui.horizontal(|ui| {
@@ -349,7 +349,7 @@ fn dictionaries(app: &mut WordApp, ui: &mut Ui) {
     ui.data_mut(|d| d.insert_temp(id, folder));
     note(ui, "Hunspell .aff and .dic files here (pl_PL, pt_BR, it_IT, hr_HR, tr_TR) are used before the system's.");
     // The dictionary each language found, looked up again after the folder changes.
-    let found_id = egui::Id::new("options_dictionaries_found");
+    let found_id = crate::wid("options_dictionaries_found");
     let generation = wordcraft_engine::proof::dictionary_generation();
     let cached = ui.data(|d| d.get_temp::<(u64, Vec<(String, Option<String>, Option<String>)>)>(found_id)).filter(|(g, _)| *g == generation);
     let found = match cached {
@@ -416,7 +416,7 @@ fn custom_dictionary(app: &mut WordApp, ui: &mut Ui) {
             });
         }
     });
-    let id = egui::Id::new("options_dictionary_new");
+    let id = crate::wid("options_dictionary_new");
     let mut word = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_default();
     ui.horizontal(|ui| {
         let r = ui.add(egui::TextEdit::singleline(&mut word).desired_width(220.0).char_limit(MAX_WORD_CHARS).hint_text(tl!("New word")));
@@ -604,7 +604,7 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
 /// Template starts. Empty is the app's own folder, shown as the hint.
 fn templates_folder(app: &mut WordApp, ui: &mut Ui) {
     let saved = app.session.prefs.user_templates_folder.clone().unwrap_or_default();
-    let id = egui::Id::new("options_user_templates_folder");
+    let id = crate::wid("options_user_templates_folder");
     let mut folder = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| saved.clone());
     let default = app.services.templates_dir.as_ref().map(|d| d.to_string_lossy().into_owned());
     ui.label(tl!("User templates:"));

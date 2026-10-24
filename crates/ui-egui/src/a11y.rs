@@ -702,7 +702,7 @@ mod tests {
         let n = layout.pages.len();
         let rects = vec![Rect::from_min_size(egui::pos2(f32::NAN, 0.0), egui::vec2(f32::INFINITY, 1.0)); n];
         let p = Pos::body(0, 1_000_000);
-        let t = build(&doc, &layout, Id::new("doc"), &rects, (0, n + 5), (&p, &p));
+        let t = build(&doc, &layout, crate::wid("doc"), &rects, (0, n + 5), (&p, &p));
         assert!(!t.nodes.is_empty() && t.nodes.len() <= MAX_NODES);
         assert!(t.selection.is_some(), "an offset past the end lands at the end");
         assert!(page_window(&rects, Rect::NOTHING).is_none());

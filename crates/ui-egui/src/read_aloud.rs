@@ -60,7 +60,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     let mut run: Option<(&str, serde_json::Value)> = None;
     let right_top = app.canvas.canvas_rect.map_or(ctx.content_rect().right_top() + vec2(-24.0, 160.0), |r| r.right_top() + vec2(-24.0, 16.0));
     let window = egui::Window::new(tl!("Read Aloud"))
-        .id(egui::Id::new("read-aloud-player"))
+        .id(crate::wid("read-aloud-player"))
         .collapsible(false)
         .resizable(false)
         .pivot(egui::Align2::RIGHT_TOP)
@@ -94,7 +94,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         ui.add_space(6.0);
         // Speed: applied when the slider is let go, so dragging doesn't restart the sentence
         // on every frame.
-        let id = egui::Id::new("read-aloud-rate");
+        let id = crate::wid("read-aloud-rate");
         let mut rate = ui.data(|d| d.get_temp::<f32>(id)).unwrap_or_else(|| app.session.read_aloud.rate());
         ui.horizontal(|ui| {
             ui.label(tl!("Speed"));

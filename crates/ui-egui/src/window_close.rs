@@ -144,14 +144,14 @@ mod tests {
         for _ in 0..4 {
             h.step();
         }
-        click_close_box(&mut h, egui::Id::new("read-aloud-player"));
+        click_close_box(&mut h, crate::wid("read-aloud-player"));
         assert!(!h.state().session.read_aloud.open, "the player stops and closes");
         let _ = h.state_mut().run("ui.fileBrowser", json!({"purpose": "document"}));
         for _ in 0..4 {
             h.step();
         }
         assert!(h.state().file_browser.open.is_some(), "the browser opened");
-        click_close_box(&mut h, egui::Id::new("builtin_file_browser"));
+        click_close_box(&mut h, crate::wid("builtin_file_browser"));
         assert!(h.state().file_browser.open.is_none(), "the browser is cancelled");
     }
 
@@ -165,7 +165,7 @@ mod tests {
         for _ in 0..4 {
             h.step();
         }
-        let hit = egui::Id::new(("dialog", "Word Count")).with("close_box").with("hit");
+        let hit = crate::wid(("dialog", "Word Count")).with("close_box").with("hit");
         let r = h.ctx.read_response(hit).expect("the close box is a widget");
         assert!(r.sense.senses_click() && !r.sense.is_focusable(), "pointer-only: {:?}", r.sense);
         for _ in 0..12 {

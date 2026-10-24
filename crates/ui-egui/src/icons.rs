@@ -1116,9 +1116,29 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.line_c(&[(15.0, 14.0), (12.0, 11.5)], a);
             pen.line_c(&[(5.0, 14.0), (8.0, 11.5)], a);
         }
-        "sideBySide" | "syncScroll" | "switchWindows" => {
+        // Two windows side by side; Synchronous Scrolling adds a linked pair of arrows; Reset
+        // Window Position a return arrow; Switch Windows one window in front of another.
+        "sideBySide" => {
             pen.rect(2.0, 4.0, 9.5, 16.0, c);
             pen.rect(10.5, 4.0, 18.0, 16.0, a);
+        }
+        "syncScroll" => {
+            pen.rect(2.0, 4.0, 9.5, 16.0, c);
+            pen.rect(10.5, 4.0, 18.0, 16.0, c);
+            pen.line_c(&[(5.75, 7.0), (5.75, 13.0)], a);
+            pen.line_c(&[(4.0, 11.5), (5.75, 13.0), (7.5, 11.5)], a);
+            pen.line_c(&[(14.25, 7.0), (14.25, 13.0)], a);
+            pen.line_c(&[(12.5, 11.5), (14.25, 13.0), (16.0, 11.5)], a);
+        }
+        "resetWindowPosition" => {
+            pen.rect(2.0, 4.0, 9.5, 16.0, c);
+            pen.rect(10.5, 4.0, 18.0, 16.0, c);
+            pen.line_c(&[(13.0, 10.0), (7.0, 10.0)], a);
+            pen.line_c(&[(9.0, 8.0), (7.0, 10.0), (9.0, 12.0)], a);
+        }
+        "switchWindows" => {
+            pen.rect(2.5, 6.0, 13.0, 17.5, c);
+            pen.rect(7.0, 2.5, 17.5, 14.0, a);
         }
         "macros" => {
             pen.rect(3.0, 3.0, 17.0, 17.0, c);

@@ -2157,7 +2157,7 @@ fn record_box(ui: &mut Ui, app: &mut WordApp) {
     let on = !app.session.merge.rows.is_empty();
     let shown = if on { (app.session.merge.record + 1).to_string() } else { String::new() };
     // The draft lives in temp memory while typing (frame-local text would lose keystrokes).
-    let key = egui::Id::new("merge_record_box");
+    let key = crate::wid("merge_record_box");
     let mut text = ui.data(|d| d.get_temp::<String>(key)).unwrap_or_else(|| shown.clone());
     let r = ui.add_enabled(on, egui::TextEdit::singleline(&mut text).desired_width(36.0).horizontal_align(egui::Align::Center));
     let r = r.on_hover_text(tl!("Go to Record"));
@@ -2374,6 +2374,34 @@ fn view(app: &mut WordApp, ui: &mut Ui) {
         big(ui, app, "newWindow", "New\nWindow", "view.newWindow", json!({}), false);
         big(ui, app, "arrangeAll", "Arrange\nAll", "view.arrangeAll", json!({}), false);
         big(ui, app, "split", "Split", "view.split", json!({}), false);
+        // View Side by Side, Synchronous Scrolling and Reset Window Position stacked, then Switch
+        // Windows, as Word lays the group out (#322). With three or more windows open, View Side
+        // by Side asks which to compare with (the engine opens the dialog).
+        let w = app.session.windows.clone();
+        stack(ui, |ui| {
+            small(ui, app, "sideBySide", Some("View Side by Side"), "View Side by Side", "view.sideBySide", json!({}), w.side_by_side.is_some());
+            small(ui, app, "syncScroll", Some("Synchronous Scrolling"), "Synchronous Scrolling", "view.syncScroll", json!({}), w.sync_scroll);
+            small(
+                ui,
+                app,
+                "resetWindowPosition",
+                Some("Reset Window Position"),
+                "Reset Window Position",
+                "view.resetWindowPosition",
+                json!({}),
+                false,
+            );
+        });
+        menu_button(ui, app, "switchWindows", Some("Switch\nWindows"), "Switch Windows", true, "view.switchWindows", |ui, app| {
+            // The open windows in the order they were opened, numbered, this one checked.
+            for (n, entry) in w.list.iter().enumerate() {
+                let label = format!("{} {}", n + 1, entry.title);
+                if ui.add(egui::Button::selectable(entry.id == w.this, label).min_size(vec2(200.0, 0.0))).clicked() {
+                    let _ = app.run("view.switchWindows", json!({"window": entry.id}));
+                    ui.close();
+                }
+            }
+        });
         // The Full Screen button carries its name for assistive technology (and for the
         // regression test that clicks it): big buttons are otherwise drawn unlabeled. Its
         // enabled state is the command's own, as every other ribbon control reports: the
@@ -2816,7 +2844,7 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
                 Some((pos, wordcraft_doc::para::InlineObject::Image { media, .. })) => (media, pos.off),
                 _ => (String::new(), 0),
             };
-            let key = egui::Id::new(("picture_transparency", media, off));
+            let key = crate::wid(("picture_transparency", media, off));
             let mut v = ui.data(|d| d.get_temp::<f64>(key)).unwrap_or(0.0);
             let r = ui.add(egui::DragValue::new(&mut v).speed(1.0).range(0.0..=100.0).suffix("%"));
             if r.changed() {
@@ -2891,7 +2919,7 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
                     ));
                     // While typing, the field reports each keystroke as a change; only a new
                     // value (Enter, Tab, a click elsewhere, a drag) resizes, and Esc cancels.
-                    let cancelled = esc_cancelled(ui, &r, egui::Id::new(("picture_size_field", key)));
+                    let cancelled = esc_cancelled(ui, &r, crate::wid(("picture_size_field", key)));
                     if r.changed() && v != was && !cancelled {
                         if r.dragged() && !r.drag_started() {
                             app.session.join_next_undo();
@@ -2930,7 +2958,7 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
                 ui.label(egui::RichText::new(tl!("Alt:")).small());
                 // Frame-local buffers lose keystrokes; keep the draft in egui temp memory keyed
                 // by picture (same pattern as the comment editor in panes.rs).
-                let key = egui::Id::new(("picture_alt", media.clone(), off));
+                let key = crate::wid(("picture_alt", media.clone(), off));
                 let mut alt = ui.data(|d| d.get_temp::<String>(key)).unwrap_or_else(|| alt0.clone());
                 let r = ui.add(egui::TextEdit::singleline(&mut alt).desired_width(120.0).hint_text(tl!("Alt text")));
                 if r.changed() {
