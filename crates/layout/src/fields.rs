@@ -27,6 +27,7 @@ pub struct FieldCtx {
     pub title: Arc<str>,
     pub author: Arc<str>,
     pub filename: Arc<str>,
+    pub filepath: Arc<str>,
     /// Body paragraphs for STYLEREF fields in headers and footers, and where the page being
     /// drawn is among them (set only while laying out headers and footers that need it).
     pub styleref: Option<(Arc<crate::styleref::StyleIndex>, crate::styleref::At)>,
@@ -68,10 +69,10 @@ impl FieldCtx {
         self.page_from.iter().rev().find(|(from, _)| *from <= off).map_or(self.page, |(_, page)| *page)
     }
     /// A key for caches: the parts of the context a page-dependent paragraph depends on.
-    pub fn page_key(&self) -> (u32, u32, u32, u32, u64) {
+    pub fn page_key(&self) -> (u32, u32, u32, u32, u64, NumFormat) {
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        std::hash::Hash::hash(&(self.bookmarks_key, self.page_format, &self.chapter), &mut h);
-        (self.page, self.pages, self.section_pages, self.section, std::hash::Hasher::finish(&h))
+        std::hash::Hash::hash(&(self.bookmarks_key, &self.chapter), &mut h);
+        (self.page, self.pages, self.section_pages, self.section, std::hash::Hasher::finish(&h), self.page_format)
     }
     /// A key for caches of paragraph `p` with STYLEREF fields (0 when they show their stored
     /// result): a hash of the results its STYLEREF fields have on this page, so an edit to body
@@ -93,6 +94,42 @@ impl FieldCtx {
 /// The field's name (first word of the instruction, upper-cased).
 pub fn field_name(instr: &str) -> String {
     instr.split_whitespace().next().unwrap_or("").trim_start_matches('=').to_ascii_uppercase()
+}
+
+/// REF's hyperlink switch links its cached result without updating that result.
+pub(crate) fn reference_link(instr: &str) -> Option<String> {
+    let (name, args) = instr.trim_start().split_once(char::is_whitespace)?;
+    if !name.eq_ignore_ascii_case("REF") {
+        return None;
+    }
+    let args = args.trim_start();
+    let (target, switches) = if let Some(quoted) = args.strip_prefix('"') {
+        let end = quoted.find('"')?;
+        (quoted.get(..end)?, quoted.get(end + 1..)?)
+    } else {
+        let end = args.find(|c: char| c.is_whitespace() || c == '\\').unwrap_or(args.len());
+        (args.get(..end)?, args.get(end..)?)
+    };
+    if target.is_empty() {
+        return None;
+    }
+    // Switch arguments can contain quoted backslashes; those are not switches.
+    let mut chars = switches.chars().peekable();
+    let mut quoted = false;
+    while let Some(c) = chars.next() {
+        if quoted && c == '\\' {
+            chars.next();
+        } else if c == '"' {
+            quoted = !quoted;
+        } else if !quoted
+            && c == '\\'
+            && chars.next().is_some_and(|s| s.eq_ignore_ascii_case(&'h'))
+            && chars.peek().is_none_or(|c| !c.is_alphanumeric())
+        {
+            return Some(format!("#{target}"));
+        }
+    }
+    None
 }
 
 /// The number format a field's `\* FORMAT` switch names (`Arabic`, `roman`, `DBNum2`, `Aiueo` …),
@@ -138,7 +175,18 @@ pub fn field_text_on(instr: &str, result: &str, ctx: &FieldCtx, page: u32) -> (S
         },
         "TITLE" if result.is_empty() => (ctx.title.to_string(), false),
         "AUTHOR" if result.is_empty() => (ctx.author.to_string(), false),
-        "FILENAME" if result.is_empty() => (ctx.filename.to_string(), false),
+        "FILENAME" if result.is_empty() => {
+            let text = if has_switch(instr, 'p') && !ctx.filepath.is_empty() {
+                ctx.filepath.to_string()
+            } else if !ctx.filename.is_empty() {
+                ctx.filename.to_string()
+            } else {
+                "Document1".into()
+            };
+            (text, false)
+        }
+        // ASK and SET only assign text to a bookmark: they never show a result (ECMA-376 §17.16.5).
+        "ASK" | "SET" => (String::new(), false),
         "STYLEREF" => match &ctx.styleref {
             Some((ix, at)) => (ix.eval(instr, *at), true),
             None => (result.to_string(), false),
@@ -147,13 +195,31 @@ pub fn field_text_on(instr: &str, result: &str, ctx: &FieldCtx, page: u32) -> (S
     }
 }
 
+/// Extract the bookmark target from a `PAGEREF` instruction.
+fn pageref_target(instr: &str) -> Option<&str> {
+    let mut parts = instr.split_whitespace();
+    let name = parts.next()?;
+    let after_name = &instr[instr.find(name)? + name.len()..];
+    let trimmed = after_name.trim_start();
+    if let Some(rest) = trimmed.strip_prefix('"') {
+        let bookmark = rest.split('"').next()?;
+        if !bookmark.is_empty() {
+            return Some(bookmark);
+        }
+    }
+    let word = parts.next()?;
+    let target = word.split('\\').next().unwrap_or("").trim_matches('"');
+    if !target.is_empty() {
+        return Some(target);
+    }
+    None
+}
+
 /// The page a `PAGEREF` field's bookmark starts on, when known (see
 /// [`FieldCtx::bookmark_pages`]) and the field shows its number (`\p` shows "above" or "below").
 fn pageref_page(instr: &str, ctx: &FieldCtx) -> Option<(u32, NumFormat)> {
-    // The bookmark is the word after the field name, up to a switch written right after it.
-    let word = instr.split_whitespace().nth(1)?;
-    let target = word.split('\\').next().unwrap_or("").trim_matches('"');
-    if target.is_empty() || has_switch(instr, 'p') {
+    let target = pageref_target(instr)?;
+    if has_switch(instr, 'p') {
         return None;
     }
     ctx.bookmark_pages.get(target).copied()
@@ -172,11 +238,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ref_link_switches() {
+        for instr in [r"REF mark\w\h", r#" REF "mark" \h"#, "REF\tmark \\H"] {
+            assert_eq!(reference_link(instr).as_deref(), Some("#mark"), "{instr}");
+        }
+        for instr in ["", "REF", r"REF \h", r#"REF "" \h"#, r#"REF "mark \h"#, r"REF mark \hidden", r"NOTEREF mark \h", r#"REF mark \d "\h""#] {
+            assert_eq!(reference_link(instr), None, "{instr}");
+        }
+    }
+
+    #[test]
+    fn filename_field() {
+        let ctx = FieldCtx { filename: "report.docx".into(), filepath: "/home/user/docs/report.docx".into(), ..Default::default() };
+        assert_eq!(field_text("FILENAME", "", &ctx), ("report.docx".into(), false));
+        assert_eq!(field_text(r"FILENAME \p", "", &ctx), ("/home/user/docs/report.docx".into(), false));
+        assert_eq!(field_text(r"FILENAME \* MERGEFORMAT", "", &ctx), ("report.docx".into(), false));
+        assert_eq!(field_text("FILENAME", "cached.docx", &ctx), ("cached.docx".into(), false));
+
+        let def_ctx = FieldCtx::default();
+        assert_eq!(field_text("FILENAME", "", &def_ctx), ("Document1".into(), false));
+        assert_eq!(field_text(r"FILENAME \p", "", &def_ctx), ("Document1".into(), false));
+    }
+
+    #[test]
     fn page_fields() {
         let ctx = FieldCtx { page: 4, pages: 12, ..Default::default() };
         assert_eq!(field_text("PAGE", "", &ctx), ("4".into(), true));
         assert_eq!(field_text(" PAGE \\* ROMAN ", "", &ctx).0, "IV");
         assert_eq!(field_text("NUMPAGES \\* CardText", "", &ctx).0, "twelve");
+        assert_eq!(field_text("PAGE \\*roman", "", &ctx).0, "iv");
+        assert_eq!(field_text("PAGE \\*roman\\*MERGEFORMAT", "", &ctx).0, "iv");
         // Word for Mac with Japanese editing: `{ PAGE \* DBNum2 }` on page 1 shows 一, `\* Aiueo` ア.
         assert_eq!(field_text("PAGE \\* DBNum2", "", &ctx).0, "四");
         assert_eq!(field_text("PAGE \\* Aiueo", "", &ctx).0, "エ");
@@ -194,9 +285,24 @@ mod tests {
         assert_eq!(field_code_text(""), "{  }");
     }
 
+    /// #1765: ASK and SET only assign text to a bookmark; they show nothing, whatever result is stored.
+    #[test]
+    fn ask_and_set_show_nothing() {
+        let ctx = FieldCtx::default();
+        assert_eq!(field_text(r#" ASK Nominativo "Inserire nome" \d "«NOME»" "#, "«NOME» «COGNOME»", &ctx), (String::new(), false));
+        assert_eq!(field_text(r#"SET Codice "COD""#, "COD", &ctx), (String::new(), false));
+        assert_eq!(field_text("set Codice COD", "COD", &ctx).0, "");
+        // Other fields still show their stored result.
+        assert_eq!(field_text("MERGEFIELD NOME", "«NOME»", &ctx).0, "«NOME»");
+    }
+
     #[test]
     fn page_references_show_their_bookmarks_page() {
-        let pages = HashMap::from([("End_1".to_string(), (3, NumFormat::Decimal)), ("Intro".to_string(), (4, NumFormat::LowerRoman))]);
+        let pages = HashMap::from([
+            ("End_1".to_string(), (3, NumFormat::Decimal)),
+            ("Intro".to_string(), (4, NumFormat::LowerRoman)),
+            ("Chapter One".to_string(), (7, NumFormat::Decimal)),
+        ]);
         let ctx = FieldCtx { bookmark_pages: Arc::new(pages), bookmarks_key: 1, ..Default::default() };
         assert_eq!(field_text("PAGEREF End_1 \\* Arabic \\* MERGEFORMAT", "9", &ctx), ("3".into(), true));
         assert_eq!(field_text(" PAGEREF End_1 \\h ", "9", &ctx).0, "3");
@@ -205,6 +311,8 @@ mod tests {
         assert_eq!(field_text("PAGEREF Intro", "9", &ctx).0, "iv");
         assert_eq!(field_text("PAGEREF Intro \\* Arabic", "9", &ctx).0, "4");
         assert_eq!(field_text("PAGEREF \"End_1\"", "9", &ctx).0, "3");
+        assert_eq!(field_text("PAGEREF \"Chapter One\" \\h", "9", &ctx).0, "7");
+        assert_eq!(field_text("PAGEREF \"Chapter One\"\\h", "9", &ctx).0, "7");
         // Unknown bookmarks, "above"/"below" (\p) and a context without pages keep the result.
         assert_eq!(field_text("PAGEREF Missing", "9", &ctx), ("9".into(), false));
         for instr in ["PAGEREF End_1 \\p", "PAGEREF End_1 \\P", "PAGEREF End_1 \\p\\h", "PAGEREF End_1\\h\\p"] {

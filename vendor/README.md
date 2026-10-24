@@ -7,7 +7,7 @@ the regression test that guards it.
 
 | Crate | Version | Licence | Local patches | Guard |
 |---|---|---|---|---|
-| winit | 0.30.13 | Apache-2.0 | `patches/winit/01-macos-ime-surrounding-text.md` | `apps/wordcraft/tests/winit_vendor.rs`, `apps/wordcraft/tests/winit_macos_ime_surrounding_text.rs` |
+| winit | 0.30.13 | Apache-2.0 | `patches/winit/01-macos-ime-surrounding-text.md` | `apps/wordcraft/tests/it/winit_vendor.rs`, `apps/wordcraft/tests/it/winit_macos_ime_surrounding_text.rs` |
 
 The workspace manifest patches crates.io to `vendor/winit` (`[patch.crates-io]`), so every
 crate in the build that depends on winit (eframe, egui-winit, accesskit_winit…) takes this copy;
