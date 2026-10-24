@@ -90,14 +90,15 @@ fn a_tbrlv_section_stacks_its_lines_from_the_left_as_word_for_mac_does() {
     assert!(c_next.x > c0.x + 1.0, "{c_next:?} vs {c0:?}");
     let c2 = l.caret(&Pos::body(0, 2)).unwrap();
     assert!(c2.top > c0.top && (c2.x - c0.x).abs() < 0.5);
-    // Each line sits where its `tbRl` twin's mirror image is: the same distance from the left
-    // edge as the twin from the right edge.
+    // Each line sits where its `tbRl` twin's mirror image is — the line, not what is in it: the
+    // caret (the text's extent, not the whole line) keeps its place within its line.
     let mut r = d.clone();
     r.last_section.stack_left_to_right = false;
     let lr = lay(&r);
     let t0 = lr.caret(&Pos::body(0, 0)).unwrap();
     let rp = &lr.pages[0];
-    assert!(((c0.x - page.body.x) - (rp.body.right() - (t0.x + t0.width))).abs() < 0.5, "{c0:?} {t0:?}");
+    let h = para.lines[0].height;
+    assert!(((c0.x - page.body.x) - (t0.x - (rp.body.right() - h))).abs() < 0.5, "{c0:?} {t0:?} line {h}");
     // Clicking a caret position finds it again.
     for off in [0, 2, second] {
         let c = l.caret(&Pos::body(0, off)).unwrap();
@@ -908,4 +909,53 @@ fn ideographic_space_marks_turn_with_a_vertical_column() {
     let base = line.baseline - line.top;
     let centre = base - para.styles[para.clusters[1].style as usize].v_centre;
     assert!((r.y + r.h / 2.0 - centre).abs() < 0.01, "centred on the em squares across the column: {} vs {centre}", r.y + r.h / 2.0);
+}
+
+/// #2038 in a vertical section, where every line is turned: a click outside a floating table
+/// goes to the text beside or after it, not to a cell of the table nearer the click.
+#[test]
+fn a_click_outside_a_floating_table_in_a_vertical_section_skips_its_cells() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    let mut d = Document::from_text("Text");
+    d.last_section.text_direction = TextDirection::Down;
+    let mut t = wordcraft_doc::Table::new(3, 2, 200.0);
+    t.props.float = Some(TableFloat {
+        h_rel: Anchor::Column,
+        v_rel: Anchor::Paragraph,
+        x: 150.0,
+        dist: [9.0, 0.0, 9.0, 0.0],
+        overlap: true,
+        ..Default::default()
+    });
+    d.insert_block(StoryRef::Body, &Path::top(0), Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let page = &l.pages[0];
+    assert_eq!(page.float_tables, [Path::top(0)]);
+    let area =
+        page.items.iter().filter_map(|it| if let Placed::Cell { rect, .. } = it { Some(*rect) } else { None }).reduce(|a, b| a.union(&b)).unwrap();
+    let turned: Vec<(&Path, Rect)> = page
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Lines { story: StoryRef::Body, path, .. } => it.turned_bounds().map(|r| (path, r)),
+            _ => None,
+        })
+        .collect();
+    assert!(!turned.is_empty() && hit::page_lines(page, StoryRef::Body).is_empty(), "only turned lines on the page");
+    let band = |v: f32, lo: f32, len: f32| (lo - v).max(v - lo - len).max(0.0);
+    let dist = |r: &Rect, x: f32, y: f32| band(x, r.x, r.w).hypot(band(y, r.y, r.h));
+    // Points just outside the table, off every line, whose nearest line is one of the table's.
+    let (cx, cy) = (area.x + area.w / 2.0, area.y + area.h / 2.0);
+    let points: Vec<(f32, f32)> = [(area.x - 12.0, cy), (area.right() + 12.0, cy), (cx, area.y - 12.0), (cx, area.bottom() + 12.0)]
+        .into_iter()
+        .filter(|&(x, y)| page.body.contains(Point::new(x, y)) && turned.iter().all(|(_, r)| !r.expand(2.0).contains(Point::new(x, y))))
+        .filter(|&(x, y)| turned.iter().min_by(|a, b| dist(&a.1, x, y).total_cmp(&dist(&b.1, x, y))).is_some_and(|(p, _)| p.0.len() > 1))
+        .collect();
+    assert!(!points.is_empty(), "a click there would land in the table: {area:?}");
+    for (x, y) in points {
+        assert_eq!(l.hit(0, x, y, StoryRef::Body).unwrap().path, Path::top(1), "a click at ({x}, {y})");
+    }
+    // Inside the table a click still lands in a cell.
+    assert!(l.hit(0, cx, cy, StoryRef::Body).unwrap().path.0.len() > 1);
 }
