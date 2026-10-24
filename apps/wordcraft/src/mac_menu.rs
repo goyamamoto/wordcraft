@@ -101,7 +101,6 @@ impl MacMenu {
                 Node::Standard(kind) => {
                     let standard = match kind {
                         Standard::Services => PredefinedMenuItem::services(Some(wordcraft_ui_egui::i18n::t("Services"))),
-                        Standard::Zoom => PredefinedMenuItem::maximize(Some(wordcraft_ui_egui::i18n::t("Zoom"))),
                         Standard::BringAllToFront => PredefinedMenuItem::bring_all_to_front(Some(wordcraft_ui_egui::i18n::t("Bring All to Front"))),
                     };
                     sub.append(&standard)?;

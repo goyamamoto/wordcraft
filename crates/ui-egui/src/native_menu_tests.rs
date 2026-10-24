@@ -92,7 +92,7 @@ fn layout_has_mac_roles_and_only_existing_commands() {
         assert!(
             s.app.session.registry.get(&it.command).is_some()
                 || it.command == "ui.dialog"
-                || matches!(it.id.as_str(), HIDE | HIDE_OTHERS | SHOW_ALL | MINIMIZE),
+                || matches!(it.id.as_str(), HIDE | HIDE_OTHERS | SHOW_ALL | MINIMIZE | ZOOM),
             "{}",
             it.command
         );
@@ -110,13 +110,20 @@ fn layout_has_mac_roles_and_only_existing_commands() {
         .iter()
         .map(|n| match n {
             Node::Item(it) => it.id.as_str(),
-            Node::Standard(Standard::Zoom) => "zoom",
             Node::Standard(Standard::BringAllToFront) => "front",
             Node::Separator => "-",
             _ => "?",
         })
         .collect();
-    assert_eq!(ids, [MINIMIZE, "zoom", "-", "view.newWindow", "view.arrangeAll", "view.split", "-", "front"]);
+    assert_eq!(ids, [MINIMIZE, ZOOM, "-", "view.newWindow", "view.arrangeAll", "view.split", "-", "front"]);
+    // Minimize is ⌘M on the Mac, as in Word (Increase Indent is ⌃⇧M there, as in Word for Mac).
+    let minimize = bar.find(MINIMIZE).unwrap().shortcut.clone();
+    if cfg!(target_os = "macos") {
+        assert_eq!(minimize, Chord::parse("Mod+M"));
+    } else {
+        assert_eq!(minimize, Chord::parse("Mod+Ctrl+M"), "Ctrl+M indents there");
+    }
+    assert!(bar.find(ZOOM).unwrap().shortcut.is_none(), "Zoom has no key, as in Word");
     assert!(!bar.find("view.arrangeAll").unwrap().enabled, "no window host here: the window commands are off");
     assert!(bar.find("view.sideBySide").is_none(), "Side by Side is the ribbon's alone, as in Word for Mac");
 }
@@ -508,11 +515,14 @@ fn bare_and_option_typing_never_become_key_equivalents() {
     assert_ne!(Chord::parse("Mod+M"), Chord::parse("Mod+Ctrl+M"));
 }
 
-/// Minimize minimizes the window the menu belongs to, in its own frame.
+/// Minimize minimizes and Zoom zooms the window the menu belongs to, in its own frame.
 #[test]
-fn minimize_sends_the_viewport_command() {
+fn minimize_and_zoom_send_the_viewport_commands() {
     let mut s = setup();
     click(&s.state, MINIMIZE);
     let out = s.frame(Default::default());
     assert!(out.viewport_output.values().flat_map(|v| v.commands.iter()).any(|c| matches!(c, egui::ViewportCommand::Minimized(true))));
+    click(&s.state, ZOOM);
+    let out = s.frame(Default::default());
+    assert!(out.viewport_output.values().flat_map(|v| v.commands.iter()).any(|c| matches!(c, egui::ViewportCommand::Maximized(true))));
 }
