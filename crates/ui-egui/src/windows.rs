@@ -419,7 +419,7 @@ impl Host {
         });
         app.view_number = number;
         let viewport = ViewportId::from_hash_of(("wordcraft-window", id));
-        let title = format!("{}:{} - WordCraft", app.title_stem(), number.unwrap_or(1));
+        let title = format!("{}:{} - {}", app.title_stem(), number.unwrap_or(1), crate::APP_NAME);
         let mut builder = self.template.clone().with_title(title);
         if let Some(geometry) = geometry.map(|geometry| cascade(geometry, work)) {
             builder = geometry.apply(builder);
@@ -737,7 +737,7 @@ impl Host {
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1).max(2);
         let viewport = ViewportId::from_hash_of(("wordcraft-window", id));
-        let mut builder = self.template.clone().with_title(format!("{} - WordCraft", app.title_stem()));
+        let mut builder = self.template.clone().with_title(format!("{} - {}", app.title_stem(), crate::APP_NAME));
         if let Some(g) = geometry.map(|g| cascade(g, work)) {
             builder = g.apply(builder);
         }
