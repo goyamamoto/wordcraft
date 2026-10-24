@@ -26,6 +26,7 @@ pub const HIDE: &str = "app.hide";
 pub const HIDE_OTHERS: &str = "app.hideOthers";
 pub const SHOW_ALL: &str = "app.showAll";
 pub const MINIMIZE: &str = "window.minimize";
+pub const ZOOM: &str = "window.zoom";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct MenuBar {
@@ -59,7 +60,6 @@ pub enum Node {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Standard {
     Services,
-    Zoom,
     BringAllToFront,
 }
 
@@ -188,7 +188,7 @@ pub(crate) fn blocks_document(app: &WordApp) -> bool {
 }
 
 fn allowed(app: &WordApp, ctx: &Context, id: &str) -> bool {
-    if matches!(id, HIDE | HIDE_OTHERS | SHOW_ALL | MINIMIZE | QUIT) {
+    if matches!(id, HIDE | HIDE_OTHERS | SHOW_ALL | MINIMIZE | ZOOM | QUIT) {
         return !modal(app) || id != QUIT;
     }
     if app.file_dialog.is_some() {
@@ -522,18 +522,20 @@ pub fn menu_bar(app: &WordApp, ctx: &Context) -> MenuBar {
                 prompt("table.properties"),
             ],
         },
-        // The Window menu as Word for Mac has it (observed 2026-10-24): Minimize, Zoom; New
+        // The Window menu as Word for Mac has it (observed 2026-10-24): Minimize ⌘M, Zoom; New
         // Window, Arrange All, Split; Bring All to Front. View Side by Side, Synchronous Scrolling
         // and Reset Window Position stay on the ribbon alone. The rest is AppKit's: the host
-        // registers this menu as the windows menu, and macOS adds Minimize All, Zoom All, Fill,
-        // Center, Move & Resize, Full Screen Tile and the list of open documents, the one in
-        // front checked.
+        // registers this menu as the windows menu, and macOS adds Fill, Center, Move & Resize,
+        // Full Screen Tile and the list of open documents, the one in front checked. Minimize and
+        // Zoom are the app's own items, not AppKit's `performZoom:` row: macOS puts its tiling
+        // items right after that row, where Word (whose rows are its own) has them after Bring
+        // All to Front.
         Menu {
             title: tr("Window"),
             role: Role::Window,
             children: vec![
                 system(MINIMIZE, tr("Minimize"), &["Mod+M", "Mod+Ctrl+M"]),
-                Node::Standard(Standard::Zoom),
+                system(ZOOM, tr("Zoom"), &[]),
                 Node::Separator,
                 command("view.newWindow"),
                 command("view.arrangeAll"),
@@ -727,6 +729,11 @@ pub fn run(menu: &mut NativeMenu, app: &mut WordApp, ctx: &Context) {
         match id.as_str() {
             HIDE | HIDE_OTHERS | SHOW_ALL => menu.backend.system_action(&id),
             MINIMIZE => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+            // Zoom toggles, as the Mac's does (winit zooms the window on macOS).
+            ZOOM => {
+                let zoomed = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!zoomed));
+            }
             // With a window host every window closes in turn, each asking about its changes;
             // alone, the window asks and closes, as its close button does.
             QUIT if app.session.windows.host => app.window_requests.push(WindowRequest::Quit),
