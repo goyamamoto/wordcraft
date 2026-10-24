@@ -29,7 +29,7 @@ pub use io::Password;
 pub use keymap::KeyMap;
 pub use ribbon::RibbonLayout;
 pub use session::{
-    CellRange, ColumnBlock, EditSnapshot, FindState, MathEdit, Prefs, Selection, Session, UNDO_LIST_MAX, ViewState, WindowEntry, Windows,
+    CellRange, ColumnBlock, EditSnapshot, FindState, MathEdit, Prefs, Selection, Session, UNDO_LIST_MAX, ViewSlot, ViewState, WindowEntry, Windows,
     blank_document, blank_document_in, east_asian_editing_language, fill_east_asian_language, set_system_locale,
 };
 pub use wordcraft_doc as doc;
