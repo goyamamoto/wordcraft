@@ -19,6 +19,8 @@ mod file_dialogs;
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod graphics;
 mod logging;
+#[cfg(target_os = "macos")]
+mod mac_menu;
 mod print;
 mod region;
 #[cfg(target_os = "macos")]
@@ -515,11 +517,18 @@ fn main() -> eframe::Result {
             if files.is_empty() && other_files.is_empty() && !sample && control_port.is_none() {
                 app.start_screen();
             }
+            // The native menu bar (macOS, #1396): built from the first window's state, then kept
+            // to the window in use by the host.
+            #[cfg(target_os = "macos")]
+            let menu = mac_menu::install(&cc.egui_ctx, &app);
             let mut host = Host::new(app, template, Box::new(new_app));
             #[cfg(target_os = "macos")]
             {
                 host.work_area = Some(Box::new(screens::work_area));
                 host.after_ui = Some(Box::new(report_ime_surrounding));
+                if let Some(menu) = menu {
+                    host = host.with_menu(menu);
+                }
             }
             let mut key_file = None;
             if let Some(port) = control_port

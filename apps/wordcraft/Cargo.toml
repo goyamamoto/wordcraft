@@ -44,8 +44,12 @@ fmv-macos-events = "=0.1.0"
 # NSWorkspace: a safe call in these bindings. Already in the build through eframe, rfd and arboard,
 # at this version; this adds the `NSAccessibility` bindings and, to fit the title bar around the
 # traffic lights, the window, button and view ones.
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSWorkspace", "NSAccessibility", "NSApplication", "NSWindow", "NSButton", "NSControl", "NSView", "NSResponder", "NSPasteboard", "NSScreen", "NSGraphics"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSWorkspace", "NSAccessibility", "NSApplication", "NSWindow", "NSButton", "NSControl", "NSView", "NSResponder", "NSPasteboard", "NSScreen", "NSGraphics", "NSEvent"] }
 objc2 = "0.6"
+# The native menu bar (`mac_menu`): AppKit menus through the same backend as PhotoCraft, which
+# keeps the Objective-C interop (unsafe, which our workspace forbids) behind a safe API. No GTK:
+# only macOS has it. Pinned exactly: review the diff before bumping.
+muda = { version = "=0.21.2", default-features = false }
 # A copied equation's MathML goes on the pasteboard as `public.mathml.presentation` beside
 # arboard's HTML and text (#1297), through NSPasteboard's safe `setString:forType:`. Already in
 # the build through arboard, at this version; this adds only the NSString bindings.
@@ -53,6 +57,14 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 # Closing the window must quit through NSApplication rather than by dropping the NSWindow
 # inside the AppKit run loop (see `schedule_macos_terminate`).
 dispatch2 = "0.3"
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+# `tests/mac_menu_appkit.rs` reads the installed menu bar back and dispatches its items as AppKit does.
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSGraphicsContext", "NSMenu", "NSMenuItem", "NSResponder"] }
+
+[[test]]
+name = "mac_menu_appkit"
+harness = false
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 winit = { version = "0.30", default-features = false, features = ["x11"] }

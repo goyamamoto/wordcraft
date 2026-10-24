@@ -36,6 +36,7 @@ use egui::{Rect, Vec2, ViewportBuilder, ViewportCommand, ViewportId, pos2, vec2}
 use serde_json::{Value, json};
 use wordcraft_engine::{WindowEntry, Windows};
 
+use crate::native_menu::{self, NativeMenu};
 use crate::window_geometry::{MIN_SIZE, WindowGeometry};
 use crate::{ControlRequest, WordApp};
 
@@ -137,6 +138,9 @@ pub struct Host {
     template: ViewportBuilder,
     pub work_area: Option<WorkArea>,
     pub after_ui: Option<AfterUi>,
+    /// The native menu bar (macOS): one for the process, showing the window in use and running
+    /// its items there.
+    menu: Option<NativeMenu>,
     control_rx: Option<Receiver<ControlRequest>>,
     /// Every window has closed (or the last one may): the eframe app ends the process.
     exit: bool,
@@ -171,6 +175,7 @@ impl Host {
             template,
             work_area: None,
             after_ui: None,
+            menu: None,
             control_rx: None,
             exit: false,
             shared_settings: None,
@@ -183,6 +188,17 @@ impl Host {
     pub fn with_control(mut self, rx: Receiver<ControlRequest>) -> Self {
         self.control_rx = Some(rx);
         self
+    }
+
+    /// The native menu bar the host installed ([`native_menu`]).
+    pub fn with_menu(mut self, menu: NativeMenu) -> Self {
+        self.menu = Some(menu);
+        self
+    }
+
+    /// Whether the window `vp` shows is the one in use: the one the menu bar shows and acts on.
+    fn is_active_viewport(&self, vp: ViewportId) -> bool {
+        self.active().is_some_and(|w| w.viewport == vp)
     }
 
     /// Install the host for this thread (the main thread), replacing any earlier one.
@@ -291,14 +307,27 @@ impl Host {
             self.drain_control(ctx);
             self.quit_tick(ctx);
             self.pass_wake_ups_on(ctx);
+            // A menu event wakes the root viewport; the window in use takes it in its frame.
+            if let Some(menu) = &mut self.menu
+                && menu.pull()
+                && let Some(w) = self.active()
+                && w.viewport != ViewportId::ROOT
+            {
+                ctx.request_repaint_of(w.viewport);
+            }
         }
         self.pass_screenshots_on(vp, ctx);
         self.pool_fonts();
         let snapshot = self.snapshot(id);
         let single = self.windows.len() == 1;
+        let active = self.is_active_viewport(vp);
         let w = &mut self.windows[i];
         w.app.session.windows = snapshot;
         w.app.applies_zoom = single || self.active == id;
+        w.app.menu_bar_installed = self.menu.is_some();
+        if active && let Some(menu) = &mut self.menu {
+            native_menu::run(menu, &mut w.app, ctx);
+        }
         w.app.logic(ctx);
         // Where the window is, for cascading, tiling and the saved geometry.
         let info = ctx.input(|i| i.viewport().clone());
@@ -350,6 +379,11 @@ impl Host {
             crate::set_window_is_root(vp == ViewportId::ROOT);
             self.windows[i].app.ui(ui);
             self.sync_scroll_tick(i, &ctx);
+            if self.is_active_viewport(vp)
+                && let Some(menu) = &mut self.menu
+            {
+                native_menu::sync(menu, &self.windows[i].app, &ctx);
+            }
             let focused = ctx.input(|i| i.viewport().focused == Some(true));
             if let Some(after) = &mut self.after_ui {
                 after(&self.windows[i].app, focused);
@@ -397,11 +431,16 @@ impl Host {
         }
     }
 
-    /// eframe's raw input hook, for the viewport the input is for.
+    /// eframe's raw input hook, for the viewport the input is for: the menu bar's events go to
+    /// the window in use (the one the menu shows), then the window's own hook runs.
     pub fn raw_input_hook(&mut self, raw: &mut egui::RawInput) {
-        if let Some(i) = self.index_of_viewport(raw.viewport_id) {
-            self.windows[i].app.raw_input_hook(raw);
+        let Some(i) = self.index_of_viewport(raw.viewport_id) else { return };
+        if self.is_active_viewport(raw.viewport_id)
+            && let Some(menu) = &mut self.menu
+        {
+            native_menu::raw_input(menu, &mut self.windows[i].app, raw);
         }
+        self.windows[i].app.raw_input_hook(raw);
     }
 
     /// The root pass: every other window is declared, so egui keeps it; a window being closed is
