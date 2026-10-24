@@ -20,8 +20,8 @@ Windows, Linux/BSD and the web keep the ribbon alone, as Word for Windows has no
 | Window | Minimize (⌘M), Zoom; New Window, Arrange All, Split; Bring All to Front. Then what macOS adds to an app's windows menu (Fill, Center, Move & Resize ▸, Full Screen Tile ▸, Remove Window from Set, Move to iPad) and the open document windows, the one in front checked. Observed in Word for Mac on 2026-10-24: View Side by Side, Synchronous Scrolling and Reset Window Position are on the ribbon only. Minimize and Zoom are the app's own rows, not AppKit's `performMiniaturize:`/`performZoom:` ones, because macOS puts its tiling rows right after a `performZoom:` row, where Word has them after Bring All to Front; so those two rows have no system icon. Increase Indent is ⌃⇧M on the Mac (as in Word for Mac), which leaves ⌘M to Minimize |
 | Help | Commands (command search; registered as the help menu, so macOS's menu search works), Check Accessibility |
 
-New Window and Split come from the document-windows work (#322) and are disabled with the
-reason until a session has two views of one document. The Window
+New Window opens a second window on the document and Split two panes on it in this window
+(#322; `docs/ui-parity.md`, Document windows). The Window
 menu's list of documents replaces the ribbon's Switch Windows on macOS (Word for Mac has no such
 button; Word for Windows does, because Windows has no menu bar), so that button is not drawn
 while the menu bar is installed.

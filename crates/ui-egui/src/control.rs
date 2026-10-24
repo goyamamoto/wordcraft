@@ -62,6 +62,8 @@ pub fn inspect(app: &mut WordApp, ctx: &egui::Context) -> Value {
         "title": app.title_stem(),
         "dirty": app.session.dirty,
         "windows": app.session.windows,
+        "viewNumber": app.view_number,
+        "split": app.split.as_ref().map(|s| json!({"fraction": s.fraction, "lowerActive": s.lower_active})),
         "perf": {"frameMs": app.frame_ms, "renderMs": app.canvas.render_ms, "layoutMs": app.session.layout().ms},
     })
 }

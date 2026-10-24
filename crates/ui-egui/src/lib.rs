@@ -82,6 +82,7 @@ pub mod ribbon;
 pub mod ribbon_fit;
 pub mod ruler_tabs;
 pub mod scroll;
+pub mod split;
 pub mod system_clipboard;
 pub mod table_mouse;
 pub mod table_pen;
@@ -104,6 +105,8 @@ pub use control::ControlRequest;
 thread_local! {
     /// The window whose frame is running, set by [`windows::Host`]; 0 outside a window host.
     static WINDOW_SALT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// The split pane being drawn ([`split`]): 0 for the upper pane or an unsplit window.
+    static PANE_SALT: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
     /// Whether that window is the app's first (eframe's root viewport), the one the host's
     /// `eframe::Frame` belongs to.
     static WINDOW_IS_ROOT: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
@@ -119,6 +122,12 @@ pub(crate) fn set_window_is_root(root: bool) {
     WINDOW_IS_ROOT.set(root);
 }
 
+/// Marks the split pane being drawn, so [`wid`] keeps the lower pane's page and scroll area
+/// apart from the upper pane's.
+pub(crate) fn set_pane_salt(pane: u8) {
+    PANE_SALT.set(pane);
+}
+
 /// Whether the window whose frame is running is the app's first window (eframe's root viewport),
 /// which is the only one the host can parent a system dialog to: a dialog another window asks for
 /// is shown unparented rather than as a sheet on the wrong window. True outside a window host.
@@ -131,9 +140,9 @@ pub fn current_window_is_root() -> bool {
 /// `Id::new(name)` would be shared between the windows ([`windows`]). Outside a window host it is
 /// `Id::new(name)` itself.
 pub(crate) fn wid(name: impl std::hash::Hash + std::fmt::Debug) -> egui::Id {
-    match WINDOW_SALT.get() {
-        0 => egui::Id::new(name),
-        salt => egui::Id::new(name).with(("wordcraft-window", salt)),
+    match (WINDOW_SALT.get(), PANE_SALT.get()) {
+        (0, 0) => egui::Id::new(name),
+        (salt, pane) => egui::Id::new(name).with(("wordcraft-window", salt, pane)),
     }
 }
 pub use file_dialogs::{FileDialogAnswer, FileDialogRequest, open_filters};
@@ -724,6 +733,11 @@ pub struct WordApp {
     /// The host installed a native menu bar ([`native_menu`]): its key equivalents reach the
     /// window through it, and the ribbon's Switch Windows gives way to the Window menu's list.
     pub menu_bar_installed: bool,
+    /// This window's number among the windows on its document (View › New Window): the title
+    /// reads `Document1:2`, as Word's does. None for a document with one window.
+    pub view_number: Option<u32>,
+    /// View › Split: the other pane ([`split`]).
+    pub(crate) split: Option<split::Split>,
 }
 
 /// The answer to "Do you want to save changes?" (`ui.saveChanges`).
@@ -829,6 +843,8 @@ impl WordApp {
             control_inbox: Vec::new(),
             applies_zoom: true,
             menu_bar_installed: false,
+            view_number: None,
+            split: None,
         }
     }
 
@@ -1435,6 +1451,11 @@ impl WordApp {
         if !self.has_document() {
             return true;
         }
+        // Another window shows this document (View › New Window): closing this one closes a
+        // view of it, as in Word; the document stays open there, changes and all.
+        if self.session.windows.others_on_this_document().next().is_some() {
+            return true;
+        }
         // A comment draft the document refuses is an unsaved change: the prompt can drop it.
         let refused = panes::flush_comment_drafts(self).is_err();
         if !self.session.dirty && !self.save_unconfirmed() && !refused {
@@ -1461,9 +1482,16 @@ impl WordApp {
         if !self.has_document() {
             return Ok(json!({"closed": false}));
         }
+        // Other windows show this document (View › New Window): File › Close closes the document,
+        // so every one of them goes, as in Word.
+        if self.session.windows.host && self.session.windows.others_on_this_document().next().is_some() {
+            self.window_requests.push(windows::WindowRequest::CloseDocumentWindows);
+        }
         // Another window is open: the document's window closes with it, as in Word; the last
         // window stays, empty.
-        if self.session.windows.host && self.session.windows.others().next().is_some() {
+        if self.session.windows.host
+            && self.session.windows.others().any(|w| w.document == 0 || w.document != self.session.windows.document_of_this())
+        {
             self.window_requests.push(windows::WindowRequest::Close);
             return Ok(json!({"closed": true, "window": self.session.windows.this}));
         }
@@ -1544,6 +1572,20 @@ impl WordApp {
             || self.zotero.busy.is_some()
             || self.session.read_aloud.open
             || !self.control_inbox.is_empty()
+    }
+
+    /// Exchange the document with another window's app (View › New Window shares one document
+    /// between windows, which take turns holding it, [`windows::Host`]): the session and what the
+    /// app keeps about the document's file and saves; the interface state stays with each window.
+    pub(crate) fn swap_document_state(&mut self, other: &mut WordApp) {
+        std::mem::swap(&mut self.session, &mut other.session);
+        std::mem::swap(&mut self.autosave_path, &mut other.autosave_path);
+        std::mem::swap(&mut self.saves_in_flight, &mut other.saves_in_flight);
+        std::mem::swap(&mut self.awaiting_save, &mut other.awaiting_save);
+        std::mem::swap(&mut self.no_document, &mut other.no_document);
+        std::mem::swap(&mut self.recovery_seen, &mut other.recovery_seen);
+        std::mem::swap(&mut self.last_autosave, &mut other.last_autosave);
+        std::mem::swap(&mut self.word_count, &mut other.word_count);
     }
 
     /// The app moved to another window (the root window took over a closed window's document):
@@ -1704,8 +1746,18 @@ impl WordApp {
         if req.get("toggle").and_then(Value::as_str) == Some("interfaceTheme") {
             self.ui.theme = if self.ui_is_dark() { theme::Appearance::Light } else { theme::Appearance::Dark };
         }
+        // View › Split: two panes on the document in this window.
+        if req.get("toggle").and_then(Value::as_str) == Some("split") {
+            split::toggle(self);
+        }
         if let Some(what) = req.get("open").and_then(Value::as_str) {
             match what {
+                // View › New Window: a second window on this document, from the window host.
+                "newWindow" => {
+                    if self.session.windows.host {
+                        self.window_requests.push(windows::WindowRequest::NewWindow);
+                    }
+                }
                 "openFile" => self.open_dialog(),
                 "saveAs" => {
                     self.save_as_dialog();
@@ -2715,7 +2767,7 @@ impl WordApp {
             }
             let fill = if screen == chrome::Screen::Focus { chrome::FOCUS_CANVAS } else { t.canvas };
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(fill)).show(ui, |ui| {
-                canvas::show(self, ui);
+                split::show(self, ui);
             });
             if self.focus_ribbon {
                 chrome::focus_ribbon(self, &ctx);
@@ -2735,7 +2787,8 @@ impl WordApp {
             ctx.open_url(egui::OpenUrl::new_tab(url));
         }
         let title = if self.has_document() {
-            format!("{}{} - {APP_NAME}", self.title_stem(), if self.session.dirty { " •" } else { "" })
+            let number = self.view_number.map(|n| format!(":{n}")).unwrap_or_default();
+            format!("{}{}{} - {APP_NAME}", self.title_stem(), number, if self.session.dirty { " •" } else { "" })
         } else {
             APP_NAME.to_string()
         };
