@@ -509,6 +509,13 @@ pub enum Dialog {
     /// answered (`ui.saveChanges`), and only while the document it asked about
     /// (`Session::document_id`) is still the one open. `message`: why the last Save failed, shown
     /// in the prompt when it comes back after that failure (#1445); empty otherwise.
+    /// View › Window › View Side by Side with three or more windows open: which window to compare
+    /// with (Word's Compare Side by Side dialog, #322).
+    CompareSideBySide {
+        /// The other windows: id and title, in the Switch Windows order.
+        windows: Vec<(u64, String)>,
+        chosen: usize,
+    },
     SaveChanges {
         name: String,
         then: String,
@@ -1096,6 +1103,7 @@ impl Dialog {
             Dialog::PasteSpecial { .. } => "pasteSpecial",
             Dialog::About { .. } => "about",
             Dialog::SaveChanges { .. } => "saveChanges",
+            Dialog::CompareSideBySide { .. } => "compareSideBySide",
             Dialog::DiscardRecovery { .. } => "discardRecovery",
             Dialog::RecipientList { .. } => "recipientList",
             Dialog::SelectTable { .. } => "selectTable",
@@ -1339,6 +1347,13 @@ impl Dialog {
             "bookmark" => Dialog::Bookmark { name: bookmark_at_caret(&app.session), by_location: false, hidden: false, deleted: false },
             "wordCount" => Dialog::WordCount { stats: app.session.run("review.wordCount", &json!({})).unwrap_or_default() },
             "zoom" => Dialog::Zoom { percent: (app.session.view.zoom * 100.0).round() },
+            "compareSideBySide" => {
+                let windows: Vec<(u64, String)> = app.session.windows.others().map(|w| (w.id, w.title.clone())).collect();
+                if windows.is_empty() {
+                    return None;
+                }
+                Dialog::CompareSideBySide { windows, chosen: 0 }
+            }
             "watermark" => Dialog::Watermark { text: "CONFIDENTIAL".into(), diagonal: true },
             "phonetic" => {
                 let v = wordcraft_engine::cmd::phonetic::state(&app.session);
@@ -1499,7 +1514,7 @@ impl Dialog {
 /// Grid picker for Insert › Table (hover to size, click to insert).
 pub fn table_grid_picker(ui: &mut Ui, app: &mut WordApp) {
     let t = Tokens::get(ui.ctx());
-    let id = egui::Id::new("table_picker_hover");
+    let id = crate::wid("table_picker_hover");
     let hover: (usize, usize) = ui.data(|d| d.get_temp(id)).unwrap_or((0, 0));
     ui.label(if hover.0 > 0 {
         crate::i18n::fmt(tl!("{cols}×{rows} Table"), &[("cols", &hover.1.to_string()), ("rows", &hover.0.to_string())])
@@ -1539,7 +1554,7 @@ pub fn table_grid_picker(ui: &mut Ui, app: &mut WordApp) {
 
 /// The open dialog, as (window id, frames it has been centred for).
 fn dialog_top_key() -> egui::Id {
-    egui::Id::new("dialog_top")
+    crate::wid("dialog_top")
 }
 
 /// Frames a dialog stays centred: the first one measures it, the second centres that size.
@@ -1601,6 +1616,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Icons { .. } => "Icons",
         Dialog::PasteSpecial { .. } => "Paste Special",
         Dialog::About { .. } => "About WordCraft",
+        Dialog::CompareSideBySide { .. } => "Compare Side by Side",
         Dialog::SaveChanges { .. } => "WordCraft",
         Dialog::DiscardRecovery { .. } => "Discard recovery copy",
         Dialog::RecipientList { .. } => "Recipient List",
@@ -1630,7 +1646,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Organizer { .. } => "Organizer",
         Dialog::Layout(d) => d.title(),
     };
-    let id = egui::Id::new(("dialog", title));
+    let id = crate::wid(("dialog", title));
     let window = crate::window_close::window(ctx, egui::Window::new(tl!(title)).id(id).collapsible(false).resizable(false));
     let shown = place_dialog(ctx, id, window).show(ctx, |ui| {
         ui.set_min_width(340.0);
@@ -2346,7 +2362,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             let replace_mode = *tab == FindTab::Replace;
             ui.horizontal(|ui| {
                 ui.label(tl!("Find what:"));
-                let r = ui.add(egui::TextEdit::singleline(query).id(egui::Id::new("find_what")).desired_width(240.0));
+                let r = ui.add(egui::TextEdit::singleline(query).id(crate::wid("find_what")).desired_width(240.0));
                 if std::mem::take(focus) {
                     r.request_focus();
                 }
@@ -2690,7 +2706,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 ui.end_row();
                 if !*place {
                     ui.label(tl!("Address:"));
-                    let mut out = egui::TextEdit::singleline(url).id(egui::Id::new("link_address")).show(ui);
+                    let mut out = egui::TextEdit::singleline(url).id(crate::wid("link_address")).show(ui);
                     if std::mem::take(focus) {
                         out.response.request_focus();
                         let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(url.chars().count()));
@@ -2791,6 +2807,21 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 *stats = v;
             }
             let (ok, cancel) = buttons(ui, tl!("Close"));
+            ok || cancel
+        }
+        Dialog::CompareSideBySide { windows, chosen } => {
+            ui.label(tl!("Compare Side by Side with:"));
+            egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                for (i, (_, title)) in windows.iter().enumerate() {
+                    if ui.add(egui::Button::selectable(*chosen == i, title.as_str()).min_size(vec2(260.0, 0.0))).clicked() {
+                        *chosen = i;
+                    }
+                }
+            });
+            let (ok, cancel) = buttons(ui, tl!("OK"));
+            if ok && let Some((id, _)) = windows.get(*chosen) {
+                let _ = app.run("view.sideBySide", json!({"with": id}));
+            }
             ok || cancel
         }
         Dialog::Zoom { percent } => {
@@ -4056,7 +4087,7 @@ fn manage_styles(app: &mut WordApp, ui: &mut Ui, alphabetical: &mut bool, select
             });
     });
     let t = Tokens::get(ui.ctx());
-    let shown = egui::Id::new("manage_styles_shown");
+    let shown = crate::wid("manage_styles_shown");
     egui::Frame::NONE.stroke(egui::Stroke::new(1.0, t.border)).inner_margin(4).show(ui, |ui| {
         egui::ScrollArea::vertical().id_salt("manage_styles_list").max_height(200.0).auto_shrink([false, false]).show(ui, |ui| {
             ui.set_width(380.0);
@@ -4200,7 +4231,7 @@ const SEARCH_SUGGESTIONS: [&str; 3] = ["review.spelling", "review.wordCount", "f
 
 /// Search's "Find … in the document": the Navigation pane opens on its results for `text`.
 fn find_in_navigation_pane(app: &mut WordApp, ctx: &egui::Context, text: &str) {
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new("nav_query"), text.to_string()));
+    ctx.data_mut(|d| d.insert_temp(crate::wid("nav_query"), text.to_string()));
     app.ui.nav_tab = "results".into();
     let _ = app.run("view.navigationPane", json!({"value": true}));
     let _ = app.run("edit.find", json!({"text": text}));
@@ -4500,7 +4531,7 @@ mod tests {
     fn the_bookmark_dialog_goes_to_and_deletes_bookmarks() {
         fn press(h: &mut egui_kittest::Harness<'_, WordApp>, label: &str) {
             use egui_kittest::kittest::Queryable;
-            let dialog = h.ctx.memory(|m| m.area_rect(egui::Id::new(("dialog", "Bookmark")))).expect("the dialog is open");
+            let dialog = h.ctx.memory(|m| m.area_rect(crate::wid(("dialog", "Bookmark")))).expect("the dialog is open");
             h.query_all_by_label(label).find(|n| dialog.contains(n.rect().center())).expect(label).click();
             for _ in 0..3 {
                 h.step();
@@ -5285,7 +5316,7 @@ mod tests {
         for _ in 0..4 {
             h.step();
         }
-        let id = egui::Id::new(("dialog", "Paragraph"));
+        let id = crate::wid(("dialog", "Paragraph"));
         let before = h.ctx.memory(|m| m.area_rect(id)).expect("dialog is open");
         let screen = h.ctx.content_rect();
         assert!((before.center().x - screen.center().x).abs() <= 1.0, "opens centred: {before:?} in {screen:?}");
@@ -5443,7 +5474,7 @@ mod tests {
         for _ in 0..4 {
             h.step();
         }
-        let id = egui::Id::new(("dialog", "Word Count"));
+        let id = crate::wid(("dialog", "Word Count"));
         let before = h.ctx.memory(|m| m.area_rect(id)).expect("dialog is open");
         let bx = crate::window_close::close_rect(before, 1.0, crate::window_close::geometry(&h.ctx));
         let title = h.ctx.read_response(id.with("__title_click")).expect("egui's title bar").rect;

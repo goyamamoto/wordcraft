@@ -227,7 +227,7 @@ impl Previews {
         self.east_asian = None;
         ctx.data_mut(|d| {
             for f in families {
-                d.remove::<TextureHandle>(egui::Id::new(format!("font:{f}")));
+                d.remove::<TextureHandle>(crate::wid(format!("font:{f}")));
             }
         });
     }
@@ -236,7 +236,7 @@ impl Previews {
     pub fn font_preview_fn(&mut self) -> Box<dyn Fn(&mut Ui, &str) -> Response> {
         Box::new(|ui: &mut Ui, name: &str| {
             let key = format!("font:{name}");
-            let tex: Option<TextureHandle> = ui.ctx().data(|d| d.get_temp::<TextureHandle>(egui::Id::new(&key)));
+            let tex: Option<TextureHandle> = ui.ctx().data(|d| d.get_temp::<TextureHandle>(crate::wid(&key)));
             let (r, resp) = ui.allocate_exact_size(vec2(260.0, crate::widgets::COMBO_PREVIEW_ROW_H), Sense::click());
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), name));
             let t = Tokens::get(ui.ctx());
@@ -247,7 +247,7 @@ impl Previews {
                 // Context accessors share a lock: read input before taking the data write lock.
                 let now = ui.input(|i| i.time);
                 let n = ui.ctx().data_mut(|d| {
-                    let c = d.get_temp_mut_or_default::<(f64, u32)>(egui::Id::new("font_preview_budget"));
+                    let c = d.get_temp_mut_or_default::<(f64, u32)>(crate::wid("font_preview_budget"));
                     if c.0 != now {
                         *c = (now, 0);
                     }
@@ -262,7 +262,7 @@ impl Previews {
                 let mut img = font_entry_image(name, ppp);
                 ink_mask(&mut img);
                 let h = ui.ctx().load_texture(&key, img, egui::TextureOptions::LINEAR);
-                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(&key), h.clone()));
+                ui.ctx().data_mut(|d| d.insert_temp(crate::wid(&key), h.clone()));
                 Some(h)
             });
             match tex {
@@ -527,7 +527,7 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
     let rev = app.session.rev();
     let skey = app.previews.styles_key(&app.session.doc, rev);
     let ppp = ui.ctx().pixels_per_point();
-    let start = ui.data(|d| d.get_temp::<usize>(egui::Id::new("gallery_start"))).unwrap_or(0).min(styles.len().saturating_sub(1));
+    let start = ui.data(|d| d.get_temp::<usize>(crate::wid("gallery_start"))).unwrap_or(0).min(styles.len().saturating_sub(1));
     // A compact ribbon group (#662, #1285) trims the gallery to fewer tiles before it folds.
     let visible = if crate::ribbon_fit::compact(ui.ctx()) { STYLE_TILES_COMPACT } else { STYLE_TILES };
     crate::ribbon_fit::add_saving(ui.ctx(), (STYLE_TILES - STYLE_TILES_COMPACT) as f32 * 76.0);
@@ -600,7 +600,7 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
                 let _ = app.run("view.stylesPane", json!({"value": true}));
             } else {
                 let n = if *delta < 0 { start.saturating_sub(visible) } else { (start + visible).min(styles.len().saturating_sub(1)) };
-                ui.data_mut(|d| d.insert_temp(egui::Id::new("gallery_start"), n));
+                ui.data_mut(|d| d.insert_temp(crate::wid("gallery_start"), n));
             }
         }
     }
@@ -813,9 +813,9 @@ mod tests {
         let worker = std::thread::spawn(move || {
             let ctx = egui::Context::default();
             let preview = Previews::default().font_preview_fn();
-            let budget_id = egui::Id::new("font_preview_budget");
-            let sans_id = egui::Id::new("font:Source Sans 3");
-            let inter_id = egui::Id::new("font:Inter");
+            let budget_id = crate::wid("font_preview_budget");
+            let sans_id = crate::wid("font:Source Sans 3");
+            let inter_id = crate::wid("font:Inter");
             ctx.data_mut(|d| d.insert_temp(budget_id, (1.0_f64, 11_u32)));
 
             for time in [1.0, 2.0, 3.0] {

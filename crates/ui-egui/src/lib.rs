@@ -86,6 +86,7 @@ pub mod theme;
 pub mod widgets;
 pub mod window_close;
 pub mod window_geometry;
+pub mod windows;
 pub mod wordart_menus;
 pub mod zotero;
 
@@ -94,6 +95,42 @@ use serde_json::{Value, json};
 use wordcraft_engine::Session;
 
 pub use control::ControlRequest;
+
+thread_local! {
+    /// The window whose frame is running, set by [`windows::Host`]; 0 outside a window host.
+    static WINDOW_SALT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Whether that window is the app's first (eframe's root viewport), the one the host's
+    /// `eframe::Frame` belongs to.
+    static WINDOW_IS_ROOT: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// Marks the window whose frame runs next, so [`wid`] keeps its widgets' state apart from the
+/// other windows'. 0 is no window host (the web app, tests, `ui_shot`).
+pub(crate) fn set_window_salt(window: u64) {
+    WINDOW_SALT.set(window);
+}
+
+pub(crate) fn set_window_is_root(root: bool) {
+    WINDOW_IS_ROOT.set(root);
+}
+
+/// Whether the window whose frame is running is the app's first window (eframe's root viewport),
+/// which is the only one the host can parent a system dialog to: a dialog another window asks for
+/// is shown unparented rather than as a sheet on the wrong window. True outside a window host.
+pub fn current_window_is_root() -> bool {
+    WINDOW_IS_ROOT.get()
+}
+
+/// An [`egui::Id`] for a fixed name, kept apart per document window: egui has one `Memory` for
+/// every viewport, so a scroll offset, an open menu or a text box's state filed under a plain
+/// `Id::new(name)` would be shared between the windows ([`windows`]). Outside a window host it is
+/// `Id::new(name)` itself.
+pub(crate) fn wid(name: impl std::hash::Hash + std::fmt::Debug) -> egui::Id {
+    match WINDOW_SALT.get() {
+        0 => egui::Id::new(name),
+        salt => egui::Id::new(name).with(("wordcraft-window", salt)),
+    }
+}
 pub use file_dialogs::{FileDialogAnswer, FileDialogRequest, open_filters};
 
 /// Platform services injected by the host (file dialogs, file I/O).
@@ -566,7 +603,6 @@ pub struct WordApp {
     /// Focus (#1678): the ribbon is dropped down from the Focus bar, over the page.
     pub(crate) focus_ribbon: bool,
     control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
-    shot_token: u64,
     queued_shots: Vec<(u64, f64, u32)>,
     pending_shots: Vec<(u64, Option<String>, std::sync::mpsc::Sender<Value>, f64)>,
     pub(crate) synthetic: Vec<egui::Event>,
@@ -672,6 +708,14 @@ pub struct WordApp {
     no_document: Option<u64>,
     /// Comment and reply text typed but not yet written to the document (#1348).
     pub(crate) comment_drafts: panes::CommentDrafts,
+    /// What this window asks of the window host ([`windows::Host`]): a document for a new
+    /// window, another window to the front, the windows arranged. Drained after each frame.
+    pub(crate) window_requests: Vec<windows::WindowRequest>,
+    /// Control requests the window host routed to this window, answered from its own frame.
+    pub(crate) control_inbox: Vec<ControlRequest>,
+    /// Whether this window sets egui's zoom factor (the interface size), which every window
+    /// shares: the window in use does, so two windows on screens of different scale don't fight.
+    pub(crate) applies_zoom: bool,
 }
 
 /// The answer to "Do you want to save changes?" (`ui.saveChanges`).
@@ -716,7 +760,6 @@ impl WordApp {
             mac_titlebar: chrome::MacTitleBar::default(),
             focus_ribbon: false,
             control_rx: None,
-            shot_token: 0,
             queued_shots: Vec::new(),
             pending_shots: Vec::new(),
             synthetic: Vec::new(),
@@ -774,6 +817,9 @@ impl WordApp {
             recovery_seen: false,
             no_document: None,
             comment_drafts: Default::default(),
+            window_requests: Vec::new(),
+            control_inbox: Vec::new(),
+            applies_zoom: true,
         }
     }
 
@@ -917,6 +963,11 @@ impl WordApp {
         {
             self.dialog = dialogs::Dialog::open(name, self);
             return Ok(json!({"pending": name}));
+        }
+        // With a window host (the desktop app), New and Open put the document in a new window and
+        // leave this one alone, as Word does, so nothing here is at stake and nothing is asked.
+        if let Some(r) = self.open_in_window(id, &params) {
+            return r;
         }
         if (self.session.dirty || self.save_unconfirmed() || refused.is_some()) && discards_document(id, &params) {
             let name = self.prompt_name();
@@ -1401,10 +1452,164 @@ impl WordApp {
         if !self.has_document() {
             return Ok(json!({"closed": false}));
         }
+        // Another window is open: the document's window closes with it, as in Word; the last
+        // window stays, empty.
+        if self.session.windows.host && self.session.windows.others().next().is_some() {
+            self.window_requests.push(windows::WindowRequest::Close);
+            return Ok(json!({"closed": true, "window": self.session.windows.this}));
+        }
         self.execute("file.new", json!({}))?;
         self.no_document = Some(self.session.document_id());
         self.ui.backstage = false;
         Ok(json!({"closed": true}))
+    }
+
+    /// New and Open in a window host (the desktop app, `Session::windows`): the document goes to
+    /// a new window, as Word opens one, and this window keeps its document. A window showing no
+    /// document takes it itself, and so does Open in a new blank window nobody has typed in or
+    /// named (Word replaces that one too). A file already open in another window brings that
+    /// window forward instead of opening twice. `None`: not such a command, or no host: the
+    /// command runs here.
+    pub(crate) fn open_in_window(&mut self, id: &str, params: &Value) -> Option<Result<Value, String>> {
+        if !self.session.windows.host {
+            return None;
+        }
+        let path = params.get("path").and_then(Value::as_str);
+        match id {
+            "file.open" if path.is_some() => {}
+            "file.new" | "file.newFromTemplate" => {}
+            _ => return None,
+        }
+        if let Some(path) = path
+            && let Some(open) = self.window_showing(path)
+        {
+            self.window_requests.push(windows::WindowRequest::Focus(open));
+            return Some(Ok(json!({"window": open, "alreadyOpen": true})));
+        }
+        // Open takes over a blank window nobody typed in; New always makes a new window (Word's
+        // Document2 beside its untouched Document1), unless no document is open here at all.
+        let reusable = if id == "file.open" { self.window_reusable() } else { !self.has_document() };
+        if reusable {
+            return None;
+        }
+        self.window_requests.push(match id {
+            "file.open" => windows::WindowRequest::Open(params.clone()),
+            _ => windows::WindowRequest::New { command: id.to_string(), params: params.clone() },
+        });
+        Some(Ok(json!({"pending": "window"})))
+    }
+
+    /// The other window already showing the file at `path`, if any (the paths as given, or the
+    /// same file by its real path).
+    fn window_showing(&self, path: &str) -> Option<u64> {
+        let real = std::fs::canonicalize(path).ok();
+        self.session
+            .windows
+            .others()
+            .find(|w| {
+                w.path.as_deref().is_some_and(|p| p == path || real.as_ref().is_some_and(|r| std::fs::canonicalize(p).ok().as_ref() == Some(r)))
+            })
+            .map(|w| w.id)
+    }
+
+    /// Whether this window may take a new or opened document itself: it shows no document, or a
+    /// new blank one with no file, no name, no text and no unsaved change.
+    pub fn window_reusable(&self) -> bool {
+        if !self.has_document() {
+            return true;
+        }
+        self.session.path.is_none()
+            && self.session.file_name.is_none()
+            && !self.session.dirty
+            && !panes::has_comment_drafts(self)
+            && self.session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim().is_empty()
+    }
+
+    /// Whether the window waits on work another thread finishes and wakes the app for: a system
+    /// file dialog, a print job, a save still in the browser's picker, a Zotero call, Read Aloud.
+    /// Those wake-ups reach the app's first window ([`windows::Host`] passes them on).
+    pub fn waits_on_background(&self) -> bool {
+        self.file_dialog.is_some()
+            || self.printing.busy()
+            || !self.saves_in_flight.is_empty()
+            || self.zotero.busy.is_some()
+            || self.session.read_aloud.open
+            || !self.control_inbox.is_empty()
+    }
+
+    /// The app moved to another window (the root window took over a closed window's document):
+    /// what was sent to the old window is sent again.
+    pub(crate) fn rehomed(&mut self) {
+        self.sent_title.clear();
+        self.seen_full_screen = None;
+        self.sent_full_screen = false;
+        self.canvas.want_focus = true;
+    }
+
+    /// Take the settings the user changed in another window ([`windows::Host`]): the interface
+    /// theme, size, language and animation, the toolbars, the recent lists, the editing options,
+    /// the user name, the custom keys and ribbon. What is this window's own stays: its tab, File
+    /// page, panes and geometry.
+    pub fn adopt_settings(&mut self, p: &UiState) {
+        let ui = &mut self.ui;
+        ui.theme = p.theme;
+        ui.interface_size = p.interface_size;
+        ui.animations = p.animations;
+        ui.language = p.language.clone();
+        ui.quick_access_toolbar = p.quick_access_toolbar;
+        ui.ribbon_collapsed = p.ribbon_collapsed;
+        ui.keytips_enabled = p.keytips_enabled;
+        ui.caret_animation = p.caret_animation;
+        ui.show_discord = p.show_discord;
+        ui.aptos_notice_off = p.aptos_notice_off;
+        ui.recent = p.recent.clone();
+        ui.recent_symbols = p.recent_symbols.clone();
+        ui.recent_colors = p.recent_colors.clone();
+        ui.recent_fonts = p.recent_fonts.clone();
+        ui.caption_labels = p.caption_labels.clone();
+        ui.last_caption_label = p.last_caption_label.clone();
+        ui.start_screen = p.start_screen;
+        ui.mini_toolbar = p.mini_toolbar;
+        ui.alignment_guides = p.alignment_guides;
+        ui.recent_count = p.recent_count;
+        ui.print_backgrounds = p.print_backgrounds;
+        ui.update_fields_before_print = p.update_fields_before_print;
+        ui.dark_page = p.dark_page;
+        ui.check_spelling = p.check_spelling;
+        ui.read_aloud_rate = p.read_aloud_rate;
+        ui.read_aloud_skip_citations = p.read_aloud_skip_citations;
+        let s = &mut self.session;
+        if !p.author.trim().is_empty() {
+            s.author = p.author.clone();
+        }
+        s.initials = p.initials.clone();
+        s.prefs = p.editing.clone();
+        s.keymap = p.keyboard.clone();
+        s.ribbon = p.ribbon.clone();
+        s.view.draw.pens = p.ink_pens.clone();
+        s.view.dark_mode = p.dark_page;
+        s.view.proofing = p.check_spelling;
+        s.read_aloud.set_rate(p.read_aloud_rate);
+        s.read_aloud.skip_citations = p.read_aloud_skip_citations;
+    }
+
+    /// Take the interface faces another window needs ([`windows::Host::pool_fonts`]), so the fonts
+    /// this window installs cover every window.
+    pub(crate) fn adopt_faces(&mut self, faces: &[std::sync::Arc<wordcraft_fonts::FontFace>], want_system_cjk: bool) {
+        let mut changed = false;
+        for f in faces {
+            if !self.canvas.ime_faces.iter().any(|g| std::sync::Arc::ptr_eq(g, f)) {
+                self.canvas.ime_faces.push(f.clone());
+                changed = true;
+            }
+        }
+        if want_system_cjk && !self.want_system_cjk {
+            self.want_system_cjk = true;
+            changed = true;
+        }
+        if changed {
+            self.styled = false;
+        }
     }
 
     fn after_command(&mut self, id: &str) {
@@ -1518,6 +1723,26 @@ impl WordApp {
         }
         if req.get("close").is_some() {
             self.quit_requested = true;
+        }
+        // View › Window (#322): carried out by the window host.
+        if let Some(what) = req.get("window").and_then(Value::as_str) {
+            let on = req.get("value").and_then(Value::as_bool);
+            let with = req.get("with").and_then(Value::as_u64);
+            let to = req.get("to").and_then(Value::as_u64);
+            match what {
+                "arrangeAll" => self.window_requests.push(windows::WindowRequest::ArrangeAll),
+                "sideBySide" => self.window_requests.push(windows::WindowRequest::SideBySide { on: on.unwrap_or(true), with }),
+                "syncScroll" => self.window_requests.push(windows::WindowRequest::SyncScroll(on.unwrap_or(true))),
+                "resetPosition" => self.window_requests.push(windows::WindowRequest::ResetPosition),
+                "switch" => {
+                    if let Some(to) = to {
+                        self.window_requests.push(windows::WindowRequest::Focus(to));
+                    }
+                }
+                // Word's Compare Side by Side dialog: which of the other windows.
+                "chooseSideBySide" => self.dialog = dialogs::Dialog::open("compareSideBySide", self),
+                _ => {}
+            }
         }
     }
 
@@ -2234,7 +2459,7 @@ impl WordApp {
             self.ui.interface_size = theme::migrate_legacy_interface_size(old, native);
         }
         let zoom = self.ui.interface_size.zoom_factor(self.native_scale);
-        if ctx.zoom_factor() != zoom {
+        if self.applies_zoom && ctx.zoom_factor() != zoom {
             ctx.set_zoom_factor(zoom);
         }
         // Animation effects: the host is asked every frame what the system says (it answers from
@@ -2562,7 +2787,7 @@ impl WordApp {
         }
         let Some(pos) = ctx.input(|i| if i.pointer.any_click() { i.pointer.interact_pos() } else { None }) else { return };
         // The ribbon dropped over the page in Focus (#1678) is chrome, though it lies over the page.
-        let on_focus_ribbon = self.focus_ribbon && ctx.layer_id_at(pos).is_some_and(|l| l.id == egui::Id::new("focus_ribbon"));
+        let on_focus_ribbon = self.focus_ribbon && ctx.layer_id_at(pos).is_some_and(|l| l.id == crate::wid("focus_ribbon"));
         // The page handles its own clicks (comment balloons there take the keyboard themselves).
         if !on_focus_ribbon && (self.canvas.balloon.is_some() || self.canvas.viewport.is_some_and(|v| v.contains(pos))) {
             return;
@@ -2640,22 +2865,31 @@ impl WordApp {
     }
 
     fn drain_control(&mut self, ctx: &egui::Context) {
+        // Requests the window host routed here, then this window's own channel.
+        for req in std::mem::take(&mut self.control_inbox) {
+            self.control_request(ctx, &req);
+        }
         let Some(rx) = self.control_rx.take() else { return };
         while let Ok(req) = rx.try_recv() {
-            let reply = req.reply.clone();
-            match control::handle(self, ctx, &req) {
-                control::Outcome::Done(v) => {
-                    let _ = reply.send(v);
-                }
-                control::Outcome::Screenshot { path } => {
-                    self.shot_token += 1;
-                    let token = self.shot_token;
-                    self.queued_shots.push((token, now_ms() + 120.0, 0));
-                    self.pending_shots.push((token, path, reply, now_ms() + 8000.0));
-                }
-            }
+            self.control_request(ctx, &req);
         }
         self.control_rx = Some(rx);
+    }
+
+    fn control_request(&mut self, ctx: &egui::Context, req: &ControlRequest) {
+        let reply = req.reply.clone();
+        match control::handle(self, ctx, req) {
+            control::Outcome::Done(v) => {
+                let _ = reply.send(v);
+            }
+            control::Outcome::Screenshot { path } => {
+                // Tokens are one sequence for the process: a screenshot's event may reach another
+                // window's frame first ([`windows::Host`] passes it on by its viewport).
+                let token = SHOT_TOKENS.fetch_add(1, std::sync::atomic::Ordering::Relaxed).wrapping_add(1);
+                self.queued_shots.push((token, now_ms() + 120.0, 0));
+                self.pending_shots.push((token, path, reply, now_ms() + 8000.0));
+            }
+        }
     }
 
     fn issue_screenshots(&mut self, ctx: &egui::Context) {
@@ -2678,24 +2912,9 @@ impl WordApp {
         if self.pending_shots.is_empty() {
             return;
         }
-        let events: Vec<_> = ctx.input(|i| {
-            i.raw
-                .events
-                .iter()
-                .filter_map(|e| match e {
-                    egui::Event::Screenshot { user_data, image, .. } => {
-                        let token = user_data.data.as_ref().and_then(|d| d.downcast_ref::<u64>()).copied()?;
-                        Some((token, image.clone()))
-                    }
-                    _ => None,
-                })
-                .collect()
-        });
+        let events: Vec<_> = ctx.input(|i| i.raw.events.iter().filter_map(screenshot_event).collect());
         for (token, image) in events {
-            if let Some(i) = self.pending_shots.iter().position(|(t, ..)| *t == token) {
-                let (_, path, reply, _) = self.pending_shots.remove(i);
-                let _ = reply.send(control::save_screenshot(&image, path.as_deref()));
-            }
+            self.screenshot_arrived(token, &image);
         }
         let now = now_ms();
         self.pending_shots.retain(|(_, _, reply, deadline)| {
@@ -2705,6 +2924,31 @@ impl WordApp {
             let _ = reply.send(json!({"ok": false, "error": "no frame was presented (window hidden?); use ui.render"}));
             false
         });
+    }
+}
+
+impl WordApp {
+    /// A screenshot the window asked for (`ui.screenshot`) came back: answer the request waiting
+    /// for `token`. False when no request of this window waits for it.
+    pub(crate) fn screenshot_arrived(&mut self, token: u64, image: &egui::ColorImage) -> bool {
+        let Some(i) = self.pending_shots.iter().position(|(t, ..)| *t == token) else { return false };
+        let (_, path, reply, _) = self.pending_shots.remove(i);
+        let _ = reply.send(control::save_screenshot(image, path.as_deref()));
+        true
+    }
+}
+
+/// `ui.screenshot` tokens, one sequence for the process (see [`WordApp::screenshot_arrived`]).
+static SHOT_TOKENS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// A screenshot event's token and picture.
+pub(crate) fn screenshot_event(e: &egui::Event) -> Option<(u64, std::sync::Arc<egui::ColorImage>)> {
+    match e {
+        egui::Event::Screenshot { user_data, image, .. } => {
+            let token = user_data.data.as_ref().and_then(|d| d.downcast_ref::<u64>()).copied()?;
+            Some((token, image.clone()))
+        }
+        _ => None,
     }
 }
 
@@ -3833,7 +4077,7 @@ mod tests {
         for _ in 0..2 {
             frame(&mut a, Vec::new());
         }
-        assert!(ctx.memory(|m| m.has_focus(egui::Id::new("find_what"))), "Find what has the focus");
+        assert!(ctx.memory(|m| m.has_focus(crate::wid("find_what"))), "Find what has the focus");
         frame(&mut a, vec![egui::Event::Text("abc".into())]);
         let Some(dialogs::Dialog::Find { query, .. }) = &a.dialog else { panic!("no Find dialog") };
         assert!(query.ends_with("abc"), "typing went into Find what: {query:?}");
@@ -3866,7 +4110,7 @@ mod tests {
             for _ in 0..2 {
                 frame(&mut a, Vec::new());
             }
-            assert!(ctx.memory(|m| m.has_focus(egui::Id::new("link_address"))), "Address has focus");
+            assert!(ctx.memory(|m| m.has_focus(crate::wid("link_address"))), "Address has focus");
             frame(&mut a, vec![event]);
             let Some(dialogs::Dialog::Link { url, text, .. }) = &a.dialog else { panic!("no Link dialog") };
             assert_eq!(url, expected, "input replaces the initial address");
@@ -5064,7 +5308,7 @@ mod tests {
         for _ in 0..2 {
             control_frame(&mut a, &ctx, true);
         }
-        assert!(ctx.memory(|m| m.has_focus(egui::Id::new("find_what"))));
+        assert!(ctx.memory(|m| m.has_focus(crate::wid("find_what"))));
         for _ in 0..2 {
             control_frame(&mut a, &ctx, false);
         }
@@ -8406,7 +8650,7 @@ mod tests {
         a.services.pasted = Some(q.clone());
         a.run("ui.dialog", json!({"name": "find"})).unwrap();
         let mut h = paste_harness(a);
-        h.ctx.memory_mut(|m| m.request_focus(egui::Id::new("find_what")));
+        h.ctx.memory_mut(|m| m.request_focus(crate::wid("find_what")));
         h.step();
         h.step();
         assert!(!h.state().canvas.focused);
@@ -9098,7 +9342,7 @@ mod tests {
         let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
         h.event(egui::Event::Text("Kilns fire clay. Kilns cool.".into()));
         h.step();
-        let nav_query = |h: &egui_kittest::Harness<WordApp>| h.ctx.data(|d| d.get_temp::<String>(egui::Id::new("nav_query"))).unwrap_or_default();
+        let nav_query = |h: &egui_kittest::Harness<WordApp>| h.ctx.data(|d| d.get_temp::<String>(crate::wid("nav_query"))).unwrap_or_default();
         // Ctrl+F: the pane, and typing goes into its search box.
         h.event(key(egui::Key::F, egui::Modifiers::COMMAND));
         h.step();

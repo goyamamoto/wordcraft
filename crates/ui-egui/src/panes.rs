@@ -122,7 +122,7 @@ fn nav(app: &mut WordApp, ui: &mut Ui) {
         let _ = app.run("view.navigationPane", json!({"value": false}));
         return;
     }
-    let qid = egui::Id::new("nav_query");
+    let qid = crate::wid("nav_query");
     let mut q = ui.data(|d| d.get_temp::<String>(qid)).unwrap_or_default();
     // Ctrl+F with text selected searches for it, as Word does (a selection within one line).
     let focus = std::mem::take(&mut app.nav_search_focus);
@@ -460,7 +460,7 @@ fn comments(app: &mut WordApp, ui: &mut Ui) {
                 });
                 // Editable comment text (one undo step per edit, like the balloons).
                 comment_editor(app, ui, id as u32, None, false);
-                let open_key = egui::Id::new(("comment_reply_open", id));
+                let open_key = crate::wid(("comment_reply_open", id));
                 let mut replying = ui.data(|d| d.get_temp::<bool>(open_key)).unwrap_or(false);
                 ui.horizontal(|ui| {
                     if ui.small_button(tl!("Go to")).clicked()
@@ -471,7 +471,7 @@ fn comments(app: &mut WordApp, ui: &mut Ui) {
                     if ui.small_button(tl!("Reply")).clicked() {
                         replying = true;
                         ui.data_mut(|d| d.insert_temp(open_key, true));
-                        ui.data_mut(|d| d.insert_temp(egui::Id::new(("comment_reply_focus", id)), true));
+                        ui.data_mut(|d| d.insert_temp(crate::wid(("comment_reply_focus", id)), true));
                     }
                     let resolved = c.get("resolved").and_then(Value::as_bool).unwrap_or(false);
                     if ui.small_button(if resolved { tl!("Reopen") } else { tl!("Resolve") }).clicked() {
@@ -482,7 +482,7 @@ fn comments(app: &mut WordApp, ui: &mut Ui) {
                     }
                 });
                 if replying {
-                    let focus = ui.data_mut(|d| d.remove_temp::<bool>(egui::Id::new(("comment_reply_focus", id)))).unwrap_or(false);
+                    let focus = ui.data_mut(|d| d.remove_temp::<bool>(crate::wid(("comment_reply_focus", id)))).unwrap_or(false);
                     if reply_editor(app, ui, id as u32, None, focus) {
                         ui.data_mut(|d| d.remove::<bool>(open_key));
                     }

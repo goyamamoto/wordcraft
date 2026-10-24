@@ -178,10 +178,10 @@ pub fn insert_button(ui: &mut Ui, app: &mut WordApp) {
 
 /// The Symbols group: a strip of the current set's symbols, and a menu with every set.
 fn symbols(ui: &mut Ui, app: &mut WordApp) {
-    let id = egui::Id::new("eq_symbol_set");
+    let id = crate::wid("eq_symbol_set");
     let set = ui.data(|d| d.get_temp::<usize>(id)).unwrap_or(0).min(SYMBOL_SETS.len().saturating_sub(1));
     let Some((_, chars)) = SYMBOL_SETS.get(set) else { return };
-    let start_id = egui::Id::new("eq_symbol_start");
+    let start_id = crate::wid("eq_symbol_start");
     let per_row = 10usize;
     let rows = 3usize;
     let all: Vec<char> = chars.chars().collect();

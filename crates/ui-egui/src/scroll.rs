@@ -432,7 +432,7 @@ mod tests {
             if !animate {
                 ui.ctx().input_mut(|i| i.smooth_scroll_delta = unsmoothed_scroll(i, &opts));
             }
-            let id = egui::Id::new("canvas scroll under test");
+            let id = crate::wid("canvas scroll under test");
             let mut scroll = ui.data(|d| d.get_temp::<CanvasScroll>(id)).unwrap_or_default();
             let zoom = ui.input(|i| scroll.zoom(i, &opts, animate));
             ui.data_mut(|d| d.insert_temp(id, scroll));

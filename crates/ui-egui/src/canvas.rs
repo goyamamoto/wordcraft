@@ -163,9 +163,9 @@ pub struct CanvasState {
     pub(crate) auto_scroll: crate::autoscroll::AutoScroll,
     /// The scroll offset and its maximum at the end of last frame.
     pub(crate) scroll_offset: egui::Vec2,
-    scroll_max: egui::Vec2,
+    pub(crate) scroll_max: egui::Vec2,
     /// Explicit page turn to apply on the next frame (reading navigation buttons/keys).
-    scroll_request: Option<egui::Vec2>,
+    pub(crate) scroll_request: Option<egui::Vec2>,
     /// The viewport (the content's visible rect on screen) at the end of last frame; the
     /// drag-select edge auto-scroll decides this frame's scroll from it (#688).
     pub(crate) viewport: Option<egui::Rect>,
@@ -1301,7 +1301,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         // and Escape did nothing in Read Mode until the reader clicked a page (#1772).
         // It also keeps the focus when Focus hides the rulers (#1678).
         ui.advance_cursor_after_rect(content);
-        let resp = ui.interact(content, egui::Id::new("wordcraft_canvas"), Sense::click_and_drag());
+        let resp = ui.interact(content, crate::wid("wordcraft_canvas"), Sense::click_and_drag());
         if let Some(tr) = scroll_target {
             ui.scroll_to_rect(Rect::from_min_size(ui.min_rect().min + tr.min.to_vec2(), tr.size()), None);
         }
@@ -1577,7 +1577,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         if floating_comments(app) {
             // Its own layer, so presses on the card never reach the canvas under it.
             let ctx = ui.ctx().clone();
-            egui::Area::new(egui::Id::new("floating_comment")).order(egui::Order::Foreground).fixed_pos(Pos2::ZERO).sense(Sense::hover()).show(
+            egui::Area::new(crate::wid("floating_comment")).order(egui::Order::Foreground).fixed_pos(Pos2::ZERO).sense(Sense::hover()).show(
                 &ctx,
                 |aui| {
                     aui.set_clip_rect(view_rect);
@@ -2557,7 +2557,7 @@ fn scrollbar_page_tip(app: &mut WordApp, ui: &Ui, scroll: egui::Id, rects: &[Rec
         (dragged && !rects.is_empty() && pages > 0).then(|| top_page(rects, bands, app.canvas.scroll_offset.y).min(pages - 1));
     let (Some(page), Some(at)) = (app.canvas.scrollbar_page, ui.ctx().pointer_latest_pos()) else { return };
     let text = crate::i18n::fmt(tl!("Page {page} of {pages}"), &[("page", &(page + 1).to_string()), ("pages", &pages.to_string())]);
-    egui::Area::new(egui::Id::new("scrollbar_page_tip"))
+    egui::Area::new(crate::wid("scrollbar_page_tip"))
         .order(egui::Order::Tooltip)
         .interactable(false)
         .pivot(egui::Align2::RIGHT_CENTER)
@@ -2617,6 +2617,20 @@ fn edge_scroll(p: f32, lo: f32, hi: f32, dt: f32) -> f32 {
 
 /// The scroll offset after `delta` (the wheel's convention) reaches `before`: clamped to the
 /// scrollable range, so a document shorter than the viewport never moves.
+impl CanvasState {
+    /// Scroll by `delta` on the next frame (Synchronous Scrolling, from the partner window), within
+    /// the content; false when that moves nothing (already at the end that way).
+    pub(crate) fn scroll_by(&mut self, delta: egui::Vec2) -> bool {
+        let from = self.scroll_request.unwrap_or(self.scroll_offset);
+        let to = (from + delta).clamp(egui::Vec2::ZERO, self.scroll_max);
+        if to == self.scroll_offset {
+            return false;
+        }
+        self.scroll_request = Some(to);
+        true
+    }
+}
+
 fn clamped_scroll(before: egui::Vec2, delta: egui::Vec2, max: egui::Vec2) -> egui::Vec2 {
     (before - delta).clamp(egui::Vec2::ZERO, max)
 }
@@ -2956,7 +2970,7 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         let key = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl" };
         let target = if is_generated_bookmark_link(&link) { tl!("Current Document").to_string() } else { link };
         let tip = format!("{target}\n{}", crate::i18n::fmt(tl!("{key}+Click to follow link"), &[("key", key)]));
-        egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), egui::Id::new("link_tip"), egui::PopupAnchor::Pointer).show(|ui| {
+        egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), crate::wid("link_tip"), egui::PopupAnchor::Pointer).show(|ui| {
             ui.label(tip);
         });
     }
