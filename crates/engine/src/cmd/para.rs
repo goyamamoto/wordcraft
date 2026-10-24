@@ -37,7 +37,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"value"?: bool (false = left to right)}"#),
         CommandSpec::new("para.ltr", "Left-to-Right Text Direction", "Home › Paragraph", |s, v| direction(s, v, false))
             .params(r#"{"value"?: bool (false = right to left)}"#),
-        CommandSpec::new("para.indent", "Increase Indent", "Home › Paragraph", indent).key("Mod+M"),
+        // Word for Mac indents with ⌃⇧M and leaves ⌘M to the Window menu's Minimize; Word for
+        // Windows indents with Ctrl+M.
+        CommandSpec::new("para.indent", "Increase Indent", "Home › Paragraph", indent).key(super::mac_or("Ctrl+Shift+M", "Mod+M")),
         CommandSpec::new("para.outdent", "Decrease Indent", "Home › Paragraph", outdent).key("Mod+Shift+M"),
         CommandSpec::new("para.hangingIndent", "Hanging Indent", "Home › Paragraph › Paragraph", |s, _| {
             fmt(s, &|p| {
