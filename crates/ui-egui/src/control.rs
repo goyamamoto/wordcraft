@@ -61,6 +61,7 @@ pub fn inspect(app: &mut WordApp, ctx: &egui::Context) -> Value {
         "focused": app.canvas.focused,
         "title": app.title_stem(),
         "dirty": app.session.dirty,
+        "windows": app.session.windows,
         "perf": {"frameMs": app.frame_ms, "renderMs": app.canvas.render_ms, "layoutMs": app.session.layout().ms},
     })
 }
@@ -133,6 +134,13 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
             let params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
             if let Some(e) = close_refused(app, id, &params) {
                 return err(e);
+            }
+            // New and Open go to a window of their own in the desktop app, as from the ribbon (#322).
+            if let Some(r) = app.open_in_window(id, &params) {
+                return match r {
+                    Ok(v) => ok(v),
+                    Err(e) => err(e),
+                };
             }
             match app.execute(id, params) {
                 Ok(v) => ok(v),
@@ -285,13 +293,25 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
             ok(json!({}))
         }
         "app.quit" => {
-            app.quit_requested = true;
+            // Every window in the desktop app (the host asks about unsaved changes window by
+            // window); a single-window host reads the flag.
+            if app.session.windows.host {
+                app.window_requests.push(crate::windows::WindowRequest::Quit);
+            } else {
+                app.quit_requested = true;
+            }
             ok(json!({}))
         }
         other => {
             // Anything else: a command id.
             if let Some(e) = close_refused(app, other, p) {
                 return err(e);
+            }
+            if let Some(r) = app.open_in_window(other, p) {
+                return match r {
+                    Ok(v) => ok(v),
+                    Err(e) => err(e),
+                };
             }
             match app.execute(other, p.clone()) {
                 Ok(v) => ok(v),

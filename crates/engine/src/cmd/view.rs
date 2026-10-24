@@ -133,16 +133,62 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"value"?: bool}"#)
         .pure(),
+        // View › Window (#322). The session owns no window: the desktop app does, one per
+        // document (`wordcraft_ui_egui::windows`), and reports the open ones in
+        // [`Session::windows`] before each frame. These commands check their parameters against
+        // that list and queue a request the front end carries out; without a window host
+        // (headless sessions, the browser, the CLI) they are disabled.
+        //
+        // New Window (a second window on the same document) and Split (two panes on it) need
+        // two views of one document, which a session doesn't have yet: disabled, with the reason.
         CommandSpec::new("view.newWindow", "New Window", "View › Window", |s, _| {
             s.push_ui_request(json!({"open": "newWindow"}));
             sel_result(s)
         })
+        .when(|_| Some("A second window on the same document isn't available yet"))
         .pure(),
         CommandSpec::new("view.split", "Split", "View › Window", |s, _| {
             s.push_ui_request(json!({"toggle": "split"}));
             sel_result(s)
         })
         .key("Mod+Alt+S")
+        .when(|_| Some("Splitting the window into two panes isn't available yet"))
+        .pure(),
+        CommandSpec::new("view.arrangeAll", "Arrange All", "View › Window", |s, _| {
+            s.push_ui_request(json!({"window": "arrangeAll"}));
+            Ok(json!({"windows": s.windows.count()}))
+        })
+        .when(needs_window_host)
+        .pure(),
+        CommandSpec::new("view.sideBySide", "View Side by Side", "View › Window", side_by_side)
+            .params(r#"{"value"?: bool, "with"?: window id (another open window, needed with three or more open; the one other window otherwise)}"#)
+            .when(needs_two_windows)
+            .pure(),
+        CommandSpec::new("view.syncScroll", "Synchronous Scrolling", "View › Window", |s, v| {
+            let on = p::bool(v, "value").unwrap_or(!s.windows.sync_scroll);
+            s.windows.sync_scroll = on;
+            s.push_ui_request(json!({"window": "syncScroll", "value": on}));
+            Ok(json!({"value": on}))
+        })
+        .params(r#"{"value"?: bool}"#)
+        .when(needs_side_by_side)
+        .pure(),
+        CommandSpec::new("view.resetWindowPosition", "Reset Window Position", "View › Window", |s, _| {
+            s.push_ui_request(json!({"window": "resetPosition"}));
+            Ok(json!({"with": s.windows.side_by_side}))
+        })
+        .when(needs_side_by_side)
+        .pure(),
+        CommandSpec::new("view.switchWindows", "Switch Windows", "View › Window", |s, v| {
+            let Some(n) = p::u64(v, "window") else {
+                return Err(CmdError::Params("`window` (a window id, or its number in the Switch Windows list) is required".into()));
+            };
+            let Some(to) = s.windows.resolve(n) else { return Err(CmdError::Params(format!("no window {n} is open"))) };
+            s.push_ui_request(json!({"window": "switch", "to": to}));
+            Ok(json!({"window": to}))
+        })
+        .params(r#"{"window": window id, or its 1-based number in the Switch Windows list}"#)
+        .when(needs_window_host)
         .pure(),
         // The window fills the screen, OS-level full screen (#980). F11 as in browsers and most
         // desktop apps; ⌃⌘F first on macOS, where Ctrl is a key of its own (elsewhere Mod is Ctrl,
@@ -174,6 +220,55 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 /// The browser keeps full screen to itself (its own F11); the web app can't ask for it.
+/// The View › Window commands work in the desktop app, which has windows ([`Session::windows`]).
+fn needs_window_host(s: &Session) -> Option<&'static str> {
+    (!s.windows.host).then_some("Only in the desktop app, which has windows")
+}
+
+/// View Side by Side needs another document window to compare with, as in Word.
+fn needs_two_windows(s: &Session) -> Option<&'static str> {
+    needs_window_host(s).or_else(|| (s.windows.others().next().is_none()).then_some("Open another document first"))
+}
+
+/// Synchronous Scrolling and Reset Window Position only work while View Side by Side is on, as
+/// in Word.
+fn needs_side_by_side(s: &Session) -> Option<&'static str> {
+    needs_window_host(s).or_else(|| s.windows.side_by_side.is_none().then_some("Turn on View Side by Side first"))
+}
+
+/// View › Window › View Side by Side: pair this window with another, which turns Synchronous
+/// Scrolling on too, as in Word; off again restores both windows. With one other window open
+/// it is the partner; with more, `with` names it, or the front end asks which (Word's Compare
+/// Side by Side dialog).
+fn side_by_side(s: &mut Session, v: &Value) -> CmdResult {
+    let on = p::bool(v, "value").unwrap_or(s.windows.side_by_side.is_none());
+    if !on {
+        s.windows.side_by_side = None;
+        s.windows.sync_scroll = false;
+        s.push_ui_request(json!({"window": "sideBySide", "value": false}));
+        return Ok(json!({"value": false}));
+    }
+    let others: Vec<u64> = s.windows.others().map(|w| w.id).collect();
+    let with = match p::u64(v, "with") {
+        Some(n) => match s.windows.resolve(n).filter(|id| others.contains(id)) {
+            Some(id) => id,
+            None => return Err(CmdError::Params(format!("`with` must name another open window, not {n}"))),
+        },
+        None => match others.as_slice() {
+            [one] => *one,
+            [] => return Err(CmdError::Failed("Open another document first".into())),
+            _ => {
+                s.push_ui_request(json!({"window": "chooseSideBySide"}));
+                return Ok(json!({"pending": "sideBySideWith"}));
+            }
+        },
+    };
+    s.windows.side_by_side = Some(with);
+    s.windows.sync_scroll = true;
+    s.push_ui_request(json!({"window": "sideBySide", "value": true, "with": with}));
+    Ok(json!({"value": true, "with": with}))
+}
+
 fn full_screen_available(_: &Session) -> Option<&'static str> {
     cfg!(target_arch = "wasm32").then_some("Use the browser's full screen (F11)")
 }

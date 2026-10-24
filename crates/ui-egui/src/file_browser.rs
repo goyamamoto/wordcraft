@@ -309,7 +309,7 @@ pub(crate) fn show(app: &mut WordApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let mut done: Option<Option<PathBuf>> = None;
     let window = egui::Window::new(tl!(b.title()))
-        .id(egui::Id::new("builtin_file_browser"))
+        .id(crate::wid("builtin_file_browser"))
         .collapsible(false)
         .resizable(false)
         .anchor(Align2::CENTER_CENTER, vec2(0.0, -20.0));

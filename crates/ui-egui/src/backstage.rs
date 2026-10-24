@@ -244,7 +244,7 @@ fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
         let key = format!("tpl:{template}:{ppp}");
         let region = app.session.region();
         let east_asian = app.session.east_asian_editing.clone();
-        let tex = ui.ctx().data(|d| d.get_temp::<egui::TextureHandle>(egui::Id::new(&key))).or_else(|| {
+        let tex = ui.ctx().data(|d| d.get_temp::<egui::TextureHandle>(crate::wid(&key))).or_else(|| {
             let mut s = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
             // The blank tile shows the region's paper (#838).
             s.system_region = region;
@@ -259,7 +259,7 @@ fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
                 egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &px),
                 egui::TextureOptions::LINEAR,
             );
-            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(&key), h.clone()));
+            ui.ctx().data_mut(|d| d.insert_temp(crate::wid(&key), h.clone()));
             Some(h)
         });
         if let Some(h) = tex {
@@ -327,7 +327,7 @@ fn home_page(app: &mut WordApp, ui: &mut Ui) {
 fn new_page(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     heading(ui, "New");
-    let id = egui::Id::new("backstage_template_search");
+    let id = crate::wid("backstage_template_search");
     let mut query = ui.ctx().data(|d| d.get_temp::<String>(id)).unwrap_or_default();
     let search = ui.add(egui::TextEdit::singleline(&mut query).hint_text(tl!("Search for templates")).desired_width(360.0));
     if search.changed() {
@@ -407,7 +407,7 @@ struct PersonalListing {
 }
 
 fn personal_listing_id() -> egui::Id {
-    egui::Id::new("backstage_personal_templates")
+    crate::wid("backstage_personal_templates")
 }
 
 #[cfg(test)]
@@ -501,7 +501,7 @@ fn open_personal(app: &mut WordApp, path: &str) -> Result<(), String> {
 }
 
 fn personal_error_id() -> egui::Id {
-    egui::Id::new("backstage_personal_error")
+    crate::wid("backstage_personal_error")
 }
 
 fn open_list(app: &mut WordApp, ui: &mut Ui) {
@@ -540,7 +540,7 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
 }
 
 fn open_error_id() -> egui::Id {
-    egui::Id::new("backstage_open_error")
+    crate::wid("backstage_open_error")
 }
 
 /// Drop the Recent list's open error once File is closed, so it doesn't come back next time.
@@ -555,7 +555,7 @@ pub(crate) fn forget_open_error(ctx: &egui::Context) {
 /// render loop skips the status bar, so a failed write (no permission, disk full, a bad path)
 /// needs its own place to say why, or the page just sits there with a Browse… button and no clue.
 pub(crate) fn save_as_error_id() -> egui::Id {
-    egui::Id::new("backstage_save_as_error")
+    crate::wid("backstage_save_as_error")
 }
 
 /// Drop the Save As page's error once File is closed or a later save succeeds, so it doesn't
@@ -1164,14 +1164,14 @@ mod tests {
         assert!(h.query_by_label("Report").is_some(), "the built-in templates stay");
 
         // The search covers both.
-        h.ctx.data_mut(|d| d.insert_temp(egui::Id::new("backstage_template_search"), "memo".to_string()));
+        h.ctx.data_mut(|d| d.insert_temp(crate::wid("backstage_template_search"), "memo".to_string()));
         h.run_steps(3);
         assert!(h.query_by_label("Team memo").is_some(), "search finds a personal template");
         assert!(h.query_by_label("Contract").is_none() && h.query_by_label("Report").is_none());
-        h.ctx.data_mut(|d| d.insert_temp(egui::Id::new("backstage_template_search"), "zzz".to_string()));
+        h.ctx.data_mut(|d| d.insert_temp(crate::wid("backstage_template_search"), "zzz".to_string()));
         h.run_steps(3);
         assert!(h.query_by_label("No templates match your search.").is_some());
-        h.ctx.data_mut(|d| d.insert_temp(egui::Id::new("backstage_template_search"), String::new()));
+        h.ctx.data_mut(|d| d.insert_temp(crate::wid("backstage_template_search"), String::new()));
         h.run_steps(3);
 
         h.get_by_label("Team memo").click();
