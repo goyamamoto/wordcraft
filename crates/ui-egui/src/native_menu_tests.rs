@@ -151,6 +151,9 @@ fn state_changes_keep_structure_and_language_and_keys_refresh_it() {
     assert_eq!(structure_key(&before), structure_key(&after));
     assert!(!before.find("edit.undo").unwrap().enabled && after.find("edit.undo").unwrap().enabled);
     assert_ne!(before.find("view.ruler").unwrap().checked, after.find("view.ruler").unwrap().checked);
+    if !crate::i18n::catalogs_embedded() {
+        return;
+    }
     s.app.ui.language = "zh-hans".into();
     let chinese = menu_bar(&s.app, &s.ctx);
     assert_eq!(chinese.menus[1].title, "文件");
