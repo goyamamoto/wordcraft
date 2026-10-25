@@ -200,6 +200,11 @@ closer pagination fidelity, a stability sweep and native printing. Details and e
 
 ## Downloads
 
+> [!IMPORTANT]
+> **WordCraft-ja のビルド**は [このフォークのリリース](https://github.com/goyamamoto/wordcraft/releases) にあります(macOS universal、Windows x64、Linux x86_64)。署名・公証のないビルドなので、macOS では `xattr -dr com.apple.quarantine /Applications/WordCraft.app` で検疫情報を外してから起動します(各リリースの説明に手順があります)。以下は本家 WordCraft のダウンロード案内です。
+>
+> **WordCraft-ja builds** are on [this fork's releases](https://github.com/goyamamoto/wordcraft/releases) (macOS universal, Windows x64, Linux x86_64). They are unsigned: on macOS, clear the quarantine with `xattr -dr com.apple.quarantine /Applications/WordCraft.app` before the first launch. The rest of this section describes upstream WordCraft's downloads.
+
 **Download WordCraft** from GitHub: the [latest release](https://github.com/storytold/wordcraft/releases/latest) has every build listed below, and [all releases](https://github.com/storytold/wordcraft/releases) has earlier versions and their notes. `<ver>` in the file names is the version number, and `SHA256SUMS.txt` lists a checksum for every file.
 
 ### Windows

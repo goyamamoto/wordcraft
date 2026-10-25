@@ -1,0 +1,185 @@
+# Release builds of the fork (WordCraft-ja), unsigned: the macOS app is signed ad hoc and the
+# Windows files not at all, and users clear the quarantine themselves (packaging/fork/
+# release-notes.md). Interface translations come from this owner's craft-i18n fork at the SHA in
+# craft-i18n-ja.rev; craft-fonts at the pin upstream's release.yml passes.
+#
+# A tag `v<version>` (e.g. v0.10.0-ja.1) builds macOS universal, Windows x64 and Linux x86_64 and
+# drafts a GitHub Release with them; publishing the draft is left to the owner. Run by hand, it
+# builds the same files as workflow artifacts only.
+name: Release (WordCraft-ja)
+
+on:
+  push:
+    tags: ["v*-ja*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version, e.g. 0.10.0-ja.1 (empty: Cargo.toml's)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-ja-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  version:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      date: ${{ steps.v.outputs.date }}
+      fonts: ${{ steps.pins.outputs.fonts }}
+      i18n: ${{ steps.pins.outputs.i18n }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: v
+        uses: storytold/craft-common-actions/actions/resolve-version@2b4eb2c6d94880d926c934ec3736c92cde30086b
+        with:
+          input-version: ${{ github.ref_type == 'tag' && github.ref_name || inputs.version }}
+          app-title: WordCraft-ja
+      - id: pins
+        name: Read the craft-fonts and craft-i18n pins
+        shell: bash
+        run: |
+          fonts=$(sed -n 's/^ *craft-fonts-ref: *\([0-9a-f]\{40\}\).*/\1/p' .github/workflows/release.yml | head -n 1)
+          i18n=$(tr -d '[:space:]' < craft-i18n-ja.rev)
+          for pin in "$fonts" "$i18n"; do
+            [[ "$pin" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::expected a 40-character SHA, found '$pin'"; exit 1; }
+          done
+          echo "fonts=$fonts" >>"$GITHUB_OUTPUT"
+          echo "i18n=$i18n" >>"$GITHUB_OUTPUT"
+
+  build:
+    timeout-minutes: 120
+    name: ${{ matrix.name }}
+    needs: version
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macOS universal, os: macos, runner: macos-15, targets: "aarch64-apple-darwin, x86_64-apple-darwin" }
+          - { name: Windows x64, os: windows, runner: windows-latest, targets: x86_64-pc-windows-msvc }
+          - { name: Linux x86_64, os: linux, runner: ubuntu-22.04, targets: x86_64-unknown-linux-gnu }
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      BUILD_DATE: ${{ needs.version.outputs.date }}
+      BUILD_SHA: ${{ github.sha }}
+      WORDCRAFT_VERSION: ${{ needs.version.outputs.version }}
+      WORDCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+      WORDCRAFT_BUILD_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out craft-fonts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: ${{ needs.version.outputs.fonts }}
+          path: craft-fonts
+          persist-credentials: false
+      - name: Check out craft-i18n (this owner's fork)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository_owner }}/craft-i18n
+          ref: ${{ needs.version.outputs.i18n }}
+          path: craft-i18n
+          persist-credentials: false
+      - name: Embed the fonts and translations
+        shell: bash
+        run: |
+          {
+            echo "CRAFT_FONTS_DIR=$GITHUB_WORKSPACE/craft-fonts"
+            echo "CRAFT_FONTS_REQUIRED=1"
+            echo "CRAFT_I18N_DIR=$GITHUB_WORKSPACE/craft-i18n"
+            echo "CRAFT_I18N_REQUIRED=1"
+          } >>"$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          targets: ${{ matrix.targets }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: release-ja-${{ matrix.os }}
+      - name: Set the version
+        shell: bash
+        run: cargo xtask version set "$VERSION"
+      - name: Install WiX
+        if: matrix.os == 'windows'
+        uses: storytold/craft-common-actions/actions/install-wix@2b4eb2c6d94880d926c934ec3736c92cde30086b
+        with:
+          wix-version: 5.0.2
+      - name: Install Linux build and packaging tools
+        if: matrix.os == 'linux'
+        uses: storytold/craft-common-actions/actions/install-linux-deps@2b4eb2c6d94880d926c934ec3736c92cde30086b
+        with:
+          deb-arch: amd64
+          nfpm-version: 2.47.0
+      - name: Build and package (macOS, ad-hoc signature)
+        if: matrix.os == 'macos'
+        run: packaging/macos/package.sh --arch universal
+      - name: Build and package (Windows, unsigned)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: ./packaging/windows/package.ps1 -Arch x64
+      - name: Build and package (Linux)
+        if: matrix.os == 'linux'
+        run: packaging/linux/package.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-${{ matrix.os }}
+          path: dist/release/*
+          if-no-files-found: error
+
+  release:
+    timeout-minutes: 10
+    name: Draft GitHub Release
+    if: github.ref_type == 'tag'
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: packaging/fork
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-*
+          path: artifacts
+          merge-multiple: true
+      - name: Create or update the draft
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          (cd artifacts && sha256sum -- * | tee SHA256SUMS.txt)
+          notes="$RUNNER_TEMP/notes.md"
+          { cat packaging/fork/release-notes.md; echo; echo '```'; cat artifacts/SHA256SUMS.txt; echo '```'; } >"$notes"
+          pre=()
+          case "$VERSION" in *-*) pre=(--prerelease) ;; esac
+          if draft="$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            if [ "$draft" != "true" ]; then
+              echo "::error::Release $tag is already published; tag a new version."
+              exit 1
+            fi
+            gh release view "$tag" --json assets --jq '.assets[].name' | while read -r asset; do
+              gh release delete-asset "$tag" "$asset" --yes
+            done
+            gh release edit "$tag" --draft --title "WordCraft-ja $VERSION" --notes-file "$notes" "${pre[@]}"
+            gh release upload "$tag" --clobber -- artifacts/*
+          else
+            gh release create "$tag" --draft --verify-tag --title "WordCraft-ja $VERSION" --notes-file "$notes" "${pre[@]}" -- artifacts/*
+          fi
