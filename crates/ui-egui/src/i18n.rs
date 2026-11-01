@@ -419,9 +419,11 @@ pub fn style_name(style: &wordcraft_doc::Style) -> String {
 }
 
 /// A built-in style's English name in the current language; numbered families go through one
-/// template each (`Heading {n}`), and names without a translation stay English.
+/// template each (`Heading {n}`), and names without a translation stay English. A `style` row
+/// comes first where Word names the style differently from the same English elsewhere (Japanese
+/// Word's `Title` style is 表題, a document's title タイトル).
 pub fn builtin_style_name(name: &str) -> String {
-    let direct = t(name);
+    let direct = tc("style", name);
     if direct != name {
         return direct.to_string();
     }

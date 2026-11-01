@@ -486,9 +486,12 @@ fn built_in_style_names_are_translated_for_display_and_user_styles_are_not() {
     let name = |id: &str| style_name(sheet.get(id).unwrap());
     set_current(fixture_lang(
         "x-fixture",
-        "\tNormal\tNormal-FX\n\tHeading 1\tHeading-one-FX\n\tHeading {n}\tHeading-FX {n}\n\tTOC {n}\tTOC-FX {n}\n\tIndex {n}\tIndex-FX {n}\n",
+        "\tNormal\tNormal-FX\n\tHeading 1\tHeading-one-FX\n\tHeading {n}\tHeading-FX {n}\n\tTOC {n}\tTOC-FX {n}\n\tIndex {n}\tIndex-FX {n}\n\tTitle\tTitle-FX\nstyle\tTitle\tTitle-style-FX\n",
     ));
     assert_eq!(name("Normal"), "Normal-FX");
+    // A `style` row names the style; the same English elsewhere keeps its plain row.
+    assert_eq!(name("Title"), "Title-style-FX");
+    assert_eq!(t("Title"), "Title-FX");
     // An explicit entry wins over its family's template.
     assert_eq!(name("Heading1"), "Heading-one-FX");
     // Numbered families beyond the catalog's explicit entries go through one template.

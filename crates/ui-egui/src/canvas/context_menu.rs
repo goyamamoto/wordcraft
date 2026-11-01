@@ -40,7 +40,9 @@ fn equation_menu(app: &mut WordApp, ui: &mut Ui) {
         ("Close Equation", "equation.exit", json!({})),
     ];
     for (label, id, params) in items {
-        if ui.button(tl!(label)).clicked() {
+        // `equation` rows: Word's Japanese calls the linear form 行形式, where a gradient's
+        // Linear is 線形.
+        if ui.button(crate::i18n::tc("equation", label)).clicked() {
             let _ = app.run(id, params);
             app.canvas.want_focus = true;
             ui.close();
