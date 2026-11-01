@@ -1090,6 +1090,16 @@ mod tests {
     /// Held by tests that swap or rely on the shared Spanish dictionary, so a folder reset can't land mid-test.
     static DICTIONARY_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    /// Held by tests that save or load the user dictionary through a file. A save writes every
+    /// word in the process-wide dictionary, other tests' words too, and a load brings them all
+    /// back. Without it, a word another test had just removed came back with that test's
+    /// load, and its "removed" check failed about one run in six.
+    static USER_DICTIONARY_FILE_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn user_dictionary_file_lock() -> std::sync::MutexGuard<'static, ()> {
+        USER_DICTIONARY_FILE_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// #1063: the dictionaries folder is searched before the system locations; the dictionaries
     /// in it are reported and used, and cached checks are dropped. The folder holds the same test
     /// dictionaries the other tests install, so tests running meanwhile see the same words; it
@@ -1619,6 +1629,7 @@ mod tests {
     /// #40: the user dictionary survives a save and a fresh load.
     #[test]
     fn user_dictionary_persists_through_a_file() {
+        let _file = user_dictionary_file_lock();
         let dir = std::env::temp_dir().join(format!("wc-dict-{}-{}", std::process::id(), "persist"));
         let _ = std::fs::remove_dir_all(&dir);
         // The folder is created on the first save.
@@ -1641,6 +1652,7 @@ mod tests {
     /// #40: a hostile file is capped: invalid lines are skipped, and only the first megabyte is read.
     #[test]
     fn hostile_dictionary_files_are_capped() {
+        let _file = user_dictionary_file_lock();
         let dir = std::env::temp_dir().join(format!("wc-dict-{}-{}", std::process::id(), "hostile"));
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("custom-dictionary.txt");
@@ -1663,6 +1675,7 @@ mod tests {
     /// #40: saving merges in words another process saved, and leaves out the ones just removed.
     #[test]
     fn saving_merges_with_the_file() {
+        let _file = user_dictionary_file_lock();
         let dir = std::env::temp_dir().join(format!("wc-dict-{}-{}", std::process::id(), "merge"));
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("custom-dictionary.txt");
@@ -1698,6 +1711,7 @@ mod tests {
     /// #40: a missing file loads as empty, never an error.
     #[test]
     fn missing_dictionary_file_loads_empty() {
+        let _file = user_dictionary_file_lock();
         let path = std::env::temp_dir().join(format!("wc-dict-{}-missing.txt", std::process::id()));
         let _ = std::fs::remove_file(&path);
         assert!(load_user_dictionary(&path).is_empty());
@@ -1740,6 +1754,7 @@ mod tests {
     #[test]
     fn user_dictionary_and_ignore_all_match_both_normalization_forms() {
         let _guard = DICTIONARY_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _file = user_dictionary_file_lock();
         es::test_dict::install();
         let es = ProofLang::Es;
         let (nfd, nfc) = ("zqprue\u{301}ba", "zqpruéba");
