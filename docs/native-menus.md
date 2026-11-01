@@ -1,6 +1,6 @@
 # Native macOS menu bar
 
-> **Last reviewed:** 2026-10-24 · **Last updated:** 2026-10-24 · **Change:** major (first version: the menu bar adapted from storytold/wordcraft#985, with Tools, Table and Word for Mac's Window menu, on the window host) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-24 · **Last updated:** 2026-11-01 · **Change:** trivial (the menu follows upstream's window per document after the upstream merge; previously major: first version: the menu bar adapted from storytold/wordcraft#985, with Tools, Table and Word for Mac's Window menu, on the window host) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 On macOS the desktop app installs the menu bar Word for Mac has at the top of the screen,
 alongside the ribbon (never replacing it): WordCraft, File, Edit, View, Insert, Format, Tools,
@@ -35,11 +35,11 @@ removals included), enabled state from the same rule the ribbon uses, checkmarks
 selection and view state the ribbon reads. The desktop app injects `apps/wordcraft/src/mac_menu.rs`,
 a macOS-only `muda` backend; the engine and the other platforms have no AppKit dependency.
 
-The menu is one for the process while the app has a window per document (`windows::Host`,
-#322): the host builds it from the window in use, runs its items in that window's frame, and
-syncs its enabled and checked state after that window's frame. A menu event wakes the root
-viewport, which asks the window in use to repaint and take it. Minimize minimizes the window in
-use; Quit asks about unsaved changes in every window in turn (Cancel keeps the app open) and
+The menu is one for the process while the app has a native window per document
+(`crate::windows`, #322): it is built from the active window (the one focused last), its items
+run there, and its enabled and checked state follow that window. A menu event wakes the root
+viewport; key equivalents go into the root's input when the active window draws there, else to
+that window's own viewport (`WordApp::send_menu_input`). Minimize minimizes the active window; Quit asks about unsaved changes in every window in turn (Cancel keeps the app open) and
 never goes through AppKit's own Quit selector, which would ask nothing.
 
 Menu actions use `WordApp::run`, keeping the user dialogs and system clipboard handling. A
@@ -85,5 +85,6 @@ dialogs. It is a no-op on other platforms.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | trivial | After the upstream merge the menu follows upstream's native window per document (`crate::windows`) instead of our window host |
 | 2026-10-24 | trivial | Window: Zoom is the app's own row, so macOS's tiling rows follow Bring All to Front as in Word; Minimize is ⌘M (Increase Indent moved to ⌃⇧M on the Mac, Word for Mac's key) |
 | 2026-10-24 | major | First version, adapted from #985 with Tools, Table and the Window menu as Word for Mac has it (its own items observed in Word for Mac the same day), on the window host (#322) |

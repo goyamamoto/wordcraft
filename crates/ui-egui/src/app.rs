@@ -396,12 +396,24 @@ impl WordApp {
     }
 
     /// Lay out the windows: on the desktop each open document's in its own native window
-    /// ([`windows`]), on the web the one window.
+    /// ([`windows`]), on the web the one window. Then the input method may read the active
+    /// window's document ([`Services::ime_surrounding`]).
     pub fn ui(&mut self, ui: &mut egui::Ui) {
+        // Each viewport's pass takes the input method's replacement range for its window.
+        if self.services.ime_replacement.is_some() {
+            self.install_viewport_input(ui.ctx());
+        }
         if self.windows.native() {
             self.windows_ui(ui);
         } else {
+            if let Some(range) = self.take_ime_replacement(ui.ctx()) {
+                self.canvas.ime_replace = range;
+            }
             self.window_ui(ui);
+        }
+        // The windows drew in turn; the fields hold the active (focused) window's state again.
+        if let Some(report) = &self.services.ime_surrounding {
+            report(self.canvas.ime_surrounding.as_ref());
         }
     }
 

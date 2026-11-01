@@ -246,7 +246,9 @@ impl Windows {
 /// Control-channel input for a window in a viewport of its own: eframe's raw-input hook
 /// ([`WordApp::raw_input_hook`]) sees only the root viewport's input, and egui runs a plugin's
 /// input hook for every viewport. On macOS it also reads Control-click as the secondary button
-/// in those windows, as the raw-input hook does in the root's.
+/// in those windows, as the raw-input hook does in the root's, and takes the range the input
+/// method asks a composition to replace ([`crate::Services::ime_replacement`]) in every
+/// viewport, the root's included, for the window drawn there.
 #[derive(Default)]
 pub(crate) struct ViewportInput {
     /// The viewport the queued events go to, on its next pass.
@@ -258,6 +260,11 @@ pub(crate) struct ViewportInput {
     /// The native menu bar's key equivalents for a window in a viewport of its own, by viewport
     /// ([`WordApp::send_menu_input`]).
     menu: Vec<(ViewportId, Vec<egui::Event>)>,
+    /// Where the input method's replacement range comes from ([`crate::Services::ime_replacement`]).
+    ime_source: Option<crate::ImeReplacementFn>,
+    /// The range taken in a viewport's pass whose input has a `Preedit` (`None`: it named none),
+    /// until the window drawn there takes it ([`WordApp::take_ime_replacement`]).
+    ime_replace: HashMap<ViewportId, Option<std::ops::Range<usize>>>,
 }
 
 impl egui::Plugin for ViewportInput {
@@ -267,6 +274,12 @@ impl egui::Plugin for ViewportInput {
 
     fn input_hook(&mut self, _ctx: &egui::Context, input: &mut egui::RawInput) {
         let viewport = input.viewport_id;
+        // Asked as the input arrives: the next `Preedit` may name another range.
+        if let Some(take) = &self.ime_source
+            && input.events.iter().any(|e| matches!(e, egui::Event::Ime(egui::ImeEvent::Preedit { .. })))
+        {
+            self.ime_replace.insert(viewport, take());
+        }
         if viewport == ViewportId::ROOT {
             return;
         }
@@ -663,8 +676,12 @@ impl WordApp {
 
     /// Draw window `key` into its viewport's `ui`.
     fn draw_window(&mut self, ui: &mut egui::Ui, key: u64) {
+        let ime_replace = self.take_ime_replacement(ui.ctx());
         if !self.enter_window(key) {
             return;
+        }
+        if let Some(range) = ime_replace {
+            self.canvas.ime_replace = range;
         }
         let ctx = ui.ctx().clone();
         let queued = self.windows.get_mut(key).map(|w| std::mem::take(&mut w.requests)).unwrap_or_default();
@@ -729,10 +746,7 @@ impl WordApp {
         if self.synthetic.is_empty() || self.control_input_is_roots(ctx) {
             return;
         }
-        if !self.windows.input_plugin {
-            ctx.add_plugin(ViewportInput::default());
-            self.windows.input_plugin = true;
-        }
+        self.install_viewport_input(ctx);
         self.settle_windows();
         let target = self.active_viewport();
         // Input queued for a window that has closed since (or moved into the root viewport)
@@ -756,16 +770,33 @@ impl WordApp {
         ctx.request_repaint_of(target);
     }
 
+    /// Register [`ViewportInput`] with egui, once.
+    pub(crate) fn install_viewport_input(&mut self, ctx: &egui::Context) {
+        if !self.windows.input_plugin {
+            ctx.add_plugin(ViewportInput { ime_source: self.services.ime_replacement.clone(), ..Default::default() });
+            self.windows.input_plugin = true;
+        }
+    }
+
+    /// The drawn window's viewport received a `Preedit`: the range the input method asked it to
+    /// replace ([`crate::Services::ime_replacement`]) goes to the window's page, which selects
+    /// it before showing the composition (`keys::canvas`). Taken whether or not the window then
+    /// draws, so a range never waits for a later composition.
+    pub(crate) fn take_ime_replacement(&mut self, ctx: &egui::Context) -> Option<Option<std::ops::Range<usize>>> {
+        if !self.windows.input_plugin {
+            return None;
+        }
+        let viewport = ctx.viewport_id();
+        ctx.with_plugin(|p: &mut ViewportInput| p.ime_replace.remove(&viewport)).flatten()
+    }
+
     /// The native menu bar's key equivalents ([`crate::native_menu::raw_input`]) for the active
     /// window, which draws in a viewport of its own: given to that viewport's next pass.
     pub(crate) fn send_menu_input(&mut self, ctx: &egui::Context, events: Vec<egui::Event>) {
         if events.is_empty() {
             return;
         }
-        if !self.windows.input_plugin {
-            ctx.add_plugin(ViewportInput::default());
-            self.windows.input_plugin = true;
-        }
+        self.install_viewport_input(ctx);
         let target = self.active_viewport();
         ctx.with_plugin(|p: &mut ViewportInput| match p.menu.iter_mut().find(|(v, _)| *v == target) {
             Some((_, queued)) => queued.extend(events),
