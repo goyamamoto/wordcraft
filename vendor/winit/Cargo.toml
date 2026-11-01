@@ -104,6 +104,7 @@ wayland = [
     "sctk",
     "ahash",
     "memmap2",
+    "percent-encoding",
 ]
 wayland-csd-adwaita = [
     "sctk-adwaita",
@@ -132,6 +133,10 @@ name = "child_window"
 path = "examples/child_window.rs"
 
 [[example]]
+name = "clipboard_native_probe"
+path = "examples/clipboard_native_probe.rs"
+
+[[example]]
 name = "control_flow"
 path = "examples/control_flow.rs"
 
@@ -151,6 +156,28 @@ doc-scrape-examples = true
 [[example]]
 name = "x11_embed"
 path = "examples/x11_embed.rs"
+
+[[test]]
+name = "ime_patches"
+path = "tests/ime_patches.rs"
+
+[[test]]
+name = "ime_reset_dispatch"
+path = "tests/ime_reset_dispatch.rs"
+harness = false
+
+[[test]]
+name = "macos_keyboard"
+path = "tests/macos_keyboard.rs"
+
+[[test]]
+name = "macos_termination"
+path = "tests/macos_termination.rs"
+harness = false
+
+[[test]]
+name = "pointer_patches"
+path = "tests/pointer_patches.rs"
 
 [[test]]
 name = "send_objects"
@@ -257,6 +284,9 @@ features = [
     "system",
     "thread",
     "process",
+    "event",
+    "fs",
+    "pipe",
 ]
 default-features = false
 

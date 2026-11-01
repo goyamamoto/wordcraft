@@ -1,31 +1,44 @@
 {
   "crate": "winit",
   "version": "0.30.13",
-  "pristine_archive_sha256": "a6755fa58a9f8350bd1e472d4c3fcc25f824ec358933bba33306d0b63df5978d",
+  "base": "https://github.com/storytold/winit",
+  "base_revision": "a517b3846ee8457d84ee4975110bfda6797c44dc",
+  "base_package_sha256": "53136e4f04264721d11d18753f507df9a25ee737f7d401cbe88b70bfcc89c7fa",
+  "added_files": [
+    "PATCHES.md"
+  ],
   "changed_source_files": [
     {
       "path": "src/platform/macos.rs",
       "patches": [
         "01"
       ],
-      "pristine_sha256": "c6685a9e320715b00124d66eb5e9be088cf1f165678e832a86459f0026d215e9",
-      "vendor_sha256": "64f23daaf866e6e5d4ec49d0947e1be59b6a7f2d797177b00ca65a44435f0c57"
+      "pristine_sha256": "b5eefe259ed52a09dc4b50b7925dfc85b8ea20a2d37e0e9af86a382248682965",
+      "vendor_sha256": "d694be980a1566a90a4e8571c53a7033d4799aade19f95748cebaf429ef3f1ae"
+    },
+    {
+      "path": "src/platform_impl/macos/ime_surrounding.rs",
+      "patches": [
+        "01"
+      ],
+      "pristine_sha256": null,
+      "vendor_sha256": "94a0c0ab7e1196212b523f581a55abe6e16be2d770eb390dd3726de741420435"
     },
     {
       "path": "src/platform_impl/macos/mod.rs",
       "patches": [
         "01"
       ],
-      "pristine_sha256": "584af72536847910a3e461fb40b9a0f9a375da3200f7ecf38f5d989b3c143d9d",
-      "vendor_sha256": "7a864aebfd7015ccc79a411349bf2701aae5c41f80a956a22ddd57a83f516481"
+      "pristine_sha256": "2b05195d61dc26efd51a9d7a5ab80e3b92b59349a08e96c5e21658b4fe46ec9d",
+      "vendor_sha256": "5b42b12355620e8e845e2c0ec366f4f82797ce96c4df6c45d69666a83dc3ab62"
     },
     {
       "path": "src/platform_impl/macos/view.rs",
       "patches": [
         "01"
       ],
-      "pristine_sha256": "de63351d7a757d58883600c3f1702fc369cb77b2ae323a4efca7cb520e9da90e",
-      "vendor_sha256": "3573dd74155432b34a9ea464e0a1ae1ee576ab3f3688a160a43d95fdbaedd618"
+      "pristine_sha256": "cd8a1db428d732bbf220e649f031cc0ecdb64a89718abacf4bc9b1c269951788",
+      "vendor_sha256": "8bfea82aa564918655c3bd0d75aea2654ac25b82358692d193a1b4608ff37cd1"
     }
   ]
 }

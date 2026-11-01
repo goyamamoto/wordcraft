@@ -1,1794 +1,818 @@
-//! Document windows (#322): one window per open document, as Word has them.
+//! One native window per open document. Each window is an egui viewport, driven by
+//! [`craft_window::Viewports`]: one window draws in the root viewport, every other one in an
+//! immediate viewport of its own, and each draws the whole interface (title bar, ribbon, page,
+//! status bar, dialogs) for its own document. [`WordApp`]'s fields hold the drawn window's state
+//! ([`crate::window_ui`]); the other windows keep theirs in their [`Window`]. Between frames the
+//! fields hold the active window's (the one focused last), so the control channel, the MCP
+//! bridge and the host's menus act on it.
 //!
-//! The desktop app installs a [`Host`] that owns every window's [`WordApp`] (its session, canvas
-//! and interface state) and the window it lives in: the first document window is eframe's root
-//! viewport, every other one a deferred child viewport the root declares each pass
-//! (`egui::Context::show_viewport_deferred`). Each viewport's frame runs its own `WordApp` through
-//! [`Host::logic`] and [`Host::ui`]; the host lives in a thread-local because a child viewport's
-//! callback can borrow nothing of the eframe app.
+//! A frame: [`WordApp::logic`] does the app-wide work once (the control channel, recovery,
+//! timers, printing). [`WordApp::ui`] then draws the windows in turn: for each it swaps the
+//! window's state in, makes its document the session's active one, does the window's own work
+//! (its file dialog, AutoSave, dropped files, Read Aloud, requests queued for it) and draws it.
+//! Last, the active window's state comes back.
 //!
-//! What follows Word (observed in Word for Mac): File › New and File › Open put the document in a
-//! new window and leave the current one alone, except that a window showing no document, or a new
-//! blank document nobody has typed in, takes the document itself; a file already open in another
-//! window brings that window forward instead of opening twice; File › Close closes the document's
-//! window when another is open and otherwise leaves the empty window (#1712); the window's close
-//! button asks about unsaved changes and closes only that window; quitting asks about each dirty
-//! document in turn, and Cancel in any prompt keeps the app open. View › Window: Switch Windows
-//! lists the windows in the order they were opened, Arrange All stacks every window top to
-//! bottom across the screen's work area, View Side by Side puts this window on the left half and
-//! its partner on the right and turns Synchronous Scrolling on, Reset Window Position puts the
-//! pair back to the halves, and turning Side by Side off gives both windows their earlier places
-//! back. New Window (a second window on one document) and Split need two views of one document,
-//! which a session doesn't have yet: their commands are disabled, with the reason.
+//! Which window shows what follows the session ([`WordApp::sync_document`]): a document made
+//! active that no window shows (New, Open) gets a new window, focused and cascaded from the last
+//! one; a document a window shows brings that window to the front; a window whose document closed
+//! closes, and the window focused before it comes forward. Opening a file replaces a blank
+//! document nobody used in its own window, and the last window stays open with no document (the
+//! empty window the Start screen also leaves). The web app has one window and switches documents
+//! in it ([`crate::documents`]).
 //!
-//! Things every window shares: egui's one `Memory` (so fixed widget ids go through
-//! [`crate::wid`]), the interface fonts (each window's wanted faces are pooled before its frame),
-//! the interface theme, size, language and the other settings, which the window the user last
-//! changed them in hands to the rest ([`WordApp::adopt_settings`]).
+//! View › New Window opens another window on a document. Each window on it has its own view of
+//! it (selection, zoom, view mode, panes: [`WindowView`]); the session holds the drawn window's,
+//! and the others keep theirs in their [`Window`]. What the app keeps per document
+//! (AutoSave's file, comment drafts) stays in one place, shared by its windows. Closing one of a
+//! document's windows leaves the document open and asks nothing; closing its last window closes
+//! it.
 //!
-//! Only the desktop app has a host: the web app, `ui_shot` and the tests drive one `WordApp`, and
-//! `Session::windows` tells the engine so (`host: false`) so the window commands are disabled.
+//! View › Window's Arrange All, View Side by Side, Synchronous Scrolling and Reset Window Position
+//! place these windows ([`arrange`]). The native menu bar ([`crate::native_menu`]) acts on the
+//! active window, and its key equivalents reach that window's viewport
+//! ([`WordApp::send_menu_input`]).
 
-use std::cell::RefCell;
-use std::sync::mpsc::Receiver;
+use std::collections::HashMap;
 
-use egui::{Rect, Vec2, ViewportBuilder, ViewportCommand, ViewportId, pos2, vec2};
+use craft_window::{Document, Frame, Viewports, WindowEvent, WindowId, WindowList, WindowMenu};
+use egui::{ViewportCommand, ViewportId};
 use serde_json::{Value, json};
-use wordcraft_engine::{ViewSlot, WindowEntry, Windows};
+use wordcraft_engine::WindowView;
 
-use crate::native_menu::{self, NativeMenu};
-use crate::window_geometry::{MIN_SIZE, WindowGeometry};
-use crate::{ControlRequest, WordApp};
+use crate::{WordApp, documents, window_ui::WindowUi};
 
-/// A window's id: stable while it is open, unique within the run, never 0.
-pub type WindowId = u64;
+mod arrange;
+pub use arrange::WorkArea;
+#[cfg(test)]
+pub(crate) use arrange::{halves, tile_rows};
 
-/// How far down and right a window opened from another one appears, as macOS cascades windows.
-const CASCADE: Vec2 = vec2(22.0, 22.0);
-/// Room left on each side of a monitor whose work area isn't known (a taskbar, a panel).
-const SYSTEM_BAR: f32 = 48.0;
-
-/// What a window asks the host for, queued by its `WordApp` and carried out by [`Host`].
-#[derive(Clone, Debug, PartialEq)]
-pub enum WindowRequest {
-    /// Open the document `file.open`'s params name in a new window.
-    Open(Value),
-    /// A new document (`file.new`, `file.newFromTemplate`) in a new window.
-    New {
-        command: String,
-        params: Value,
-    },
-    /// Bring that window to the front (Switch Windows).
-    Focus(WindowId),
-    ArrangeAll,
-    /// View Side by Side on (with the partner, or the one other window) or off.
-    SideBySide {
-        on: bool,
-        with: Option<WindowId>,
-    },
-    SyncScroll(bool),
-    ResetPosition,
-    /// Close this window: File › Close with other windows open.
-    Close,
-    /// Quit the app: every window closes, asking about unsaved changes (`app.quit`).
-    Quit,
-    /// View › New Window: another window on this window's document.
-    NewWindow,
-    /// File › Close on a document with several windows: the other windows on it close too.
-    CloseDocumentWindows,
+/// The window title for a document called `name`.
+pub(crate) fn title(name: &str, dirty: bool) -> String {
+    format!("{name}{} - {}", if dirty { " •" } else { "" }, crate::APP_NAME)
 }
 
-/// A window and the `WordApp` it shows.
-pub struct Window {
-    pub id: WindowId,
-    pub viewport: ViewportId,
-    pub app: WordApp,
-    /// The child viewport's builder, fixed once it is created (egui only patches changes, so the
-    /// same one is declared every pass; the title travels as a command).
-    builder: ViewportBuilder,
-    /// The window's frame and content rects and monitor as its last frame saw them.
-    outer: Option<Rect>,
-    inner: Option<Rect>,
-    monitor: Option<Vec2>,
-    /// Whether the window was on screen at its last frame (not minimized, not covered): eframe
-    /// runs no frame of a child viewport that isn't, so such a window answers nothing until it
-    /// shows again.
-    visible: Option<bool>,
-    /// The host frame count when the window last had the focus.
-    focused_at: u64,
-    /// Being closed: dropped once the root pass stops declaring it.
-    closing: bool,
-    /// Synchronous Scrolling: the canvas offset seen at the end of the last frame, and whether
-    /// the next change is the partner's scroll arriving (not to be passed back).
-    scroll_seen: Option<Vec2>,
-    scroll_applied: bool,
-    /// View › New Window: the document group this window belongs to, its number in it (the
-    /// title's `:2`) and its view of the document while another window of the group holds the
-    /// session (`Session::swap_view`).
-    group: Option<u64>,
-    view_number: Option<u32>,
-    view: Option<ViewSlot>,
+/// An open window.
+pub(crate) struct Window {
+    /// The app's key for the window. A window made while the windows are being drawn gets its
+    /// [`WindowId`] once the frame's drawing ends.
+    key: u64,
+    id: Option<WindowId>,
+    /// The document it shows.
+    doc: u64,
+    /// Its state while another window's is in [`WordApp`]'s fields; `None` for that window.
+    ui: Option<Box<WindowUi>>,
+    /// Requests commands made for its document while another window was drawn
+    /// ([`WordApp::handle_request`]), handled when it draws next.
+    requests: Vec<Value>,
+    /// The title it last drew, for its viewport.
+    title: String,
+    /// Its view of the document (caret, zoom, view mode…) while another window on the same
+    /// document is drawn. `None` while the session holds it: for the drawn window, and for the
+    /// window on each other document whose view is parked with that document.
+    view: Option<WindowView>,
 }
 
-/// The windows on one document (View › New Window): they share one session, which the one that
-/// last drew holds; the others keep their view and a placeholder session until their turn.
-struct Group {
-    id: u64,
-    members: Vec<WindowId>,
-    holder: WindowId,
-    /// What the others last saw: the document's revision, dirty flag and file. A change repaints them.
-    seen: (u64, bool, Option<std::path::PathBuf>),
-    next_number: u32,
+/// The app's windows. See the module documentation.
+pub struct Windows {
+    /// Separate native windows (desktop). Off, one window shows every document in turn (web).
+    native: bool,
+    /// Every window, with its key, for the viewport driver: opening and focus order, positions.
+    /// Lent to the driver while the windows draw.
+    list: WindowList<u64>,
+    viewports: Option<Viewports>,
+    /// Open windows in opening order.
+    open: Vec<Window>,
+    /// The window whose state is in [`WordApp`]'s fields.
+    shown: u64,
+    next_key: u64,
+    /// The windows are being drawn: `list` is lent out, so windows opened or closed now join or
+    /// leave it when the drawing ends.
+    showing: bool,
+    /// Window keys, most recently focused first, as the drawing started.
+    recent: Vec<u64>,
+    /// A window to bring to the front when the drawing ends.
+    focus: Option<u64>,
+    /// View › Window › Switch Windows and the window titles, as the frame's drawing started.
+    menu: WindowMenu,
+    /// What a new window's viewport starts from: size, icon, app id ([`WordApp::set_window_builder`]).
+    builder: egui::ViewportBuilder,
+    /// [`ViewportInput`] is registered with egui.
+    input_plugin: bool,
+    /// The viewport driver draws the windows this frame, and titles them.
+    driven: bool,
+    /// Arrange All, View Side by Side and Synchronous Scrolling ([`arrange`]).
+    arrange: arrange::Arrange,
+    /// The root viewport's window while the windows draw ([`Windows::viewport`]).
+    drawing_root: Option<WindowId>,
 }
 
-/// View Side by Side: the two windows, and where to put them back.
-struct Pair {
-    left: WindowId,
-    right: WindowId,
-    restore: Vec<(WindowId, Rect, Vec2)>,
-    sync: bool,
-}
-
-/// Quitting: the window whose Save Changes prompt the quit waits on.
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Quit {
-    No,
-    Asking(WindowId),
-}
-
-/// Makes the `WordApp` for a new window: a blank session with the desktop services.
-pub type NewApp = Box<dyn FnMut() -> WordApp>;
-
-/// The screen's work area in points (the desktop less the menu bar, Dock or taskbar) for the
-/// window at that frame rect, where the platform tells.
-pub type WorkArea = Box<dyn Fn(Option<Rect>) -> Option<Rect>>;
-
-/// Runs after a window's frame with whether the window has the focus (the macOS input method's
-/// view of the focused document).
-pub type AfterUi = Box<dyn FnMut(&WordApp, bool)>;
-
-/// The open windows and what they share.
-pub struct Host {
-    windows: Vec<Window>,
-    next_id: WindowId,
-    frames: u64,
-    active: WindowId,
-    pair: Option<Pair>,
-    groups: Vec<Group>,
-    next_group: u64,
-    quit: Quit,
-    new_app: NewApp,
-    template: ViewportBuilder,
-    pub work_area: Option<WorkArea>,
-    pub after_ui: Option<AfterUi>,
-    /// The native menu bar (macOS): one for the process, showing the window in use and running
-    /// its items there.
-    menu: Option<NativeMenu>,
-    control_rx: Option<Receiver<ControlRequest>>,
-    /// Every window has closed (or the last one may): the eframe app ends the process.
-    exit: bool,
-    /// The shared settings as last handed round, to notice a change.
-    shared_settings: Option<String>,
-    /// Frames left in which the settings are compared, after a frame with input.
-    share_pending: u8,
-    ctx: Option<egui::Context>,
-}
-
-thread_local! {
-    static HOST: RefCell<Option<Host>> = const { RefCell::new(None) };
-}
-
-impl Host {
-    /// A host with its first window: `first` in the root viewport, `template` the viewport
-    /// builder new windows start from (title, chrome, icon), `new_app` making their apps.
-    pub fn new(first: WordApp, mut template: ViewportBuilder, new_app: NewApp) -> Self {
-        // Where the first window was restored to is its own; new windows cascade from the window
-        // they come from, or the system places them.
-        template.position = None;
-        template.maximized = None;
-        let window = Window::new(1, ViewportId::ROOT, first, ViewportBuilder::default());
-        Host {
-            windows: vec![window],
-            next_id: 2,
-            frames: 0,
-            active: 1,
-            pair: None,
-            groups: Vec::new(),
-            next_group: 1,
-            quit: Quit::No,
-            new_app,
-            template,
-            work_area: None,
-            after_ui: None,
-            menu: None,
-            control_rx: None,
-            exit: false,
-            shared_settings: None,
-            share_pending: 0,
-            ctx: None,
+impl Windows {
+    /// One window, showing document `doc`.
+    pub(crate) fn new(doc: u64) -> Windows {
+        let mut list = WindowList::new();
+        let id = list.open(1);
+        let mut viewports = Viewports::new(Frame::Desktop);
+        viewports.set_root(Some(id));
+        Windows {
+            native: cfg!(not(target_arch = "wasm32")),
+            list,
+            viewports: Some(viewports),
+            open: vec![Window { key: 1, id: Some(id), doc, ui: None, requests: Vec::new(), title: String::new(), view: None }],
+            shown: 1,
+            next_key: 2,
+            showing: false,
+            recent: vec![1],
+            focus: None,
+            menu: WindowMenu::default(),
+            builder: egui::ViewportBuilder::default().with_inner_size([1440.0, 920.0]).with_min_inner_size([760.0, 480.0]),
+            input_plugin: false,
+            driven: false,
+            arrange: Default::default(),
+            drawing_root: None,
         }
     }
 
-    /// The control channel's requests (`--control`): routed to the window each one names.
-    pub fn with_control(mut self, rx: Receiver<ControlRequest>) -> Self {
-        self.control_rx = Some(rx);
-        self
+    /// Whether documents get native windows of their own.
+    pub(crate) fn native(&self) -> bool {
+        self.native
     }
 
-    /// The native menu bar the host installed ([`native_menu`]).
-    pub fn with_menu(mut self, menu: NativeMenu) -> Self {
-        self.menu = Some(menu);
-        self
+    /// One window for every document, as in the web app.
+    #[cfg(test)]
+    pub(crate) fn single(&mut self) {
+        self.native = false;
     }
 
-    /// Whether the window `vp` shows is the one in use: the one the menu bar shows and acts on.
-    fn is_active_viewport(&self, vp: ViewportId) -> bool {
-        self.active().is_some_and(|w| w.viewport == vp)
+    /// Whether the viewport driver titles the windows (else the drawn window sends its title).
+    pub(crate) fn driven(&self) -> bool {
+        self.driven
     }
 
-    /// Install the host for this thread (the main thread), replacing any earlier one.
-    pub fn install(host: Host) {
-        HOST.with(|h| *h.borrow_mut() = Some(host));
+    /// The key of the window whose state is in [`WordApp`]'s fields.
+    pub(crate) fn shown(&self) -> u64 {
+        self.shown
     }
 
-    /// Run `f` on the installed host. `None` without one, or while it is already in use (a
-    /// nested call), which never happens on eframe's thread.
-    pub fn with<R>(f: impl FnOnce(&mut Host) -> R) -> Option<R> {
-        HOST.with(|h| match h.try_borrow_mut() {
-            Ok(mut host) => host.as_mut().map(f),
-            Err(_) => {
-                log::error!("window host borrowed twice");
-                None
+    fn get(&self, key: u64) -> Option<&Window> {
+        self.open.iter().find(|w| w.key == key)
+    }
+
+    fn get_mut(&mut self, key: u64) -> Option<&mut Window> {
+        self.open.iter_mut().find(|w| w.key == key)
+    }
+
+    /// The window showing document `doc`, the most recently focused if several do.
+    fn of_doc(&self, doc: u64) -> Option<u64> {
+        self.recent_keys().into_iter().find(|&k| self.get(k).is_some_and(|w| w.doc == doc))
+    }
+
+    /// Open windows, most recently focused first; windows opened during this frame's drawing
+    /// come first.
+    fn recent_keys(&self) -> Vec<u64> {
+        let mut keys: Vec<u64> = self.open.iter().rev().filter(|w| w.id.is_none()).map(|w| w.key).collect();
+        let listed: Vec<u64> =
+            if self.showing { self.recent.clone() } else { self.list.recent().filter_map(|id| self.list.get(id).copied()).collect() };
+        keys.extend(listed.into_iter().filter(|&k| self.get(k).is_some()));
+        for w in &self.open {
+            if !keys.contains(&w.key) {
+                keys.push(w.key);
             }
-        })
+        }
+        keys
     }
 
-    /// Take the host out again (the end of the run, or a test).
-    pub fn take() -> Option<Host> {
-        HOST.with(|h| h.borrow_mut().take())
+    /// The document of the window focused last before `key`'s, if any.
+    fn next_doc(&self, key: u64) -> Option<u64> {
+        if !self.native {
+            return None;
+        }
+        self.recent_keys().into_iter().find(|&k| k != key).and_then(|k| self.get(k)).map(|w| w.doc)
     }
 
-    /// Whether every window has closed, or the last one was allowed to: the process ends.
-    pub fn exit_requested(&self) -> bool {
-        self.exit
+    /// The window's viewport. While the windows draw the driver has the viewports: the root's
+    /// window as the drawing started tells them apart.
+    fn viewport(&self, key: u64) -> ViewportId {
+        match (self.get(key).and_then(|w| w.id), &self.viewports) {
+            (Some(id), Some(v)) => v.viewport_id(id),
+            (Some(id), None) if self.showing && self.drawing_root != Some(id) => craft_window::child_viewport_id(id),
+            _ => ViewportId::ROOT,
+        }
     }
 
-    /// The windows, in the order they were opened (Switch Windows' order).
-    pub fn windows(&self) -> impl Iterator<Item = &Window> {
-        self.windows.iter()
+    /// The title View › Window › Switch Windows gives the window, as the frame started.
+    fn menu_title(&self, key: u64) -> Option<&str> {
+        self.menu.title(self.get(key)?.id?)
     }
 
-    /// The window that last had the focus (the first, before any did); `None` once every window
-    /// has closed.
-    pub fn active(&self) -> Option<&Window> {
-        self.windows.iter().find(|w| w.id == self.active && !w.closing).or_else(|| self.windows.iter().find(|w| !w.closing))
+    /// Bring the list up to date with the windows opened, closed and focused since it was last
+    /// lent out, and give the root viewport a window when its own closed.
+    fn settle(&mut self, ctx: Option<&egui::Context>) {
+        if self.showing {
+            return;
+        }
+        let gone: Vec<WindowId> = self.list.ids().filter(|id| !self.open.iter().any(|w| w.id == Some(*id))).collect();
+        for id in gone {
+            self.list.close(id);
+        }
+        let active = self.list.active();
+        let mut opened = false;
+        for w in self.open.iter_mut().filter(|w| w.id.is_none()) {
+            w.id = Some(self.list.open(w.key));
+            opened = true;
+        }
+        let focus = self.focus.take().and_then(|k| self.get(k)).and_then(|w| w.id);
+        // A window opened behind the others (nothing asked to focus it) leaves the active one so.
+        if let Some(id) = focus.or(active.filter(|_| opened)) {
+            self.list.focus(id);
+        }
+        let Some(viewports) = self.viewports.as_mut() else { return };
+        if !viewports.root().is_some_and(|r| self.list.contains(r))
+            && let Some(next) = self.list.active()
+        {
+            match ctx {
+                Some(ctx) => viewports.adopt(ctx, &self.list, next),
+                None => viewports.set_root(Some(next)),
+            }
+        }
+        if let (Some(id), Some(ctx)) = (focus, ctx) {
+            viewports.focus(ctx, id);
+        }
+        if opened && let Some(ctx) = ctx {
+            ctx.request_repaint();
+        }
+    }
+}
+
+/// Control-channel input for a window in a viewport of its own: eframe's raw-input hook
+/// ([`WordApp::raw_input_hook`]) sees only the root viewport's input, and egui runs a plugin's
+/// input hook for every viewport. On macOS it also reads Control-click as the secondary button
+/// in those windows, as the raw-input hook does in the root's.
+#[derive(Default)]
+pub(crate) struct ViewportInput {
+    /// The viewport the queued events go to, on its next pass.
+    target: Option<ViewportId>,
+    events: Vec<egui::Event>,
+    /// A viewport whose pass got keyboard input this way, until its window has looked.
+    keys_for: Option<ViewportId>,
+    control_click: HashMap<ViewportId, bool>,
+    /// The native menu bar's key equivalents for a window in a viewport of its own, by viewport
+    /// ([`WordApp::send_menu_input`]).
+    menu: Vec<(ViewportId, Vec<egui::Event>)>,
+}
+
+impl egui::Plugin for ViewportInput {
+    fn debug_name(&self) -> &'static str {
+        "wordcraft_viewport_input"
     }
 
-    /// The window that last had the focus, to change.
-    pub fn active_mut(&mut self) -> Option<&mut Window> {
-        let id = self.active()?.id;
-        self.get_mut(id)
+    fn input_hook(&mut self, _ctx: &egui::Context, input: &mut egui::RawInput) {
+        let viewport = input.viewport_id;
+        if viewport == ViewportId::ROOT {
+            return;
+        }
+        if cfg!(target_os = "macos") {
+            crate::control_click_as_secondary(&mut input.events, self.control_click.entry(viewport).or_default());
+        }
+        if let Some(i) = self.menu.iter().position(|(v, _)| *v == viewport) {
+            let (_, events) = self.menu.remove(i);
+            input.focused |= events.iter().any(|e| matches!(e, egui::Event::Key { .. }));
+            input.events.extend(events);
+        }
+        if self.target != Some(viewport) || self.events.is_empty() {
+            return;
+        }
+        self.target = None;
+        let events = std::mem::take(&mut self.events);
+        if events.iter().any(|e| matches!(e, egui::Event::Key { .. } | egui::Event::Text(_))) {
+            input.focused = true;
+            self.keys_for = Some(viewport);
+        }
+        input.events.extend(events);
+    }
+}
+
+impl WordApp {
+    /// How many windows are open.
+    pub fn window_count(&self) -> usize {
+        if self.windows.native { self.windows.open.len() } else { 1 }
     }
 
-    pub fn get(&self, id: WindowId) -> Option<&Window> {
-        self.windows.iter().find(|w| w.id == id)
+    /// The egui viewport of the active window, the one focused last: control input,
+    /// `ui.screenshot`, `ui.resize` and the saved window geometry are its. The root viewport
+    /// when the windows don't have viewports of their own (the web app, embedded viewports).
+    pub fn active_viewport(&self) -> ViewportId {
+        if !self.windows.native || !self.windows.driven {
+            return ViewportId::ROOT;
+        }
+        let key = self.windows.recent_keys().first().copied().unwrap_or(self.windows.shown);
+        self.windows.viewport(key)
     }
 
-    pub fn get_mut(&mut self, id: WindowId) -> Option<&mut Window> {
-        self.windows.iter_mut().find(|w| w.id == id)
+    /// The active window's viewport and surface, for `ui.screenshot`: the root's from this
+    /// frame's raw input, another window's from the input it last drew with (the host's raw-input
+    /// hook sees only the root's).
+    pub(crate) fn active_surface_geometry(&self, ctx: &egui::Context) -> (ViewportId, Option<crate::control::SurfaceGeometry>) {
+        let viewport = self.active_viewport();
+        if viewport == ViewportId::ROOT {
+            return (viewport, self.surface_geometry);
+        }
+        let (info, screen_rect, max_texture_side) = ctx.input_for(viewport, |i| (i.viewport().clone(), i.raw.screen_rect, i.raw.max_texture_side));
+        (viewport, crate::control::SurfaceGeometry::from_viewport(&info, screen_rect, max_texture_side, ctx))
     }
 
-    /// The window shown in that viewport.
-    pub fn window_of_viewport_mut(&mut self, vp: ViewportId) -> Option<&mut Window> {
-        self.windows.iter_mut().find(|w| w.viewport == vp && !w.closing)
+    /// The viewport new windows start from: the host's size, icon and app id. Their title and
+    /// place are the app's.
+    pub fn set_window_builder(&mut self, builder: egui::ViewportBuilder) {
+        self.windows.builder = builder;
     }
 
-    fn index(&self, id: WindowId) -> Option<usize> {
-        self.windows.iter().position(|w| w.id == id)
+    /// Whether a close request for the root viewport closes only the window drawn there: true
+    /// while other windows are open. [`WordApp::ui`] closes it (a [`WindowEvent::CloseRequested`]),
+    /// and the host keeps the app running.
+    pub fn closes_a_window(&self) -> bool {
+        self.window_count() > 1 && !self.quit_requested
     }
 
-    fn index_of_viewport(&self, vp: ViewportId) -> Option<usize> {
-        self.windows.iter().position(|w| w.viewport == vp && !w.closing)
+    /// Quit the app (the app menu's Quit): ask about every document with unsaved work, each in
+    /// its window, as [`WordApp::close_requested`] does. True when the app may quit now; the
+    /// host closes it once `quit_requested` is set.
+    pub fn quit(&mut self) -> bool {
+        let go = self.close_requested();
+        if go {
+            self.quit_requested = true;
+        }
+        go
     }
 
-    /// The window whose id, or 1-based number in the Switch Windows list, is `n`.
-    pub fn resolve(&self, n: u64) -> Option<WindowId> {
-        self.snapshot(0).resolve(n)
+    /// Put the drawn window's state away and draw window `key`, with its document active. False
+    /// when there is no such window, or its document has closed ([`WordApp::prune_windows`]
+    /// closes it then); the drawn window stays.
+    pub(crate) fn enter_window(&mut self, key: u64) -> bool {
+        if key == self.windows.shown {
+            self.publish_windows();
+            return true;
+        }
+        let session = &self.session;
+        let Some(w) = self.windows.get_mut(key).filter(|w| w.ui.as_ref().is_some_and(|ui| session.is_open(ui.shown_document))) else {
+            return false;
+        };
+        let Some(mut state) = w.ui.take() else { return false };
+        let view = w.view.take();
+        let from = self.shown_document;
+        self.swap_window(&mut state);
+        let left = std::mem::replace(&mut self.windows.shown, key);
+        if let Some(w) = self.windows.get_mut(left) {
+            w.doc = state.shown_document;
+            w.ui = Some(state);
+        }
+        let to = self.shown_document;
+        self.carry_document_state(from, to);
+        if let Some(view) = view {
+            self.swap_view_in(key, to, view);
+        }
+        self.publish_windows();
+        true
     }
 
-    /// What the engine sees of the windows from window `this` ([`wordcraft_engine::Windows`]).
-    fn snapshot(&self, this: WindowId) -> Windows {
-        let list = self
-            .windows
+    /// Window `key`, on document `doc` (now the session's active one), brings its own view of the
+    /// document: the view the session holds goes to the window on `doc` it belongs to (the one
+    /// without a view of its own), and `view` takes its place, made valid for edits made since.
+    fn swap_view_in(&mut self, key: u64, doc: u64, view: WindowView) {
+        let held = self.session.take_view();
+        if let Some(owner) = self.windows.open.iter_mut().find(|w| w.key != key && w.doc == doc && w.view.is_none()) {
+            owner.view = Some(held);
+        }
+        self.session.put_view(view);
+    }
+
+    /// Open a new window for open document `doc`, focused, and draw it. The window that was drawn
+    /// leaves the File page: whatever it was opening is open. `view` is the new window's view of
+    /// a document another window shows (View › New Window); `None` for a document no window
+    /// shows yet.
+    fn open_window(&mut self, doc: u64, view: Option<WindowView>) {
+        let key = self.windows.next_key;
+        self.windows.next_key = self.windows.next_key.saturating_add(1);
+        let mut state = Box::new(WindowUi::new(doc));
+        // Faces borrowed for the interface (non-Latin file names) stay installed.
+        state.canvas.ime_faces = self.canvas.ime_faces.clone();
+        self.ui.backstage = false;
+        self.windows.open.push(Window { key, id: None, doc, ui: Some(state), requests: Vec::new(), title: String::new(), view });
+        self.enter_window(key);
+        self.focus_window(key);
+    }
+
+    /// View › New Window: another window on the drawn window's document, with the same caret,
+    /// zoom and view, focused and cascaded from the others. Each window then has its own caret
+    /// and view; the document, its undo history and its save state are shared. In one window
+    /// (the web app) and with no document open, nothing happens.
+    pub(crate) fn new_window(&mut self) {
+        if !self.windows.native || !self.has_document() {
+            return;
+        }
+        let view = self.session.copy_view();
+        self.open_window(self.shown_document, Some(view));
+    }
+
+    /// The window that comes forward when the drawn window closes and other windows show its
+    /// document, which then stays open: the one of all the others focused last. `None` when the
+    /// drawn window is its document's only one.
+    pub(crate) fn other_window_on_document(&self) -> Option<u64> {
+        let shown = self.windows.shown;
+        let doc = self.windows.get(shown)?.doc;
+        if !self.windows.native || !self.windows.open.iter().any(|w| w.key != shown && w.doc == doc) {
+            return None;
+        }
+        self.windows.recent_keys().into_iter().find(|&k| k != shown)
+    }
+
+    /// Whether command `id` (File › Close) closes the drawn window alone, asking nothing: other
+    /// windows show its document. Quitting closes documents, not windows.
+    pub(crate) fn closes_only_its_window(&self, id: &str, params: &Value) -> bool {
+        id == "file.close" && params.get("quit").and_then(Value::as_bool) != Some(true) && self.other_window_on_document().is_some()
+    }
+
+    /// Close the drawn window alone: other windows show its document, which stays open as it is.
+    pub(crate) fn close_window_only(&mut self) -> bool {
+        let Some(next) = self.other_window_on_document() else { return false };
+        self.close_shown_window(next);
+        true
+    }
+
+    /// The drawn window's document has closed: draw window `to` and close this one.
+    fn close_shown_window(&mut self, to: u64) {
+        let closing = self.windows.shown;
+        if !self.enter_window(to) {
+            return;
+        }
+        self.windows.open.retain(|w| w.key != closing);
+        self.focus_window(to);
+    }
+
+    /// Bring window `key` to the front (now, or once the frame's drawing ends) and make it the
+    /// active one.
+    pub(crate) fn focus_window(&mut self, key: u64) {
+        self.windows.focus = Some(key);
+        self.settle_windows();
+    }
+
+    /// [`Windows::settle`]; a window that moved into the root viewport keeps its place on the
+    /// page (the page's scroll state is the viewport's).
+    fn settle_windows(&mut self) {
+        let root = |w: &Windows| w.viewports.as_ref().and_then(Viewports::root);
+        let before = root(&self.windows);
+        self.windows.settle(self.ctx.as_ref());
+        self.publish_windows();
+        let Some(adopted) = root(&self.windows).filter(|r| before.is_some_and(|b| b != *r)) else { return };
+        let Some(key) = self.windows.list.get(adopted).copied() else { return };
+        if key == self.windows.shown {
+            self.canvas.scroll_request = Some(self.canvas.scroll_offset);
+        } else if let Some(w) = self.windows.get_mut(key).and_then(|w| w.ui.as_mut()) {
+            w.canvas.scroll_request = Some(w.canvas.scroll_offset);
+        }
+    }
+
+    /// Keep a window for every open document: windows whose document closed (an agent closed it)
+    /// close, and documents with no window (an agent made one while another was active) get one
+    /// behind the others. The active document is left to [`WordApp::sync_document`].
+    pub(crate) fn prune_windows(&mut self) {
+        let shown = self.windows.shown;
+        let session = &self.session;
+        let before = self.windows.open.len();
+        self.windows.open.retain(|w| w.key == shown || session.is_open(w.doc));
+        let mut changed = self.windows.open.len() != before;
+        let active = self.session.document_id();
+        for d in self.session.documents() {
+            if d.id == active || Some(d.id) == self.no_document || d.id == self.shown_document || self.windows.of_doc(d.id).is_some() {
+                continue;
+            }
+            let key = self.windows.next_key;
+            self.windows.next_key = self.windows.next_key.saturating_add(1);
+            let mut state = Box::new(WindowUi::new(d.id));
+            state.canvas.ime_faces = self.canvas.ime_faces.clone();
+            self.windows.open.push(Window { key, id: None, doc: d.id, ui: Some(state), requests: Vec::new(), title: String::new(), view: None });
+            changed = true;
+        }
+        if changed {
+            self.settle_windows();
+        }
+    }
+
+    /// [`WordApp::sync_document`] with native windows: the session's active document `id` isn't
+    /// the drawn window's. Another open document shows in its window, which comes to the front,
+    /// or in a new window; when the drawn window's document has closed, its window closes and the
+    /// one showing `id` comes forward. The Start screen's empty window stays beside the window
+    /// that shows `id`. False when the window itself is to show `id` instead: its document was
+    /// replaced, or it is the Start screen's empty window and no other window shows `id`.
+    pub(crate) fn follow_in_windows(&mut self, id: u64) -> bool {
+        let left = self.shown_document;
+        let stand_in = self.no_document == Some(left);
+        let other = self.windows.of_doc(id).filter(|&k| k != self.windows.shown);
+        if self.session.is_open(left) {
+            match other {
+                Some(key) if self.enter_window(key) => self.focus_window(key),
+                _ if stand_in => return false,
+                _ => self.open_window(id, None),
+            }
+            return true;
+        }
+        if let Some(key) = other {
+            self.close_shown_window(key);
+            return true;
+        }
+        false
+    }
+
+    /// The drawn window now shows document `id` (its own was replaced).
+    pub(crate) fn window_shows(&mut self, id: u64) {
+        let shown = self.windows.shown;
+        if let Some(w) = self.windows.get_mut(shown) {
+            w.doc = id;
+        }
+    }
+
+    /// Close the active document. With windows, its window closes and the window focused before
+    /// it comes forward; else the window shows the next document. The session leaves a new blank
+    /// document when it was the last.
+    pub(crate) fn close_shown_document(&mut self) -> Result<(), String> {
+        let doc = self.session.document_id();
+        let next = self.windows.next_doc(self.windows.shown);
+        self.session.close_document(doc).map_err(|e| e.to_string())?;
+        if let Some(next) = next
+            && self.session.is_open(next)
+            && let Err(e) = self.session.switch_document(next)
+        {
+            log::warn!("closing document {doc}: couldn't show document {next}: {e}");
+        }
+        self.sync_document();
+        Ok(())
+    }
+
+    /// A request made for open document `document`, which another window shows: that window
+    /// handles it when it draws next (a dialog opens there). The active window and document stay
+    /// as they are, so the control channel and agents go on working where they were. False when
+    /// no other window shows the document (or windows aren't native).
+    pub(crate) fn queue_for_window(&mut self, document: u64, req: &Value) -> bool {
+        if !self.windows.native {
+            return false;
+        }
+        let Some(key) = self.windows.of_doc(document).filter(|&k| k != self.windows.shown) else { return false };
+        if let Some(w) = self.windows.get_mut(key) {
+            w.requests.push(req.clone());
+        }
+        if let Some(ctx) = &self.ctx {
+            ctx.request_repaint();
+        }
+        true
+    }
+
+    /// View › Window › Switch Windows with native windows: every window by its title (two
+    /// windows on one document as `Name:1`, `Name:2`) with its key, the active one marked,
+    /// unsaved ones with the title bar's dot. Choosing one brings it to the front
+    /// ([`WordApp::show_window`]).
+    pub(crate) fn switch_windows_entries(&self) -> Vec<(u64, String, bool)> {
+        self.windows
+            .menu
+            .entries()
             .iter()
-            .filter(|w| !w.closing)
-            .map(|w| {
-                let app = &self.holder_of(w).app;
-                WindowEntry {
-                    id: w.id,
-                    title: app.title_stem(),
-                    path: app.session.path.as_ref().map(|p| p.to_string_lossy().into_owned()),
-                    document: w.group.unwrap_or(0),
-                }
+            .filter_map(|e| {
+                let w = self.windows.open.iter().find(|w| w.id == Some(e.id))?;
+                Some((w.key, format!("{}{}", e.title, if e.dirty { " •" } else { "" }), w.key == self.windows.shown))
             })
-            .collect();
-        let pair = self.pair.as_ref();
-        let partner = pair.and_then(|p| {
-            if p.left == this {
-                Some(p.right)
-            } else if p.right == this {
-                Some(p.left)
-            } else {
-                None
-            }
-        });
-        Windows { host: true, this, list, side_by_side: partner, sync_scroll: partner.is_some() && pair.is_some_and(|p| p.sync) }
+            .collect()
     }
 
-    /// The window whose app holds `w`'s document: `w` itself, or the window of its group that
-    /// drew last (View › New Window).
-    fn holder_of<'a>(&'a self, w: &'a Window) -> &'a Window {
-        w.group
-            .and_then(|g| self.groups.iter().find(|group| group.id == g))
-            .and_then(|group| self.windows.iter().find(|h| h.id == group.holder))
-            .unwrap_or(w)
-    }
-
-    /// The window at `i` takes its turn with its document (View › New Window): the group's
-    /// session moves from the window that drew last into this one, each keeping its own view.
-    fn take_turn(&mut self, i: usize) {
-        let id = self.windows[i].id;
-        let Some(g) = self.windows[i].group else { return };
-        let Some(gi) = self.groups.iter().position(|group| group.id == g) else { return };
-        let holder = self.groups[gi].holder;
-        if holder == id {
-            return;
-        }
-        let Some(h) = self.windows.iter().position(|w| w.id == holder) else {
-            self.groups[gi].holder = id;
-            return;
-        };
-        let (a, b) = if h < i { (h, i) } else { (i, h) };
-        let (first, rest) = self.windows.split_at_mut(b);
-        let (holder_w, this_w) = if h < i { (&mut first[a], &mut rest[0]) } else { (&mut rest[0], &mut first[a]) };
-        holder_w.app.swap_document_state(&mut this_w.app);
-        // The session carries the holder's view: keep it for the holder, give this window its own.
-        if let Some(mut view) = this_w.view.take() {
-            this_w.app.session.swap_view(&mut view);
-            holder_w.view = Some(view);
-        }
-        this_w.app.view_number = this_w.view_number;
-        holder_w.app.view_number = holder_w.view_number;
-        self.groups[gi].holder = id;
-    }
-
-    /// After a window's frame: the others on its document see what changed (View › New Window).
-    fn sync_group(&mut self, i: usize, ctx: &egui::Context) {
-        let Some(g) = self.windows[i].group else { return };
-        let Some(group) = self.groups.iter_mut().find(|group| group.id == g) else { return };
-        let app = &self.windows[i].app;
-        let now = (app.session.rev(), app.session.dirty, app.session.path.clone());
-        if group.seen == now {
-            return;
-        }
-        group.seen = now;
-        let id = self.windows[i].id;
-        for w in self.windows.iter().filter(|w| w.id != id && w.group == Some(g) && !w.closing) {
-            ctx.request_repaint_of(w.viewport);
+    /// Bring window `key` to the front and make it the active one, with its document.
+    pub(crate) fn show_window(&mut self, key: u64) {
+        if self.enter_window(key) {
+            self.focus_window(key);
         }
     }
 
-    /// View › New Window: another window on the window's document, opening where that window
-    /// is; the two (or more) share the document, each with its own caret, scroll and zoom, and
-    /// their titles are numbered (`Document1:1`, `Document1:2`), as Word's.
-    fn new_window_on(&mut self, origin: WindowId, ctx: &egui::Context) {
-        let Some(oi) = self.index(origin) else { return };
-        self.take_turn(oi);
-        let mut app = (self.new_app)();
-        let (geometry, work) = {
-            let o = &self.windows[oi];
-            app.adopt_settings(&o.app.prefs());
-            app.integrated_titlebar = o.app.integrated_titlebar;
-            app.mac_titlebar = o.app.mac_titlebar;
-            app.autosave = o.app.autosave;
-            (o.app.ui.window, self.work_area_of(o))
-        };
-        app.session.windows.host = true;
-        let view = self.windows[oi].app.session.clone_view();
-        app.canvas.scroll_to_caret = true;
-        let g = match self.windows[oi].group {
-            Some(g) => g,
-            None => {
-                let g = self.next_group;
-                self.next_group = self.next_group.wrapping_add(1).max(1);
-                let seen = (self.windows[oi].app.session.rev(), self.windows[oi].app.session.dirty, self.windows[oi].app.session.path.clone());
-                self.groups.push(Group { id: g, members: vec![origin], holder: origin, seen, next_number: 2 });
-                self.windows[oi].group = Some(g);
-                self.windows[oi].view_number = Some(1);
-                self.windows[oi].app.view_number = Some(1);
-                g
-            }
-        };
-        let id = self.next_id;
-        self.next_id = self.next_id.wrapping_add(1).max(2);
-        let number = self.groups.iter_mut().find(|group| group.id == g).map(|group| {
-            group.members.push(id);
-            let n = group.next_number;
-            group.next_number += 1;
-            n
-        });
-        app.view_number = number;
-        let viewport = ViewportId::from_hash_of(("wordcraft-window", id));
-        let title = format!("{}:{} - {}", app.title_stem(), number.unwrap_or(1), crate::APP_NAME);
-        let mut builder = self.template.clone().with_title(title);
-        if let Some(geometry) = geometry.map(|geometry| cascade(geometry, work)) {
-            builder = geometry.apply(builder);
+    /// The drawn window's title: its document's name as View › Window › Switch Windows gives it.
+    pub(crate) fn window_title(&self) -> String {
+        if !self.has_document() {
+            return crate::APP_NAME.to_string();
         }
-        let mut window = Window::new(id, viewport, app, builder);
-        window.group = Some(g);
-        window.view = Some(view);
-        window.view_number = number;
-        window.focused_at = self.frames;
-        self.windows.push(window);
-        self.active = id;
-        ctx.request_repaint_of(ViewportId::ROOT);
+        let mut name = self.windows.menu_title(self.windows.shown).map(str::to_string).unwrap_or_else(|| self.title_stem());
+        // X11 converts window titles to C strings, which cannot contain NUL (#3634).
+        name.retain(|c| c != '\0');
+        title(&name, self.session.dirty)
     }
 
-    /// A window leaves its document group before closing: the session goes to another member
-    /// when it held it, and a group of one is no group (its window's title loses its number).
-    fn leave_group(&mut self, id: WindowId) {
-        let Some(i) = self.index(id) else { return };
-        let Some(g) = self.windows[i].group.take() else { return };
-        let Some(gi) = self.groups.iter().position(|group| group.id == g) else { return };
-        self.groups[gi].members.retain(|m| *m != id);
-        let holder = self.groups[gi].holder;
-        if holder == id
-            && let Some(next) = self.groups[gi].members.first().copied()
-            && let Some(ni) = self.index(next)
-        {
-            let (a, b) = if ni < i { (ni, i) } else { (i, ni) };
-            let (first, rest) = self.windows.split_at_mut(b);
-            let (next_w, this_w) = if ni < i { (&mut first[a], &mut rest[0]) } else { (&mut rest[0], &mut first[a]) };
-            this_w.app.swap_document_state(&mut next_w.app);
-            if let Some(mut view) = next_w.view.take() {
-                next_w.app.session.swap_view(&mut view);
-            }
-            self.groups[gi].holder = next;
-        }
-        self.windows[i].view = None;
-        self.windows[i].view_number = None;
-        self.windows[i].app.view_number = None;
-        if self.groups[gi].members.len() <= 1 {
-            for m in std::mem::take(&mut self.groups[gi].members) {
-                if let Some(w) = self.get_mut(m) {
-                    w.group = None;
-                    w.view = None;
-                    w.view_number = None;
-                    w.app.view_number = None;
-                }
-            }
-            self.groups.remove(gi);
-        }
-    }
-
-    /// The window's frame, before it is drawn: the engine's view of the windows, the pooled
-    /// fonts, the app's own logic, then the window's geometry, focus, close button and requests.
-    pub fn logic(&mut self, vp: ViewportId, ctx: &egui::Context) {
-        if self.ctx.is_none() {
-            self.ctx = Some(ctx.clone());
-        }
-        let Some(i) = self.index_of_viewport(vp) else { return };
-        self.take_turn(i);
-        self.frames += 1;
-        let id = self.windows[i].id;
-        crate::set_window_salt(id);
-        crate::set_window_is_root(vp == ViewportId::ROOT);
-        if vp == ViewportId::ROOT {
-            self.drain_control(ctx);
-            self.quit_tick(ctx);
-            self.pass_wake_ups_on(ctx);
-            // A menu event wakes the root viewport; the window in use takes it in its frame.
-            if let Some(menu) = &mut self.menu
-                && menu.pull()
-                && let Some(w) = self.active()
-                && w.viewport != ViewportId::ROOT
-            {
-                ctx.request_repaint_of(w.viewport);
-            }
-        }
-        self.pass_screenshots_on(vp, ctx);
-        self.pool_fonts();
-        let snapshot = self.snapshot(id);
-        let single = self.windows.len() == 1;
-        let active = self.is_active_viewport(vp);
-        let w = &mut self.windows[i];
-        w.app.session.windows = snapshot;
-        w.app.applies_zoom = single || self.active == id;
-        w.app.menu_bar_installed = self.menu.is_some();
-        if active && let Some(menu) = &mut self.menu {
-            native_menu::run(menu, &mut w.app, ctx);
-        }
-        w.app.logic(ctx);
-        // Where the window is, for cascading, tiling and the saved geometry.
-        let info = ctx.input(|i| i.viewport().clone());
-        w.outer = info.outer_rect;
-        w.inner = info.inner_rect;
-        w.monitor = info.monitor_size;
-        w.visible = info.visible();
-        let content = ctx.input(|i| i.viewport_rect().size());
-        w.app.ui.window = WindowGeometry::track(w.app.ui.window, &info, content);
-        if info.focused == Some(true) {
-            w.focused_at = self.frames;
-            self.active = id;
-        }
-        // The window's close button, or the document's own request to close (File › Close with
-        // unsaved changes answered Don't Save, `file.close {"quit": true}`): with unsaved changes
-        // the app asks first and the close waits (`WordApp::close_requested`).
-        let closing = ctx.input(|i| i.viewport().close_requested());
-        let allowed = w.app.quit_requested || (closing && w.app.close_requested());
-        if closing && !allowed {
-            ctx.send_viewport_cmd(ViewportCommand::CancelClose);
-        }
-        if allowed {
-            // The window is gone (or the root now shows another document): its frame is over.
-            self.close_window(id, ctx);
-            return;
-        }
-        let requests = std::mem::take(&mut self.windows[i].app.window_requests);
-        for req in requests {
-            self.handle(id, req, ctx);
-        }
-        // A change made by a click shows in the settings on the next frame, which the click's
-        // repaint brings without input of its own: look for one frame longer than the input.
-        if ctx.input(|i| !i.events.is_empty()) {
-            self.share_pending = 2;
-        }
-        if self.share_pending > 0 {
-            self.share_pending -= 1;
-            self.share_settings(id, ctx);
-        }
-    }
-
-    /// The window's frame: draw its app, pass a scroll on to its Side by Side partner, tell the
-    /// host's hook, and (the root) declare the other windows so they stay open.
-    pub fn ui(&mut self, vp: ViewportId, ui: &mut egui::Ui) {
+    /// Draw every window, each in its viewport (see the module documentation).
+    pub(crate) fn windows_ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        if let Some(i) = self.index_of_viewport(vp) {
-            let id = self.windows[i].id;
-            crate::set_window_salt(id);
-            crate::set_window_is_root(vp == ViewportId::ROOT);
-            self.windows[i].app.ui(ui);
-            self.sync_scroll_tick(i, &ctx);
-            self.sync_group(i, &ctx);
-            if self.is_active_viewport(vp)
-                && let Some(menu) = &mut self.menu
-            {
-                native_menu::sync(menu, &self.windows[i].app, &ctx);
-            }
-            let focused = ctx.input(|i| i.viewport().focused == Some(true));
-            if let Some(after) = &mut self.after_ui {
-                after(&self.windows[i].app, focused);
-            }
-        }
-        if vp == ViewportId::ROOT {
-            self.declare_children(&ctx);
-        }
-        crate::set_window_salt(0);
-        crate::set_window_is_root(true);
-    }
-
-    /// Work another thread finishes (a file dialog's answer, a print job, a Zotero call) wakes
-    /// egui's root viewport, whichever window asked: a root frame that no input caused passes the
-    /// wake-up on to the windows waiting on such work, so their frames pick the answer up.
-    fn pass_wake_ups_on(&self, ctx: &egui::Context) {
-        if self.windows.len() < 2 || ctx.input(|i| !i.events.is_empty()) {
+        self.prune_windows();
+        self.settle_windows();
+        self.windows.menu = self.window_menu(&self.windows.list);
+        // A backend that can't open native windows (egui embeds them in the root: tests,
+        // `ui_shot`) shows the active window alone. Embedded, every window would draw the same
+        // widgets in one viewport.
+        self.windows.driven = !ctx.embed_viewports() && self.windows.viewports.is_some();
+        if !self.windows.driven {
+            let active = self.windows.recent_keys().first().copied().unwrap_or(self.windows.shown);
+            self.draw_window(ui, active);
+            self.after_windows();
             return;
         }
-        for w in self.windows.iter().filter(|w| w.viewport != ViewportId::ROOT && !w.closing && w.app.waits_on_background()) {
-            ctx.request_repaint_of(w.viewport);
+        let Some(mut viewports) = self.windows.viewports.take() else { return };
+        self.windows.drawing_root = viewports.root();
+        let mut list = std::mem::take(&mut self.windows.list);
+        self.windows.recent = list.recent().filter_map(|id| list.get(id).copied()).collect();
+        let titles: HashMap<u64, String> = self.windows.open.iter().map(|w| (w.key, w.title.clone())).collect();
+        let base = self.windows.builder.clone();
+        self.windows.showing = true;
+        let events = viewports.show(
+            ui,
+            &mut list,
+            |_, key| match titles.get(key).filter(|t| !t.is_empty()) {
+                Some(t) => base.clone().with_title(t.clone()),
+                None => base.clone().with_title(crate::APP_NAME),
+            },
+            |ui, _, key| self.draw_window(ui, *key),
+        );
+        self.windows.showing = false;
+        self.windows.list = list;
+        self.windows.viewports = Some(viewports);
+        self.window_events(&ctx, &events);
+        self.after_windows();
+    }
+
+    /// After the frame's drawing: windows opened, closed or focused meanwhile settle, and the
+    /// active window's state comes back.
+    fn after_windows(&mut self) {
+        self.prune_windows();
+        self.settle_windows();
+        if let Some(&active) = self.windows.recent_keys().first() {
+            self.enter_window(active);
         }
     }
 
-    /// A screenshot (`ui.screenshot`) comes back as an event in whichever viewport's frame runs
-    /// next, not necessarily the window that asked: one taken of another window goes to that
-    /// window's app (this window's own frame handles its own).
-    fn pass_screenshots_on(&mut self, vp: ViewportId, ctx: &egui::Context) {
-        let foreign: Vec<(ViewportId, u64, std::sync::Arc<egui::ColorImage>)> = ctx.input(|i| {
-            i.raw
-                .events
-                .iter()
-                .filter_map(|e| match e {
-                    egui::Event::Screenshot { viewport_id, .. } if *viewport_id != vp => {
-                        crate::screenshot_event(e).map(|(token, image)| (*viewport_id, token, image))
-                    }
-                    _ => None,
-                })
-                .collect()
-        });
-        for (owner, token, image) in foreign {
-            if let Some(w) = self.window_of_viewport_mut(owner) {
-                w.app.screenshot_arrived(token, &image);
+    /// View › Window › Switch Windows for the windows in `list`.
+    fn window_menu(&self, list: &WindowList<u64>) -> WindowMenu {
+        let docs = self.session.documents();
+        let doc_of: HashMap<u64, u64> = self.windows.open.iter().map(|w| (w.key, w.doc)).collect();
+        WindowMenu::new(list, |_, key| {
+            let doc = doc_of.get(key).copied().unwrap_or_default();
+            match docs.iter().find(|d| d.id == doc) {
+                Some(d) => Document { key: doc, name: documents::display_title(d), dirty: d.dirty },
+                None => Document { key: doc, name: String::new(), dirty: false },
             }
-        }
-    }
-
-    /// eframe's raw input hook, for the viewport the input is for: the menu bar's events go to
-    /// the window in use (the one the menu shows), then the window's own hook runs.
-    pub fn raw_input_hook(&mut self, raw: &mut egui::RawInput) {
-        let Some(i) = self.index_of_viewport(raw.viewport_id) else { return };
-        self.take_turn(i);
-        if self.is_active_viewport(raw.viewport_id)
-            && let Some(menu) = &mut self.menu
-        {
-            native_menu::raw_input(menu, &mut self.windows[i].app, raw);
-        }
-        self.windows[i].app.raw_input_hook(raw);
-    }
-
-    /// The root pass: every other window is declared, so egui keeps it; a window being closed is
-    /// left out, which closes it, and dropped.
-    fn declare_children(&mut self, ctx: &egui::Context) {
-        for w in &self.windows {
-            if w.viewport == ViewportId::ROOT || w.closing {
-                continue;
-            }
-            let vp = w.viewport;
-            ctx.show_viewport_deferred(vp, w.builder.clone(), move |ui, _class| {
-                Host::with(|h| {
-                    h.logic(vp, ui.ctx());
-                    h.ui(vp, ui);
-                });
-            });
-        }
-        for w in self.windows.iter_mut().filter(|w| w.closing) {
-            w.app.session.finish_recovery();
-        }
-        self.windows.retain(|w| !w.closing);
-    }
-
-    /// Carry out what a window asked for.
-    fn handle(&mut self, from: WindowId, req: WindowRequest, ctx: &egui::Context) {
-        match req {
-            WindowRequest::Open(params) => {
-                if let Err(e) = self.spawn(from, Some(("file.open", params.clone())), ctx) {
-                    let path = params.get("path").and_then(Value::as_str).unwrap_or("");
-                    log::warn!("{path}: {e}");
-                    let msg = crate::i18n::fmt(tl!("Couldn't open {path}: {error}"), &[("path", path), ("error", &e)]);
-                    if let Some(w) = self.get_mut(from) {
-                        w.app.status(msg);
-                    }
-                }
-            }
-            WindowRequest::New { command, params } => {
-                if let Err(e) = self.spawn(from, Some((&command, params)), ctx)
-                    && let Some(w) = self.get_mut(from)
-                {
-                    w.app.status(e);
-                }
-            }
-            WindowRequest::Focus(id) => self.focus(id, ctx),
-            WindowRequest::ArrangeAll => self.arrange_all(ctx),
-            WindowRequest::SideBySide { on: false, .. } => self.end_side_by_side(ctx),
-            WindowRequest::SideBySide { on: true, with } => {
-                let partner = with.or_else(|| {
-                    let others: Vec<WindowId> = self.windows.iter().filter(|w| !w.closing && w.id != from).map(|w| w.id).collect();
-                    match others.as_slice() {
-                        [one] => Some(*one),
-                        _ => None,
-                    }
-                });
-                if let Some(partner) = partner.filter(|p| *p != from && self.get(*p).is_some()) {
-                    self.begin_side_by_side(from, partner, ctx);
-                }
-            }
-            WindowRequest::SyncScroll(on) => {
-                if let Some(p) = &mut self.pair {
-                    p.sync = on;
-                    for w in &mut self.windows {
-                        w.scroll_seen = Some(w.app.canvas.scroll_offset);
-                        w.scroll_applied = false;
-                    }
-                }
-            }
-            WindowRequest::ResetPosition => {
-                if let Some(p) = &self.pair {
-                    let (l, r) = (p.left, p.right);
-                    self.place_halves(l, r, ctx);
-                }
-            }
-            WindowRequest::Close => {
-                if self.windows.iter().filter(|w| !w.closing).count() > 1 {
-                    self.close_window(from, ctx);
-                }
-            }
-            WindowRequest::Quit => self.request_quit(ctx),
-            WindowRequest::NewWindow => self.new_window_on(from, ctx),
-            WindowRequest::CloseDocumentWindows => {
-                let Some(g) = self.get(from).and_then(|w| w.group) else { return };
-                let others: Vec<WindowId> = self.windows.iter().filter(|w| w.id != from && w.group == Some(g) && !w.closing).map(|w| w.id).collect();
-                for id in others {
-                    self.close_window(id, ctx);
-                }
-            }
-        }
-    }
-
-    /// A new window from `origin`, running `command` (New or Open) in it first: a command that
-    /// fails opens no window and is the error. The window takes the settings of the window it
-    /// came from and appears a step down and right of it.
-    fn spawn(&mut self, origin: WindowId, command: Option<(&str, Value)>, ctx: &egui::Context) -> Result<WindowId, String> {
-        let mut app = (self.new_app)();
-        let (geometry, work) = match self.get(origin) {
-            Some(o) => {
-                app.adopt_settings(&o.app.prefs());
-                app.integrated_titlebar = o.app.integrated_titlebar;
-                app.mac_titlebar = o.app.mac_titlebar;
-                app.autosave = o.app.autosave;
-                (o.app.ui.window, self.work_area_of(o))
-            }
-            None => (None, None),
-        };
-        // The command runs in the new window as in a single one (no host: it opens here, not in
-        // yet another window); the host's view of the windows arrives before its first frame.
-        if let Some((cmd, params)) = command {
-            app.run(cmd, params)?;
-        }
-        app.session.windows.host = true;
-        let id = self.next_id;
-        self.next_id = self.next_id.wrapping_add(1).max(2);
-        let viewport = ViewportId::from_hash_of(("wordcraft-window", id));
-        let mut builder = self.template.clone().with_title(format!("{} - {}", app.title_stem(), crate::APP_NAME));
-        if let Some(g) = geometry.map(|g| cascade(g, work)) {
-            builder = g.apply(builder);
-        }
-        let mut window = Window::new(id, viewport, app, builder);
-        window.focused_at = self.frames;
-        self.windows.push(window);
-        self.active = id;
-        ctx.request_repaint_of(ViewportId::ROOT);
-        Ok(id)
-    }
-
-    /// Open documents handed to the app (the command line, Finder): each in a window of its own,
-    /// the first one in the active window when it shows nothing yet.
-    pub fn open_paths(&mut self, paths: impl IntoIterator<Item = String>, ctx: &egui::Context) {
-        for p in paths {
-            let Some(w) = self.active_mut() else { return };
-            let id = w.id;
-            match w.app.run("file.open", json!({"path": p})) {
-                // Leave Backstage, as opening from the Open dialog does.
-                Ok(_) => w.app.ui.backstage = false,
-                Err(e) => {
-                    log::warn!("{p}: {e}");
-                    let msg = crate::i18n::fmt(tl!("Couldn't open {path}: {error}"), &[("path", &p), ("error", &e)]);
-                    w.app.status(msg);
-                }
-            }
-            let requests = std::mem::take(&mut w.app.window_requests);
-            for req in requests {
-                self.handle(id, req, ctx);
-            }
-        }
-    }
-
-    /// Bring a window to the front (and out of the Dock or taskbar).
-    fn focus(&mut self, id: WindowId, ctx: &egui::Context) {
-        let Some(w) = self.get_mut(id) else { return };
-        let viewport = w.viewport;
-        w.app.canvas.want_focus = true;
-        ctx.send_viewport_cmd_to(viewport, ViewportCommand::Minimized(false));
-        ctx.send_viewport_cmd_to(viewport, ViewportCommand::Focus);
-        ctx.request_repaint_of(viewport);
-        self.active = id;
-    }
-
-    /// Close a window. The root viewport is the app's window: with others open, the window that
-    /// last had the focus moves into it (the root takes that window's place on screen and the
-    /// other viewport goes); the last window closing ends the app.
-    fn close_window(&mut self, id: WindowId, ctx: &egui::Context) {
-        let Some(i) = self.index(id) else { return };
-        if self.pair.as_ref().is_some_and(|p| p.left == id || p.right == id) {
-            self.pair = None;
-        }
-        self.leave_group(id);
-        if self.windows[i].viewport == ViewportId::ROOT {
-            let successor = self.windows.iter().enumerate().filter(|(j, w)| *j != i && !w.closing).max_by_key(|(_, w)| w.focused_at).map(|(j, _)| j);
-            let Some(j) = successor else {
-                self.exit = true;
-                return;
-            };
-            let moved = self.windows.remove(j);
-            let Some(root) = self.windows.iter_mut().find(|w| w.id == id) else { return };
-            let mut old = std::mem::replace(&mut root.app, moved.app);
-            old.session.finish_recovery();
-            drop(old);
-            root.id = moved.id;
-            root.focused_at = self.frames;
-            root.scroll_seen = None;
-            root.scroll_applied = false;
-            root.app.rehomed();
-            // The root takes the closed window's place, so what the user sees is that window
-            // closing and the other staying where it was.
-            if let Some(outer) = moved.outer {
-                ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::OuterPosition(outer.min));
-            }
-            if let Some(inner) = moved.inner {
-                ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::InnerSize(inner.size()));
-            }
-            ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Focus);
-            self.active = moved.id;
-        } else {
-            self.windows[i].closing = true;
-            if self.active == id {
-                self.active = self.windows.iter().filter(|w| !w.closing).max_by_key(|w| w.focused_at).map_or(1, |w| w.id);
-            }
-        }
-        ctx.request_repaint_of(ViewportId::ROOT);
-    }
-
-    /// Quit: close every window, asking about unsaved changes one window at a time (the prompt
-    /// shows in the window it is about); Cancel in a prompt keeps the app open.
-    pub fn request_quit(&mut self, ctx: &egui::Context) {
-        if self.quit != Quit::No {
-            return;
-        }
-        self.quit_next(ctx);
-    }
-
-    fn quit_next(&mut self, ctx: &egui::Context) {
-        loop {
-            let Some(w) = self.windows.iter_mut().find(|w| !w.closing) else {
-                self.exit = true;
-                self.quit = Quit::No;
-                return;
-            };
-            let id = w.id;
-            if w.app.printing.busy() {
-                // `close_requested` said so on the status line; the quit is off.
-                let _ = w.app.close_requested();
-                self.quit = Quit::No;
-                return;
-            }
-            if w.app.close_requested() {
-                self.close_window(id, ctx);
-                if self.exit {
-                    self.quit = Quit::No;
-                    return;
-                }
-                continue;
-            }
-            self.quit = Quit::Asking(id);
-            self.focus(id, ctx);
-            return;
-        }
-    }
-
-    /// Each root frame while quitting: the prompt was answered (the window closes and the next
-    /// one is asked) or cancelled (the quit is off).
-    fn quit_tick(&mut self, ctx: &egui::Context) {
-        let Quit::Asking(id) = self.quit else { return };
-        let Some(w) = self.get_mut(id) else {
-            self.quit = Quit::No;
-            self.quit_next(ctx);
-            return;
-        };
-        if w.app.quit_requested {
-            self.close_window(id, ctx);
-            self.quit = Quit::No;
-            if !self.exit {
-                self.quit_next(ctx);
-            }
-        } else if w.app.dialog.is_none() && !w.app.file_dialog_open() {
-            self.quit = Quit::No;
-        }
-    }
-
-    /// The control channel (`--control`): `ui.windows` lists the windows, `ui.focus` brings one
-    /// forward and `app.quit` closes them all; every other request goes to the window its
-    /// `window` parameter names (an id or a Switch Windows number), else to the window in use,
-    /// and is answered from that window's own frame. A window that is minimized or covered gets
-    /// no frame until it shows again (eframe), so a request that named no window goes to the
-    /// first window instead while the one in use is hidden: the first window's logic always runs.
-    fn drain_control(&mut self, ctx: &egui::Context) {
-        let Some(rx) = self.control_rx.take() else { return };
-        while let Ok(req) = rx.try_recv() {
-            if req.method == "ui.windows" {
-                let _ = req.reply.send(json!({"ok": true, "result": self.windows_json()}));
-                continue;
-            }
-            let active = self.active().map(|w| w.id);
-            let (named, target) = match req.params.get("window") {
-                None | Some(Value::Null) => (false, active),
-                Some(Value::String(s)) if s == "active" => (false, active),
-                Some(v) => (true, v.as_u64().and_then(|n| self.resolve(n))),
-            };
-            let Some(mut target) = target else {
-                let _ = req.reply.send(json!({"ok": false, "error": "no such window; `window` is an id or a number from ui.windows"}));
-                continue;
-            };
-            match req.method.as_str() {
-                "ui.focus" => {
-                    self.focus(target, ctx);
-                    let _ = req.reply.send(json!({"ok": true, "result": {"window": target}}));
-                    continue;
-                }
-                "app.quit" => {
-                    self.request_quit(ctx);
-                    let _ = req.reply.send(json!({"ok": true, "result": {}}));
-                    continue;
-                }
-                _ => {}
-            }
-            if !named
-                && self.get(target).is_some_and(|w| w.viewport != ViewportId::ROOT && w.visible == Some(false))
-                && let Some(root) = self.windows.iter().find(|w| w.viewport == ViewportId::ROOT && !w.closing)
-            {
-                target = root.id;
-            }
-            if let Some(w) = self.get_mut(target) {
-                w.app.control_inbox.push(req);
-                ctx.request_repaint_of(w.viewport);
-            }
-        }
-        self.control_rx = Some(rx);
-    }
-
-    /// The windows as `ui.windows` reports them.
-    pub fn windows_json(&self) -> Value {
-        let active = self.active().map(|w| w.id);
-        json!({
-            "active": active,
-            "windows": self.windows.iter().filter(|w| !w.closing).map(|w| json!({
-                "id": w.id,
-                "title": self.holder_of(w).app.title_stem(),
-                "path": self.holder_of(w).app.session.path.as_ref().map(|p| p.to_string_lossy()),
-                "dirty": self.holder_of(w).app.session.dirty,
-                "active": Some(w.id) == active,
-                "root": w.viewport == ViewportId::ROOT,
-                "sideBySide": self.pair.as_ref().is_some_and(|p| p.left == w.id || p.right == w.id),
-                "document": w.group,
-                "viewNumber": w.view_number,
-            })).collect::<Vec<_>>(),
-            "syncScroll": self.pair.as_ref().is_some_and(|p| p.sync),
         })
     }
 
-    /// The work area the window is on: the platform's answer, else its monitor less a system bar.
-    fn work_area_of(&self, w: &Window) -> Option<Rect> {
-        if let Some(f) = &self.work_area
-            && let Some(r) = f(w.outer)
-        {
-            return Some(r);
-        }
-        let m = w.monitor.filter(|m| m.is_finite() && m.x > 0.0 && m.y > 0.0)?;
-        Some(Rect::from_min_max(pos2(0.0, 0.0), pos2(m.x, m.y - SYSTEM_BAR)))
-    }
-
-    /// Put a window's frame at `outer` (its content size follows from the frame's).
-    fn place(&self, id: WindowId, outer: Rect, ctx: &egui::Context) {
-        let Some(w) = self.get(id) else { return };
-        let insets = match (w.outer, w.inner) {
-            (Some(o), Some(i)) => (o.size() - i.size()).max(Vec2::ZERO),
-            _ => Vec2::ZERO,
-        };
-        let size = (outer.size() - insets).max(MIN_SIZE);
-        ctx.send_viewport_cmd_to(w.viewport, ViewportCommand::Maximized(false));
-        ctx.send_viewport_cmd_to(w.viewport, ViewportCommand::Minimized(false));
-        ctx.send_viewport_cmd_to(w.viewport, ViewportCommand::OuterPosition(outer.min));
-        ctx.send_viewport_cmd_to(w.viewport, ViewportCommand::InnerSize(size));
-        ctx.request_repaint_of(w.viewport);
-    }
-
-    /// View › Window › Arrange All: every window stacked top to bottom across the work area of
-    /// the active window's screen, in the Switch Windows order, as Word tiles them.
-    fn arrange_all(&mut self, ctx: &egui::Context) {
-        let Some(work) = self.active().and_then(|w| self.work_area_of(w)) else { return };
-        let ids: Vec<WindowId> = self.windows.iter().filter(|w| !w.closing).map(|w| w.id).collect();
-        for (id, rect) in ids.iter().zip(tile_rows(work, ids.len())) {
-            self.place(*id, rect, ctx);
-        }
-    }
-
-    /// View Side by Side on: `left` (the window asking) on the left half, `right` on the right,
-    /// with Synchronous Scrolling on; both windows' places are kept to restore.
-    fn begin_side_by_side(&mut self, left: WindowId, right: WindowId, ctx: &egui::Context) {
-        let restore = if let Some(p) = self.pair.take() {
-            p.restore
-        } else {
-            [left, right]
-                .iter()
-                .filter_map(|id| {
-                    let w = self.get(*id)?;
-                    Some((*id, w.outer?, w.inner?.size()))
-                })
-                .collect()
-        };
-        self.pair = Some(Pair { left, right, restore, sync: true });
-        for w in &mut self.windows {
-            w.scroll_seen = Some(w.app.canvas.scroll_offset);
-            w.scroll_applied = false;
-        }
-        self.place_halves(left, right, ctx);
-    }
-
-    fn place_halves(&self, left: WindowId, right: WindowId, ctx: &egui::Context) {
-        let Some(work) = self.get(left).and_then(|w| self.work_area_of(w)) else { return };
-        let [l, r] = halves(work);
-        self.place(left, l, ctx);
-        self.place(right, r, ctx);
-    }
-
-    /// View Side by Side off: both windows go back where they were.
-    fn end_side_by_side(&mut self, ctx: &egui::Context) {
-        let Some(p) = self.pair.take() else { return };
-        for (id, outer, inner) in p.restore {
-            let Some(w) = self.get(id) else { continue };
-            ctx.send_viewport_cmd_to(w.viewport, ViewportCommand::OuterPosition(outer.min));
-            ctx.send_viewport_cmd_to(w.viewport, ViewportCommand::InnerSize(inner.max(MIN_SIZE)));
-            ctx.request_repaint_of(w.viewport);
-        }
-    }
-
-    /// Synchronous Scrolling: a scroll in one window of the pair moves the other by the same
-    /// amount, once (the partner's own change from applying it is not passed back).
-    fn sync_scroll_tick(&mut self, i: usize, ctx: &egui::Context) {
-        let now = self.windows[i].app.canvas.scroll_offset;
-        let id = self.windows[i].id;
-        let partner = match &self.pair {
-            Some(p) if p.sync && p.left == id => Some(p.right),
-            Some(p) if p.sync && p.right == id => Some(p.left),
-            _ => None,
-        };
-        let w = &mut self.windows[i];
-        let delta = match w.scroll_seen {
-            Some(seen) => now - seen,
-            None => Vec2::ZERO,
-        };
-        w.scroll_seen = Some(now);
-        if delta == Vec2::ZERO || partner.is_none() {
+    /// Draw window `key` into its viewport's `ui`.
+    fn draw_window(&mut self, ui: &mut egui::Ui, key: u64) {
+        if !self.enter_window(key) {
             return;
         }
-        if w.scroll_applied {
-            w.scroll_applied = false;
+        let ctx = ui.ctx().clone();
+        let queued = self.windows.get_mut(key).map(|w| std::mem::take(&mut w.requests)).unwrap_or_default();
+        for req in queued {
+            self.handle_request(&req);
+        }
+        self.control_keys_arrived(&ctx);
+        self.window_work(&ctx);
+        self.window_input(&ctx);
+        if self.windows.shown != key {
             return;
         }
-        if let Some(p) = partner.and_then(|p| self.get_mut(p))
-            && p.app.canvas.scroll_by(delta)
-        {
-            p.scroll_applied = true;
-            ctx.request_repaint_of(p.viewport);
+        self.window_ui(ui);
+        // Drawing can close the window or bring another forward: the fields then hold another
+        // window's state.
+        if self.windows.shown != key {
+            return;
         }
+        let title = self.sent_title.clone();
+        if let Some(w) = self.windows.get_mut(key) {
+            w.title = title;
+        }
+        self.sync_scroll_after_draw(key);
     }
 
-    /// The interface fonts are one set for every window: a face one window needs (a caption in
-    /// Hebrew, a composition in a document font) joins every window's list, so whichever window
-    /// installs the fonts next installs it too, and the lists never fight.
-    fn pool_fonts(&mut self) {
-        if self.windows.len() < 2 {
-            return;
-        }
-        let mut faces: Vec<std::sync::Arc<wordcraft_fonts::FontFace>> = Vec::new();
-        let mut cjk = false;
-        for w in &self.windows {
-            cjk |= w.app.want_system_cjk;
-            for f in &w.app.canvas.ime_faces {
-                if !faces.iter().any(|g| std::sync::Arc::ptr_eq(g, f)) {
-                    faces.push(f.clone());
-                }
+    /// The windows' focus changes and close requests from this frame.
+    fn window_events(&mut self, ctx: &egui::Context, events: &[WindowEvent]) {
+        for event in events {
+            let WindowEvent::CloseRequested(id) = *event else { continue };
+            let Some(key) = self.windows.list.get(id).copied() else { continue };
+            // The last window's close button quits: the host asks first ([`WordApp::close_requested`]).
+            if self.windows.open.len() <= 1 || self.quit_requested {
+                continue;
             }
-        }
-        for w in &mut self.windows {
-            w.app.adopt_faces(&faces, cjk);
+            if self.windows.viewports.as_ref().and_then(Viewports::root) == Some(id) {
+                ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::CancelClose);
+            }
+            self.close_window(key);
         }
     }
 
-    /// The settings the user changed in the window they are using go to the other windows.
-    fn share_settings(&mut self, id: WindowId, ctx: &egui::Context) {
-        if self.windows.len() < 2 || self.active != id {
+    /// The close button of window `key` (not the last one): File › Close in that window, which
+    /// asks about unsaved changes first.
+    pub(crate) fn close_window(&mut self, key: u64) {
+        if !self.enter_window(key) {
             return;
         }
-        let Some(w) = self.get(id) else { return };
-        let prefs = w.app.prefs();
-        let Ok(now) = serde_json::to_string(&prefs) else { return };
-        if self.shared_settings.as_deref() == Some(now.as_str()) {
+        self.focus_window(key);
+        if !self.has_document() {
+            // An empty window beside others: nothing to ask about.
+            let _ = self.close_shown_document();
             return;
         }
-        self.shared_settings = Some(now);
-        for w in self.windows.iter_mut().filter(|w| w.id != id) {
-            w.app.adopt_settings(&prefs);
-            ctx.request_repaint_of(w.viewport);
+        if let Err(e) = self.run("file.close", json!({})) {
+            log::warn!("closing a window: {e}");
         }
     }
 
-    /// The end of the run: every document's recovery copy is settled.
-    pub fn on_exit(&mut self) {
-        for w in &mut self.windows {
-            w.app.session.finish_recovery();
+    /// The control channel's next input, for the active window when it has a viewport of its own:
+    /// handed to [`ViewportInput`], which gives it to that viewport's next pass.
+    pub(crate) fn send_control_input(&mut self, ctx: &egui::Context) {
+        if self.synthetic.is_empty() || self.control_input_is_roots(ctx) {
+            return;
+        }
+        if !self.windows.input_plugin {
+            ctx.add_plugin(ViewportInput::default());
+            self.windows.input_plugin = true;
+        }
+        self.settle_windows();
+        let target = self.active_viewport();
+        // Input queued for a window that has closed since (or moved into the root viewport)
+        // would wait forever.
+        let live: Vec<ViewportId> = self.windows.open.iter().map(|w| self.windows.viewport(w.key)).filter(|&v| v != ViewportId::ROOT).collect();
+        ctx.with_plugin(|p: &mut ViewportInput| {
+            if p.target.is_some_and(|t| !live.contains(&t)) {
+                p.target = None;
+                p.events.clear();
+            }
+        });
+        let waiting = ctx.with_plugin(|p: &mut ViewportInput| !p.events.is_empty()).unwrap_or(true);
+        if waiting {
+            return;
+        }
+        let Some(events) = self.next_synthetic() else { return };
+        ctx.with_plugin(|p: &mut ViewportInput| {
+            p.target = Some(target);
+            p.events = events;
+        });
+        ctx.request_repaint_of(target);
+    }
+
+    /// The native menu bar's key equivalents ([`crate::native_menu::raw_input`]) for the active
+    /// window, which draws in a viewport of its own: given to that viewport's next pass.
+    pub(crate) fn send_menu_input(&mut self, ctx: &egui::Context, events: Vec<egui::Event>) {
+        if events.is_empty() {
+            return;
+        }
+        if !self.windows.input_plugin {
+            ctx.add_plugin(ViewportInput::default());
+            self.windows.input_plugin = true;
+        }
+        let target = self.active_viewport();
+        ctx.with_plugin(|p: &mut ViewportInput| match p.menu.iter_mut().find(|(v, _)| *v == target) {
+            Some((_, queued)) => queued.extend(events),
+            None => p.menu.push((target, events)),
+        });
+        ctx.request_repaint_of(target);
+    }
+
+    /// Whether control input goes in through the root viewport's raw input: one window, the
+    /// active window drawn there, or viewports embedded in the root (tests).
+    pub(crate) fn control_input_is_roots(&self, ctx: &egui::Context) -> bool {
+        !self.windows.native || ctx.embed_viewports() || self.active_viewport() == ViewportId::ROOT
+    }
+
+    /// Keys from the control channel reached this window's viewport: the page counts as focused
+    /// when its widget has the keyboard, as [`WordApp::raw_input_hook`] does for the root.
+    fn control_keys_arrived(&mut self, ctx: &egui::Context) {
+        if !self.windows.input_plugin {
+            return;
+        }
+        let viewport = ctx.viewport_id();
+        let arrived = ctx
+            .with_plugin(|p: &mut ViewportInput| {
+                let hit = p.keys_for == Some(viewport);
+                if hit {
+                    p.keys_for = None;
+                }
+                hit
+            })
+            .unwrap_or(false);
+        if arrived && let Some((id, _)) = self.canvas.widget_id {
+            self.canvas.focused = ctx.memory(|m| m.has_focus(id));
         }
     }
-}
 
-impl Window {
-    fn new(id: WindowId, viewport: ViewportId, app: WordApp, builder: ViewportBuilder) -> Self {
-        Window {
-            id,
-            viewport,
-            app,
-            builder,
-            outer: None,
-            inner: None,
-            monitor: None,
-            visible: None,
-            focused_at: 0,
-            closing: false,
-            scroll_seen: None,
-            scroll_applied: false,
-            group: None,
-            view_number: None,
-            view: None,
-        }
+    /// The id of the drawn window's own `name` in egui's memory, which every viewport shares: a
+    /// search box's text, a gallery's first tile.
+    pub(crate) fn window_id(&self, name: &'static str) -> egui::Id {
+        egui::Id::unique(name).with(self.windows.shown)
     }
-}
 
-/// Where a window opened from one at `from` goes: a step down and right, back to the work area's
-/// corner when that would run off it. Never maximized: the new window is a window of its own.
-pub fn cascade(from: WindowGeometry, work: Option<Rect>) -> WindowGeometry {
-    let size = vec2(from.width, from.height);
-    let position = from.position.map(|[x, y]| {
-        let mut p = pos2(x, y) + CASCADE;
-        if let Some(work) = work
-            && (p.x + size.x > work.right() || p.y + size.y > work.bottom())
-        {
-            p = work.min + CASCADE;
-        }
-        [p.x, p.y]
-    });
-    WindowGeometry { position, maximized: false, ..from }
-}
-
-/// Arrange All's tiles: `n` rows across the work area, top to bottom, each at least [`MIN_SIZE`]
-/// tall (more windows than fit overlap at the bottom).
-pub fn tile_rows(work: Rect, n: usize) -> Vec<Rect> {
-    let n = n.max(1);
-    let h = (work.height() / n as f32).max(MIN_SIZE.y);
-    (0..n).map(|i| Rect::from_min_size(pos2(work.left(), work.top() + i as f32 * h), vec2(work.width(), h))).collect()
-}
-
-/// View Side by Side's halves of the work area: left and right.
-pub fn halves(work: Rect) -> [Rect; 2] {
-    let w = (work.width() / 2.0).max(MIN_SIZE.x);
-    [Rect::from_min_size(work.min, vec2(w, work.height())), Rect::from_min_size(pos2(work.left() + w, work.top()), vec2(w, work.height()))]
+    /// The windows other than the drawn one, for state every window contributes to (the faces
+    /// borrowed for the interface).
+    pub(crate) fn other_windows(&self) -> impl Iterator<Item = &WindowUi> {
+        self.windows.open.iter().filter_map(|w| w.ui.as_deref())
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use super::*;
-    use crate::Services;
-    use egui::{Pos2, Rect, ViewportEvent, ViewportInfo, pos2, vec2};
-    use wordcraft_engine::Session;
-
-    const UNSAVED: &str = "Unsaved words";
-
-    fn app() -> WordApp {
-        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
-        a.ui.animations = crate::theme::Animations::Off;
-        a
-    }
-
-    fn host() -> (Host, egui::Context) {
-        let ctx = egui::Context::default();
-        // Real child viewports, as eframe has them, not windows embedded in the root.
-        ctx.set_embed_viewports(false);
-        (Host::new(app(), ViewportBuilder::default(), Box::new(app)), ctx)
-    }
-
-    fn body(w: &Window) -> String {
-        w.app.session.doc.plain_text(wordcraft_doc::StoryRef::Body)
-    }
-
-    fn vp(h: &Host, id: WindowId) -> ViewportId {
-        h.get(id).map(|w| w.viewport).unwrap_or_else(|| panic!("window {id}"))
-    }
-
-    fn ids(h: &Host) -> Vec<WindowId> {
-        h.windows().map(|w| w.id).collect()
-    }
-
-    /// One pass of the window in viewport `vp`, as eframe runs it: with `rect` as its place on
-    /// a 1920 × 1080 monitor, `focused`, `events` (a close request, say) and input `input`.
-    /// Returns the viewport commands the pass sent, by the viewport they went to.
-    fn pass(
-        h: &mut Host,
-        ctx: &egui::Context,
-        vp: ViewportId,
-        rect: Rect,
-        focused: bool,
-        events: Vec<ViewportEvent>,
-        input: Vec<egui::Event>,
-    ) -> BTreeMap<ViewportId, Vec<ViewportCommand>> {
-        let info = ViewportInfo {
-            parent: (vp != ViewportId::ROOT).then_some(ViewportId::ROOT),
-            events,
-            outer_rect: Some(rect),
-            inner_rect: Some(rect),
-            monitor_size: Some(vec2(1920.0, 1080.0)),
-            focused: Some(focused),
-            ..Default::default()
-        };
-        let mut raw = egui::RawInput {
-            viewport_id: vp,
-            focused,
-            time: Some(ctx.input(|i| i.time) + 1.0 / 60.0),
-            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, rect.size())),
-            events: input,
-            ..Default::default()
-        };
-        raw.viewports.insert(vp, info);
-        h.raw_input_hook(&mut raw);
-        let out = ctx.run_ui(raw, |ui| {
-            h.logic(vp, ui.ctx());
-            h.ui(vp, ui);
-        });
-        let sent = out.viewport_output.iter().map(|(id, v)| (*id, v.commands.clone())).collect();
-        out.drop_without_applying_deltas();
-        sent
-    }
-
-    /// [`pass`] for the window `id`.
-    fn pass_id(
-        h: &mut Host,
-        ctx: &egui::Context,
-        id: WindowId,
-        rect: Rect,
-        focused: bool,
-        events: Vec<ViewportEvent>,
-        input: Vec<egui::Event>,
-    ) -> BTreeMap<ViewportId, Vec<ViewportCommand>> {
-        let v = vp(h, id);
-        pass(h, ctx, v, rect, focused, events, input)
-    }
-
-    /// Settle: a few passes of every window, none focused, the root last (it drops closed windows).
-    fn settle(h: &mut Host, ctx: &egui::Context) {
-        for _ in 0..3 {
-            let others: Vec<ViewportId> = h.windows().map(|w| w.viewport).filter(|v| *v != ViewportId::ROOT).collect();
-            for (i, v) in others.iter().enumerate() {
-                pass(h, ctx, *v, Rect::from_min_size(pos2(100.0 * (i + 1) as f32, 80.0), vec2(1280.0, 800.0)), false, vec![], vec![]);
-            }
-            pass(h, ctx, ViewportId::ROOT, Rect::from_min_size(pos2(40.0, 40.0), vec2(1280.0, 800.0)), false, vec![], vec![]);
-        }
-    }
-
-    fn temp_file(name: &str, text: &str) -> String {
-        let dir = std::env::temp_dir().join(format!("wordcraft-windows-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let p = dir.join(name);
-        std::fs::write(&p, text).unwrap();
-        p.to_string_lossy().into_owned()
-    }
-
-    /// Word opens each document in a window of its own and leaves the current one alone, so
-    /// nothing is asked; a new blank window nobody typed in takes the document itself (Word
-    /// replaces its untouched Document1 too); a file already open comes to the front instead of
-    /// opening twice.
-    #[test]
-    fn new_and_open_go_to_their_own_windows_and_a_blank_window_takes_the_document() {
-        let (mut h, ctx) = host();
-        settle(&mut h, &ctx);
-        let first = h.active().unwrap().id;
-        assert!(h.active().unwrap().app.session.windows.host, "the engine knows the host");
-        assert!(h.active().unwrap().app.window_reusable(), "a blank window nobody typed in");
-
-        let alpha = temp_file("alpha.txt", "Alpha");
-        h.active_mut().unwrap().app.run("file.open", json!({"path": alpha})).unwrap();
-        settle(&mut h, &ctx);
-        assert_eq!(ids(&h), vec![first], "the blank window took the file");
-        assert!(body(h.get(first).unwrap()).contains("Alpha"));
-        assert!(!h.get(first).unwrap().app.window_reusable());
-
-        // Typing in it, then New: a new window, and no Save Changes prompt here.
-        h.get_mut(first).unwrap().app.run("text.insert", json!({"text": UNSAVED})).unwrap();
-        let r = h.get_mut(first).unwrap().app.run("file.new", json!({})).unwrap();
-        assert_eq!(r["pending"], "window");
-        settle(&mut h, &ctx);
-        assert_eq!(ids(&h).len(), 2);
-        let second = ids(&h)[1];
-        assert!(h.get(first).unwrap().app.dialog.is_none(), "nothing asked");
-        assert!(body(h.get(first).unwrap()).contains(UNSAVED), "the first document stays");
-        assert!(body(h.get(second).unwrap()).trim().is_empty(), "the new one is blank");
-        assert_ne!(vp(&h, second), ViewportId::ROOT, "in a window of its own");
-        assert_eq!(h.active().unwrap().id, second, "the new window is the one in use");
-        assert!(h.get(second).unwrap().app.session.windows.host, "and knows the host from the start");
-
-        // Open from the first window: a third window; the same file again brings it forward.
-        let beta = temp_file("beta.txt", "Beta");
-        h.get_mut(first).unwrap().app.run("file.open", json!({"path": beta})).unwrap();
-        settle(&mut h, &ctx);
-        assert_eq!(ids(&h).len(), 3);
-        let third = ids(&h)[2];
-        assert!(body(h.get(third).unwrap()).contains("Beta"));
-        let r = h.get_mut(first).unwrap().app.run("file.open", json!({"path": beta})).unwrap();
-        assert_eq!(r["alreadyOpen"], true);
-        let sent = pass(&mut h, &ctx, ViewportId::ROOT, Rect::from_min_size(pos2(40.0, 40.0), vec2(1280.0, 800.0)), true, vec![], vec![]);
-        assert!(sent.get(&vp(&h, third)).is_some_and(|c| c.contains(&ViewportCommand::Focus)), "the open window comes forward: {sent:?}");
-        settle(&mut h, &ctx);
-        assert_eq!(ids(&h).len(), 3, "not opened twice");
-        assert_eq!(h.active().unwrap().id, third);
-
-        // A file that can't be opened: no window, the error on the status line of the asker.
-        h.get_mut(first).unwrap().app.run("file.open", json!({"path": "/nonexistent/none.docx"})).unwrap();
-        settle(&mut h, &ctx);
-        assert_eq!(ids(&h).len(), 3);
-        assert!(h.get(first).unwrap().app.status_msg.as_ref().is_some_and(|(m, _)| m.contains("none.docx")), "the asker hears why");
-
-        // The engine's view from one window: every window, in order, this one marked.
-        let w = &h.get(second).unwrap().app.session.windows;
-        assert_eq!((w.this, w.list.len(), w.list[0].id), (second, 3, first));
-        assert_eq!(w.list[2].path.as_deref(), Some(beta.as_str()));
-    }
-
-    /// File › Close closes the document's window when another is open, as Word does; the last
-    /// window stays, empty (#1712). The window's close button closes only its window; the root
-    /// window (the app's) takes over the document last used when it is the one closing, and
-    /// closing the last window ends the app.
-    #[test]
-    fn closing_takes_one_window_and_the_root_takes_over_the_last_used_document() {
-        let (mut h, ctx) = host();
-        settle(&mut h, &ctx);
-        let first = h.active().unwrap().id;
-        h.get_mut(first).unwrap().app.run("text.insert", json!({"text": "Root text"})).unwrap();
-        h.get_mut(first).unwrap().app.session.dirty = false;
-        h.get_mut(first).unwrap().app.run("file.new", json!({})).unwrap();
-        settle(&mut h, &ctx);
-        let second = ids(&h)[1];
-        h.get_mut(second).unwrap().app.run("text.insert", json!({"text": "Second text"})).unwrap();
-        h.get_mut(second).unwrap().app.session.dirty = false;
-        h.get_mut(second).unwrap().app.run("file.new", json!({})).unwrap();
-        settle(&mut h, &ctx);
-        let third = ids(&h)[2];
-        assert_eq!(ids(&h).len(), 3);
-
-        // File › Close in the third: its window goes; the others keep their documents.
-        let r = h.get_mut(third).unwrap().app.run("file.close", json!({})).unwrap();
-        assert_eq!(r["closed"], true);
-        settle(&mut h, &ctx);
-        assert_eq!(ids(&h), vec![first, second]);
-        assert!(h.get(first).unwrap().app.has_document() && h.get(second).unwrap().app.has_document());
-
-        // The close button on the root window while the second was last in use: the second's
-        // document moves into the root window, which takes the second window's place.
-        let second_rect = Rect::from_min_size(pos2(300.0, 200.0), vec2(1000.0, 700.0));
-        pass_id(&mut h, &ctx, second, second_rect, true, vec![], vec![]);
-        let root_rect = Rect::from_min_size(pos2(40.0, 40.0), vec2(1280.0, 800.0));
-        let sent = pass(&mut h, &ctx, ViewportId::ROOT, root_rect, true, vec![ViewportEvent::Close], vec![]);
-        assert!(!h.exit_requested(), "another window is open");
-        assert_eq!(ids(&h), vec![second], "the root window now holds the second document");
-        assert_eq!(vp(&h, second), ViewportId::ROOT);
-        assert!(body(h.get(second).unwrap()).contains("Second text"));
-        let root = sent.get(&ViewportId::ROOT).cloned().unwrap_or_default();
-        assert!(root.contains(&ViewportCommand::OuterPosition(second_rect.min)), "takes the closed window's place: {root:?}");
-        assert!(root.contains(&ViewportCommand::InnerSize(second_rect.size())));
-        settle(&mut h, &ctx);
-        assert_eq!(ids(&h).len(), 1);
-
-        // File › Close in the last window keeps the window, empty, as before.
-        h.get_mut(second).unwrap().app.run("file.close", json!({})).unwrap();
-        settle(&mut h, &ctx);
-        assert_eq!(ids(&h).len(), 1);
-        assert!(!h.get(second).unwrap().app.has_document());
-        // The close button on the last window ends the app.
-        pass(&mut h, &ctx, ViewportId::ROOT, root_rect, true, vec![ViewportEvent::Close], vec![]);
-        assert!(h.exit_requested());
-    }
-
-    /// The close button on a window with unsaved changes asks first, in that window; Cancel keeps
-    /// it, Don't Save closes just that window.
-    #[test]
-    fn a_child_window_with_unsaved_changes_asks_before_it_closes() {
-        let (mut h, ctx) = host();
-        settle(&mut h, &ctx);
-        let first = h.active().unwrap().id;
-        h.get_mut(first).unwrap().app.run("file.new", json!({})).unwrap();
-        settle(&mut h, &ctx);
-        let second = ids(&h)[1];
-        h.get_mut(second).unwrap().app.run("text.insert", json!({"text": UNSAVED})).unwrap();
-        let rect = Rect::from_min_size(pos2(300.0, 200.0), vec2(1000.0, 700.0));
-        let sent = pass_id(&mut h, &ctx, second, rect, true, vec![ViewportEvent::Close], vec![]);
-        assert!(sent.get(&vp(&h, second)).is_some_and(|c| c.contains(&ViewportCommand::CancelClose)), "{sent:?}");
-        assert_eq!(h.get(second).unwrap().app.dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
-        h.get_mut(second).unwrap().app.run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
-        settle(&mut h, &ctx);
-        assert_eq!(ids(&h), vec![first, second], "Cancel keeps the window");
-
-        pass_id(&mut h, &ctx, second, rect, true, vec![ViewportEvent::Close], vec![]);
-        h.get_mut(second).unwrap().app.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
-        assert!(h.get(second).unwrap().app.quit_requested, "the window may close");
-        settle(&mut h, &ctx);
-        assert_eq!(ids(&h), vec![first], "only that window closed");
-        assert!(!h.exit_requested());
-    }
-
-    /// Quitting asks about each window with unsaved changes in turn, in that window, and Cancel
-    /// in any prompt keeps the app open with every window; once each is answered the app ends.
-    #[test]
-    fn quitting_asks_each_dirty_window_in_turn_and_cancel_keeps_the_app() {
-        let (mut h, ctx) = host();
-        settle(&mut h, &ctx);
-        let first = h.active().unwrap().id;
-        h.get_mut(first).unwrap().app.run("file.new", json!({})).unwrap();
-        settle(&mut h, &ctx);
-        let second = ids(&h)[1];
-        for id in [first, second] {
-            h.get_mut(id).unwrap().app.run("text.insert", json!({"text": UNSAVED})).unwrap();
-        }
-        h.request_quit(&ctx);
-        assert_eq!(h.get(first).unwrap().app.dialog.as_ref().map(|d| d.name()), Some("saveChanges"), "the first window asks");
-        assert!(h.get(second).unwrap().app.dialog.is_none(), "one at a time");
-        h.get_mut(first).unwrap().app.run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
-        settle(&mut h, &ctx);
-        assert_eq!(ids(&h).len(), 2, "Cancel keeps everything");
-        assert!(!h.exit_requested());
-        assert_eq!(h.quit, Quit::No);
-
-        h.request_quit(&ctx);
-        h.get_mut(first).unwrap().app.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
-        settle(&mut h, &ctx);
-        assert_eq!(ids(&h), vec![second], "the first closed; the second is asked");
-        assert_eq!(h.get(second).unwrap().app.dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
-        h.get_mut(second).unwrap().app.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
-        settle(&mut h, &ctx);
-        assert!(h.exit_requested(), "every window answered: the app ends");
-    }
-
-    /// Arrange All stacks the windows top to bottom across the work area; View Side by Side puts
-    /// the asking window on the left half and its partner on the right, with Synchronous Scrolling
-    /// on; off again puts both back where they were. Reset Window Position re-halves them.
-    #[test]
-    fn arrange_all_and_side_by_side_place_the_windows() {
-        let (mut h, ctx) = host();
-        h.work_area = Some(Box::new(|_| Some(Rect::from_min_size(pos2(0.0, 25.0), vec2(1600.0, 975.0)))));
-        settle(&mut h, &ctx);
-        let first = h.active().unwrap().id;
-        h.get_mut(first).unwrap().app.run("file.new", json!({})).unwrap();
-        settle(&mut h, &ctx);
-        let second = ids(&h)[1];
-        let (vp1, vp2) = (vp(&h, first), vp(&h, second));
-        let r1 = Rect::from_min_size(pos2(40.0, 40.0), vec2(1280.0, 800.0));
-        let r2 = Rect::from_min_size(pos2(300.0, 200.0), vec2(1000.0, 700.0));
-        pass(&mut h, &ctx, vp2, r2, false, vec![], vec![]);
-        pass(&mut h, &ctx, vp1, r1, true, vec![], vec![]);
-
-        h.get_mut(first).unwrap().app.run("view.arrangeAll", json!({})).unwrap();
-        let sent = pass(&mut h, &ctx, vp1, r1, true, vec![], vec![]);
-        let rows = tile_rows(Rect::from_min_size(pos2(0.0, 25.0), vec2(1600.0, 975.0)), 2);
-        for (v, row) in [(vp1, rows[0]), (vp2, rows[1])] {
-            let c = sent.get(&v).cloned().unwrap_or_default();
-            assert!(c.contains(&ViewportCommand::OuterPosition(row.min)) && c.contains(&ViewportCommand::InnerSize(row.size())), "{v:?}: {c:?}");
-            assert!(c.contains(&ViewportCommand::Maximized(false)));
-        }
-
-        // Side by Side from the first window: left half, the second on the right half.
-        let r = h.get_mut(first).unwrap().app.run("view.sideBySide", json!({})).unwrap();
-        assert_eq!(r["with"], second);
-        let sent = pass(&mut h, &ctx, vp1, r1, true, vec![], vec![]);
-        let [left, right] = halves(Rect::from_min_size(pos2(0.0, 25.0), vec2(1600.0, 975.0)));
-        assert!(sent.get(&vp1).is_some_and(|c| c.contains(&ViewportCommand::OuterPosition(left.min))), "{sent:?}");
-        assert!(sent.get(&vp2).is_some_and(|c| c.contains(&ViewportCommand::OuterPosition(right.min))), "{sent:?}");
-        settle(&mut h, &ctx);
-        let w = &h.get(second).unwrap().app.session.windows;
-        assert_eq!((w.side_by_side, w.sync_scroll), (Some(first), true), "the partner sees it too");
-        assert!(h.get(second).unwrap().app.session.why_disabled("view.syncScroll").is_none());
-
-        // Synchronous Scrolling off and on again; Reset Window Position halves again.
-        assert_eq!(h.get_mut(first).unwrap().app.run("view.syncScroll", json!({})).unwrap()["value"], false);
-        settle(&mut h, &ctx);
-        assert!(!h.get(first).unwrap().app.session.windows.sync_scroll);
-        h.get_mut(first).unwrap().app.run("view.syncScroll", json!({"value": true})).unwrap();
-        h.get_mut(first).unwrap().app.run("view.resetWindowPosition", json!({})).unwrap();
-        let sent = pass(&mut h, &ctx, vp1, left, true, vec![], vec![]);
-        assert!(sent.get(&vp2).is_some_and(|c| c.contains(&ViewportCommand::OuterPosition(right.min))), "{sent:?}");
-
-        // Off: both windows go back where they were.
-        assert_eq!(h.get_mut(first).unwrap().app.run("view.sideBySide", json!({})).unwrap()["value"], false);
-        let sent = pass(&mut h, &ctx, vp1, left, true, vec![], vec![]);
-        assert!(
-            sent.get(&vp1).is_some_and(|c| c.contains(&ViewportCommand::OuterPosition(r1.min)) && c.contains(&ViewportCommand::InnerSize(r1.size()))),
-            "{sent:?}"
-        );
-        assert!(
-            sent.get(&vp2).is_some_and(|c| c.contains(&ViewportCommand::OuterPosition(r2.min)) && c.contains(&ViewportCommand::InnerSize(r2.size()))),
-            "{sent:?}"
-        );
-        settle(&mut h, &ctx);
-        assert!(h.get(first).unwrap().app.session.windows.side_by_side.is_none());
-        assert!(h.get(first).unwrap().app.session.why_disabled("view.syncScroll").is_some(), "only while side by side");
-
-        // Closing a window of the pair ends Side by Side.
-        h.get_mut(first).unwrap().app.run("view.sideBySide", json!({})).unwrap();
-        settle(&mut h, &ctx);
-        assert!(h.pair.is_some());
-        h.get_mut(second).unwrap().app.run("file.close", json!({})).unwrap();
-        settle(&mut h, &ctx);
-        assert!(h.pair.is_none() && ids(&h) == vec![first]);
-    }
-
-    /// Switch Windows brings the named window forward and makes it the one in use.
-    #[test]
-    fn switch_windows_brings_the_named_window_forward() {
-        let (mut h, ctx) = host();
-        settle(&mut h, &ctx);
-        let first = h.active().unwrap().id;
-        h.get_mut(first).unwrap().app.run("file.new", json!({})).unwrap();
-        settle(&mut h, &ctx);
-        let second = ids(&h)[1];
-        let r1 = Rect::from_min_size(pos2(40.0, 40.0), vec2(1280.0, 800.0));
-        pass(&mut h, &ctx, ViewportId::ROOT, r1, true, vec![], vec![]);
-        assert_eq!(h.active().unwrap().id, first);
-        h.get_mut(first).unwrap().app.run("view.switchWindows", json!({"window": 2})).unwrap();
-        let sent = pass(&mut h, &ctx, ViewportId::ROOT, r1, true, vec![], vec![]);
-        let c = sent.get(&vp(&h, second)).cloned().unwrap_or_default();
-        assert!(c.contains(&ViewportCommand::Focus) && c.contains(&ViewportCommand::Minimized(false)), "{c:?}");
-        assert_eq!(h.active().unwrap().id, second);
-    }
-
-    /// Synchronous Scrolling: a wheel in one window of the pair scrolls the other by as much,
-    /// once; the partner's own change from applying it is not sent back.
-    #[test]
-    fn synchronous_scrolling_moves_the_partner_by_as_much_once() {
-        let ctx = egui::Context::default();
-        ctx.set_embed_viewports(false);
-        let long = || {
-            let mut a = app();
-            for _ in 0..3 {
-                a.run("insert.pageBreak", json!({})).unwrap();
-            }
-            a.run("caret.docStart", json!({})).unwrap();
-            a.session.dirty = false;
-            a
-        };
-        let mut h = Host::new(long(), ViewportBuilder::default(), Box::new(app));
-        h.work_area = Some(Box::new(|_| Some(Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 1000.0)))));
-        settle(&mut h, &ctx);
-        let first = h.active().unwrap().id;
-        h.get_mut(first).unwrap().app.run("file.new", json!({})).unwrap();
-        settle(&mut h, &ctx);
-        let second = ids(&h)[1];
-        // The second document is long too, so it has room to scroll.
-        for _ in 0..3 {
-            h.get_mut(second).unwrap().app.run("insert.pageBreak", json!({})).unwrap();
-        }
-        h.get_mut(second).unwrap().app.run("caret.docStart", json!({})).unwrap();
-        h.get_mut(second).unwrap().app.session.dirty = false;
-        let (vp1, vp2) = (vp(&h, first), vp(&h, second));
-        let r1 = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 1000.0));
-        let r2 = Rect::from_min_size(pos2(800.0, 0.0), vec2(800.0, 1000.0));
-        h.get_mut(first).unwrap().app.run("view.sideBySide", json!({})).unwrap();
-        for _ in 0..3 {
-            pass(&mut h, &ctx, vp2, r2, false, vec![], vec![]);
-            pass(&mut h, &ctx, vp1, r1, true, vec![], vec![]);
-        }
-        let offset = |h: &Host, id| h.get(id).unwrap().app.canvas.scroll_offset.y;
-        assert_eq!((offset(&h, first), offset(&h, second)), (0.0, 0.0));
-        let at = h.get(first).unwrap().app.canvas.canvas_rect.unwrap().center();
-        let wheel = vec![
-            egui::Event::PointerMoved(at),
-            egui::Event::MouseWheel {
-                unit: egui::MouseWheelUnit::Point,
-                delta: vec2(0.0, -300.0),
-                phase: egui::TouchPhase::Move,
-                modifiers: egui::Modifiers::NONE,
-            },
-        ];
-        pass(&mut h, &ctx, vp1, r1, true, vec![], wheel);
-        for _ in 0..3 {
-            pass(&mut h, &ctx, vp1, r1, true, vec![], vec![]);
-            pass(&mut h, &ctx, vp2, r2, false, vec![], vec![]);
-        }
-        let (a, b) = (offset(&h, first), offset(&h, second));
-        assert!(a > 100.0, "the first window scrolled by {a}");
-        assert!((a - b).abs() < 1.0, "the partner followed: {a} vs {b}");
-        for _ in 0..4 {
-            pass(&mut h, &ctx, vp1, r1, true, vec![], vec![]);
-            pass(&mut h, &ctx, vp2, r2, false, vec![], vec![]);
-        }
-        assert_eq!((offset(&h, first), offset(&h, second)), (a, b), "nothing echoes back and forth");
-    }
-
-    /// The control channel: `ui.windows` lists the windows, and a request goes to the window its
-    /// `window` names (an id, or a number in that list), else to the window in use; a window that
-    /// isn't open is an error.
-    #[test]
-    fn control_requests_reach_the_named_window() {
-        let (mut h, ctx) = host();
-        let (tx, rx) = std::sync::mpsc::channel();
-        h = h.with_control(rx);
-        settle(&mut h, &ctx);
-        let first = h.active().unwrap().id;
-        h.get_mut(first).unwrap().app.run("file.new", json!({})).unwrap();
-        settle(&mut h, &ctx);
-        let second = ids(&h)[1];
-
-        let (req, reply) = ControlRequest::new("ui.windows", json!({}));
-        tx.send(req).unwrap();
-        settle(&mut h, &ctx);
-        let v = reply.try_recv().unwrap();
-        assert_eq!(v["ok"], true);
-        assert_eq!(v["result"]["windows"].as_array().map(Vec::len), Some(2));
-        assert_eq!(v["result"]["active"], second);
-
-        // New and Open from the channel open windows too, as from the ribbon: a window of their own.
-        let (req, reply) = ControlRequest::new("engine.execute", json!({"command": "file.new"}));
-        tx.send(req).unwrap();
-        settle(&mut h, &ctx);
-        assert_eq!(reply.try_recv().unwrap()["result"]["pending"], "window");
-        assert_eq!(ids(&h).len(), 3);
-        let third = ids(&h)[2];
-        h.get_mut(third).unwrap().app.run("file.close", json!({})).unwrap();
-        settle(&mut h, &ctx);
-        assert_eq!(ids(&h), vec![first, second]);
-
-        let (req, reply) =
-            ControlRequest::new("engine.execute", json!({"window": first, "command": "text.insert", "params": {"text": "To the first"}}));
-        tx.send(req).unwrap();
-        let (req2, reply2) = ControlRequest::new("engine.execute", json!({"command": "text.insert", "params": {"text": "To the active"}}));
-        tx.send(req2).unwrap();
-        let (req3, reply3) = ControlRequest::new("engine.execute", json!({"window": 99, "command": "text.insert", "params": {"text": "Nowhere"}}));
-        tx.send(req3).unwrap();
-        settle(&mut h, &ctx);
-        assert_eq!(reply.try_recv().unwrap()["ok"], true);
-        assert_eq!(reply2.try_recv().unwrap()["ok"], true);
-        assert_eq!(reply3.try_recv().unwrap()["ok"], false);
-        assert!(body(h.get(first).unwrap()).contains("To the first"));
-        assert!(body(h.get(second).unwrap()).contains("To the active"));
-        assert!(!body(h.get(second).unwrap()).contains("To the first"));
-    }
-
-    /// A setting changed in the window in use (the theme, the language, the recent list…) reaches
-    /// the other windows; what is a window's own (its ribbon tab) stays.
-    #[test]
-    fn settings_changed_in_one_window_reach_the_others() {
-        let (mut h, ctx) = host();
-        settle(&mut h, &ctx);
-        let first = h.active().unwrap().id;
-        h.get_mut(first).unwrap().app.run("file.new", json!({})).unwrap();
-        settle(&mut h, &ctx);
-        let second = ids(&h)[1];
-        let r2 = Rect::from_min_size(pos2(300.0, 200.0), vec2(1000.0, 700.0));
-        pass_id(&mut h, &ctx, second, r2, true, vec![], vec![]);
-        h.get_mut(second).unwrap().app.run("ui.theme", json!({"value": "dark"})).unwrap();
-        h.get_mut(second).unwrap().app.run("ui.tab", json!({"tab": "View"})).unwrap();
-        // A frame with input in the window in use hands the settings on.
-        pass_id(&mut h, &ctx, second, r2, true, vec![], vec![egui::Event::PointerMoved(pos2(10.0, 10.0))]);
-        assert_eq!(h.get(first).unwrap().app.ui.theme, crate::theme::Appearance::Dark);
-        assert_eq!(h.get(first).unwrap().app.ui.tab, crate::DEFAULT_TAB, "the tab is the window's own");
-    }
-
-    /// Arrange All's rows, Side by Side's halves, and where a window opened from another goes.
-    #[test]
-    fn placement_geometry() {
-        let work = Rect::from_min_size(pos2(0.0, 25.0), vec2(1600.0, 975.0));
-        let rows = tile_rows(work, 3);
-        assert_eq!(rows.len(), 3);
-        assert_eq!(rows[0], Rect::from_min_size(pos2(0.0, 25.0), vec2(1600.0, 480.0)), "at least the minimum height");
-        assert_eq!(rows[1].min, pos2(0.0, 505.0));
-        let rows = tile_rows(work, 2);
-        assert_eq!(rows[1], Rect::from_min_size(pos2(0.0, 512.5), vec2(1600.0, 487.5)));
-        let [l, r] = halves(work);
-        assert_eq!(l, Rect::from_min_size(pos2(0.0, 25.0), vec2(800.0, 975.0)));
-        assert_eq!(r, Rect::from_min_size(pos2(800.0, 25.0), vec2(800.0, 975.0)));
-        assert_eq!(halves(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 600.0)))[1].min.x, MIN_SIZE.x, "never narrower than the minimum");
-
-        let from = WindowGeometry { position: Some([100.0, 100.0]), width: 1280.0, height: 800.0, maximized: true, monitor: Some([1920.0, 1080.0]) };
-        let next = cascade(from, Some(Rect::from_min_size(Pos2::ZERO, vec2(1920.0, 1080.0))));
-        assert_eq!((next.position, next.maximized), (Some([122.0, 122.0]), false));
-        let far = cascade(WindowGeometry { position: Some([700.0, 300.0]), ..from }, Some(Rect::from_min_size(Pos2::ZERO, vec2(1920.0, 1080.0))));
-        assert_eq!(far.position, Some([22.0, 22.0]), "back to the corner when it would run off the screen");
-        assert_eq!(cascade(WindowGeometry { position: None, ..from }, None).position, None, "no position: the system places it");
-    }
-
-    /// View › New Window (#322): a second window on the same document, as Word's. Typing in
-    /// either shows in both, one undo history serves both, each keeps its own caret and zoom, the
-    /// titles are numbered `:1` and `:2`, closing one window closes a view (no prompt, the document
-    /// stays open in the other), and File › Close closes the document's windows together. A
-    /// command runs in a window during its frame, when it holds the document: the test gives a
-    /// window a frame before running one there.
-    #[test]
-    fn new_window_shows_the_same_document_with_its_own_view() {
-        let (mut h, ctx) = host();
-        settle(&mut h, &ctx);
-        let r1 = Rect::from_min_size(pos2(40.0, 40.0), vec2(1280.0, 800.0));
-        let r2 = Rect::from_min_size(pos2(300.0, 200.0), vec2(1000.0, 700.0));
-        let first = h.active().unwrap().id;
-        h.get_mut(first).unwrap().app.run("text.insert", json!({"text": "Shared text"})).unwrap();
-        h.get_mut(first).unwrap().app.run("view.zoom", json!({"value": 150.0})).unwrap();
-        assert!(h.get_mut(first).unwrap().app.run("view.newWindow", json!({})).unwrap()["anchor"].is_object());
-        settle(&mut h, &ctx);
-        assert_eq!(ids(&h).len(), 2);
-        let second = ids(&h)[1];
-        assert_eq!((h.get(first).unwrap().view_number, h.get(second).unwrap().view_number), (Some(1), Some(2)));
-        assert_eq!(h.get(first).unwrap().app.view_number, Some(1));
-        // The second window's turn: it holds the document, with the first's view kept aside.
-        pass_id(&mut h, &ctx, second, r2, true, vec![], vec![]);
-        let w = &h.get(second).unwrap().app.session.windows;
-        assert_eq!(w.others_on_this_document().map(|e| e.id).collect::<Vec<_>>(), vec![first]);
-        assert_eq!(w.list[1].title, "Document1", "the list names the document");
-        assert!(body(h.get(second).unwrap()).contains("Shared text"));
-        assert_eq!(h.get(second).unwrap().app.session.view.zoom, 1.5, "the new window opens with the same zoom");
-
-        // Typing in the second window shows in the first on its next frame, and the first's
-        // undo takes it back: one document, one history.
-        h.get_mut(second).unwrap().app.run("caret.docEnd", json!({})).unwrap();
-        h.get_mut(second).unwrap().app.run("text.insert", json!({"text": " and more"})).unwrap();
-        pass(&mut h, &ctx, ViewportId::ROOT, r1, true, vec![], vec![]);
-        assert!(body(h.get(first).unwrap()).contains("Shared text and more"), "the first window shows the edit");
-        h.get_mut(first).unwrap().app.run("view.zoom", json!({"value": 80.0})).unwrap();
-        h.get_mut(first).unwrap().app.run("edit.undo", json!({})).unwrap();
-        assert_eq!(body(h.get(first).unwrap()).trim(), "Shared text");
-        pass_id(&mut h, &ctx, second, r2, true, vec![], vec![]);
-        assert_eq!(body(h.get(second).unwrap()).trim(), "Shared text", "the second window shows the undo");
-        assert_eq!(h.get(second).unwrap().app.session.view.zoom, 1.5, "its zoom is its own");
-        assert!(h.get(second).unwrap().app.session.dirty, "the document is dirty in both");
-
-        // The close button on one window closes that view without asking; the document stays.
-        let sent = pass_id(&mut h, &ctx, second, r2, true, vec![ViewportEvent::Close], vec![]);
-        assert!(sent.get(&vp(&h, second)).is_none_or(|c| !c.contains(&ViewportCommand::CancelClose)), "{sent:?}");
-        settle(&mut h, &ctx);
-        assert_eq!(ids(&h), vec![first]);
-        assert!(body(h.get(first).unwrap()).contains("Shared text"), "the document moved back to the first window");
-        assert!(h.get(first).unwrap().app.session.dirty, "with its unsaved change");
-        assert_eq!(h.get(first).unwrap().app.view_number, None, "a lone window has no number");
-        assert!(h.get(first).unwrap().app.session.windows.others_on_this_document().next().is_none());
-
-        // New Window again, then File › Close in one: the document closes, both windows go, and
-        // the last window stays empty, as a lone document's Close leaves it.
-        h.get_mut(first).unwrap().app.session.dirty = false;
-        h.get_mut(first).unwrap().app.run("view.newWindow", json!({})).unwrap();
-        settle(&mut h, &ctx);
-        let third = ids(&h)[1];
-        assert_eq!(h.get(third).unwrap().view_number, Some(2));
-        pass_id(&mut h, &ctx, third, r2, true, vec![], vec![]);
-        h.get_mut(third).unwrap().app.run("file.close", json!({})).unwrap();
-        settle(&mut h, &ctx);
-        assert_eq!(ids(&h).len(), 1, "the document's other window closed with it: {:?}", ids(&h));
-        assert!(!h.active().unwrap().app.has_document(), "the last window stays, empty");
-    }
-
-    /// The root window closing while its document is shown in another window: that window's
-    /// document moves into the root (the root takes over the last-used window) and the group goes
-    /// on with the remaining member only.
-    #[test]
-    fn closing_the_root_of_a_document_group_keeps_the_document() {
-        let (mut h, ctx) = host();
-        settle(&mut h, &ctx);
-        let first = h.active().unwrap().id;
-        h.get_mut(first).unwrap().app.run("text.insert", json!({"text": "Grouped"})).unwrap();
-        h.get_mut(first).unwrap().app.session.dirty = false;
-        h.get_mut(first).unwrap().app.run("view.newWindow", json!({})).unwrap();
-        settle(&mut h, &ctx);
-        let second = ids(&h)[1];
-        let r2 = Rect::from_min_size(pos2(300.0, 200.0), vec2(1000.0, 700.0));
-        pass_id(&mut h, &ctx, second, r2, true, vec![], vec![]);
-        pass(&mut h, &ctx, ViewportId::ROOT, Rect::from_min_size(pos2(40.0, 40.0), vec2(1280.0, 800.0)), true, vec![ViewportEvent::Close], vec![]);
-        settle(&mut h, &ctx);
-        assert_eq!(ids(&h), vec![second]);
-        assert_eq!(vp(&h, second), ViewportId::ROOT);
-        assert!(body(h.get(second).unwrap()).contains("Grouped"));
-        assert_eq!(h.get(second).unwrap().app.view_number, None);
-        assert!(h.groups.is_empty(), "a group of one is no group");
-    }
-
-    /// Fixed widget ids are kept apart per window, and are the plain ids outside a window host.
-    #[test]
-    fn fixed_widget_ids_are_per_window() {
-        crate::set_window_salt(0);
-        assert_eq!(crate::wid("canvas"), egui::Id::new("canvas"));
-        crate::set_window_salt(1);
-        let one = crate::wid("canvas");
-        crate::set_window_salt(2);
-        let two = crate::wid("canvas");
-        crate::set_window_salt(0);
-        assert!(one != two && one != egui::Id::new("canvas"));
-    }
-}
+mod tests;

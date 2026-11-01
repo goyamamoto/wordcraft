@@ -485,54 +485,59 @@ mod tests {
     fn names_in_every_language_word_for_mac_knows() {
         let months = |lang: &str, long: bool| (1..=12).map(|m| month_name(DateLang::of(Some(lang)), m, long)).collect::<Vec<_>>().join("|");
         let days = |lang: &str, long: bool| (0..7).map(|wd| weekday_name(DateLang::of(Some(lang)), wd, long)).collect::<Vec<_>>().join("|");
-        assert_eq!(months("en-US", true), "January|February|March|April|May|June|July|August|September|October|November|December");
-        assert_eq!(months("en-US", false), "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec");
-        assert_eq!(days("en-GB", true), "Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday");
-        assert_eq!(days("en-GB", false), "Sun|Mon|Tue|Wed|Thu|Fri|Sat");
-        assert_eq!(months("ja-JP", true), "1月|2月|3月|4月|5月|6月|7月|8月|9月|10月|11月|12月");
         assert_eq!(months("ja-JP", false), months("ja-JP", true));
-        assert_eq!(days("ja-JP", true), "日曜日|月曜日|火曜日|水曜日|木曜日|金曜日|土曜日");
-        assert_eq!(days("ja-JP", false), "日|月|火|水|木|金|土");
-        assert_eq!(months("zh-CN", true), "一月|二月|三月|四月|五月|六月|七月|八月|九月|十月|十一月|十二月");
-        assert_eq!(months("zh-CN", false), "1月|2月|3月|4月|5月|6月|7月|8月|9月|10月|11月|12月");
-        assert_eq!(days("zh-CN", true), "星期日|星期一|星期二|星期三|星期四|星期五|星期六");
-        assert_eq!(days("zh-CN", false), "周日|周一|周二|周三|周四|周五|周六");
-        assert_eq!(months("zh-TW", true), "1月|2月|3月|4月|5月|6月|7月|8月|9月|10月|11月|12月");
         assert_eq!(months("zh-TW", false), months("zh-TW", true));
-        assert_eq!(days("zh-TW", true), "星期日|星期一|星期二|星期三|星期四|星期五|星期六");
-        assert_eq!(days("zh-TW", false), "週日|週一|週二|週三|週四|週五|週六");
-        assert_eq!(months("ko-KR", true), "1월|2월|3월|4월|5월|6월|7월|8월|9월|10월|11월|12월");
         assert_eq!(months("ko-KR", false), months("ko-KR", true));
-        assert_eq!(days("ko-KR", true), "일요일|월요일|화요일|수요일|목요일|금요일|토요일");
-        assert_eq!(days("ko-KR", false), "일|월|화|수|목|금|토");
-        assert_eq!(months("fr-FR", true), "janvier|février|mars|avril|mai|juin|juillet|août|septembre|octobre|novembre|décembre");
-        assert_eq!(months("fr-FR", false), "janv.|févr.|mars|avr.|mai|juin|juil.|août|sept.|oct.|nov.|déc.");
-        assert_eq!(days("fr-FR", true), "dimanche|lundi|mardi|mercredi|jeudi|vendredi|samedi");
-        assert_eq!(days("fr-FR", false), "dim.|lun.|mar.|mer.|jeu.|ven.|sam.");
-        assert_eq!(months("de-DE", true), "Januar|Februar|März|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember");
-        assert_eq!(months("de-DE", false), "Jan|Feb|Mär|Apr|Mai|Jun|Jul|Aug|Sep|Okt|Nov|Dez");
-        assert_eq!(days("de-DE", true), "Sonntag|Montag|Dienstag|Mittwoch|Donnerstag|Freitag|Samstag");
-        assert_eq!(days("de-DE", false), "So|Mo|Di|Mi|Do|Fr|Sa");
-        assert_eq!(months("es-ES", true), "enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre");
-        assert_eq!(months("es-ES", false), "ene|feb|mar|abr|may|jun|jul|ago|sept|oct|nov|dic");
-        assert_eq!(days("es-ES", true), "domingo|lunes|martes|miércoles|jueves|viernes|sábado");
-        assert_eq!(days("es-ES", false), "dom|lun|mar|mié|jue|vie|sáb");
-        assert_eq!(months("it-IT", true), "gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre");
-        assert_eq!(months("it-IT", false), "gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic");
-        assert_eq!(days("it-IT", true), "domenica|lunedì|martedì|mercoledì|giovedì|venerdì|sabato");
-        assert_eq!(days("it-IT", false), "dom|lun|mar|mer|gio|ven|sab");
-        assert_eq!(months("pt-BR", true), "janeiro|fevereiro|março|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro");
-        assert_eq!(months("pt-BR", false), "jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez");
-        assert_eq!(days("pt-BR", true), "domingo|segunda-feira|terça-feira|quarta-feira|quinta-feira|sexta-feira|sábado");
-        assert_eq!(days("pt-BR", false), "dom|seg|ter|qua|qui|sex|sáb");
-        assert_eq!(months("ru-RU", true), "январь|февраль|март|апрель|май|июнь|июль|август|сентябрь|октябрь|ноябрь|декабрь");
-        assert_eq!(months("ru-RU", false), "янв.|февр.|март|апр.|май|июнь|июль|авг.|сент.|окт.|нояб.|дек.");
-        assert_eq!(days("ru-RU", true), "воскресенье|понедельник|вторник|среда|четверг|пятница|суббота");
-        assert_eq!(days("ru-RU", false), "вс|пн|вт|ср|чт|пт|сб");
-        assert_eq!(months("nl-NL", true), "januari|februari|maart|april|mei|juni|juli|augustus|september|oktober|november|december");
-        assert_eq!(months("nl-NL", false), "jan|feb|mrt|apr|mei|jun|jul|aug|sep|okt|nov|dec");
-        assert_eq!(days("nl-NL", true), "zondag|maandag|dinsdag|woensdag|donderdag|vrijdag|zaterdag");
-        assert_eq!(days("nl-NL", false), "zo|ma|di|wo|do|vr|za");
+        for (kind, lang, long, want) in [
+            ("months", "en-US", true, "January|February|March|April|May|June|July|August|September|October|November|December"),
+            ("months", "en-US", false, "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec"),
+            ("days", "en-GB", true, "Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday"),
+            ("days", "en-GB", false, "Sun|Mon|Tue|Wed|Thu|Fri|Sat"),
+            ("months", "ja-JP", true, "1月|2月|3月|4月|5月|6月|7月|8月|9月|10月|11月|12月"),
+            ("days", "ja-JP", true, "日曜日|月曜日|火曜日|水曜日|木曜日|金曜日|土曜日"),
+            ("days", "ja-JP", false, "日|月|火|水|木|金|土"),
+            ("months", "zh-CN", true, "一月|二月|三月|四月|五月|六月|七月|八月|九月|十月|十一月|十二月"),
+            ("months", "zh-CN", false, "1月|2月|3月|4月|5月|6月|7月|8月|9月|10月|11月|12月"),
+            ("days", "zh-CN", true, "星期日|星期一|星期二|星期三|星期四|星期五|星期六"),
+            ("days", "zh-CN", false, "周日|周一|周二|周三|周四|周五|周六"),
+            ("months", "zh-TW", true, "1月|2月|3月|4月|5月|6月|7月|8月|9月|10月|11月|12月"),
+            ("days", "zh-TW", true, "星期日|星期一|星期二|星期三|星期四|星期五|星期六"),
+            ("days", "zh-TW", false, "週日|週一|週二|週三|週四|週五|週六"),
+            ("months", "ko-KR", true, "1월|2월|3월|4월|5월|6월|7월|8월|9월|10월|11월|12월"),
+            ("days", "ko-KR", true, "일요일|월요일|화요일|수요일|목요일|금요일|토요일"),
+            ("days", "ko-KR", false, "일|월|화|수|목|금|토"),
+            ("months", "fr-FR", true, "janvier|février|mars|avril|mai|juin|juillet|août|septembre|octobre|novembre|décembre"),
+            ("months", "fr-FR", false, "janv.|févr.|mars|avr.|mai|juin|juil.|août|sept.|oct.|nov.|déc."),
+            ("days", "fr-FR", true, "dimanche|lundi|mardi|mercredi|jeudi|vendredi|samedi"),
+            ("days", "fr-FR", false, "dim.|lun.|mar.|mer.|jeu.|ven.|sam."),
+            ("months", "de-DE", true, "Januar|Februar|März|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember"),
+            ("months", "de-DE", false, "Jan|Feb|Mär|Apr|Mai|Jun|Jul|Aug|Sep|Okt|Nov|Dez"),
+            ("days", "de-DE", true, "Sonntag|Montag|Dienstag|Mittwoch|Donnerstag|Freitag|Samstag"),
+            ("days", "de-DE", false, "So|Mo|Di|Mi|Do|Fr|Sa"),
+            ("months", "es-ES", true, "enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre"),
+            ("months", "es-ES", false, "ene|feb|mar|abr|may|jun|jul|ago|sept|oct|nov|dic"),
+            ("days", "es-ES", true, "domingo|lunes|martes|miércoles|jueves|viernes|sábado"),
+            ("days", "es-ES", false, "dom|lun|mar|mié|jue|vie|sáb"),
+            ("months", "it-IT", true, "gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre"),
+            ("months", "it-IT", false, "gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic"),
+            ("days", "it-IT", true, "domenica|lunedì|martedì|mercoledì|giovedì|venerdì|sabato"),
+            ("days", "it-IT", false, "dom|lun|mar|mer|gio|ven|sab"),
+            ("months", "pt-BR", true, "janeiro|fevereiro|março|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro"),
+            ("months", "pt-BR", false, "jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez"),
+            ("days", "pt-BR", true, "domingo|segunda-feira|terça-feira|quarta-feira|quinta-feira|sexta-feira|sábado"),
+            ("days", "pt-BR", false, "dom|seg|ter|qua|qui|sex|sáb"),
+            ("months", "ru-RU", true, "январь|февраль|март|апрель|май|июнь|июль|август|сентябрь|октябрь|ноябрь|декабрь"),
+            ("months", "ru-RU", false, "янв.|февр.|март|апр.|май|июнь|июль|авг.|сент.|окт.|нояб.|дек."),
+            ("days", "ru-RU", true, "воскресенье|понедельник|вторник|среда|четверг|пятница|суббота"),
+            ("days", "ru-RU", false, "вс|пн|вт|ср|чт|пт|сб"),
+            ("months", "nl-NL", true, "januari|februari|maart|april|mei|juni|juli|augustus|september|oktober|november|december"),
+            ("months", "nl-NL", false, "jan|feb|mrt|apr|mei|jun|jul|aug|sep|okt|nov|dec"),
+            ("days", "nl-NL", true, "zondag|maandag|dinsdag|woensdag|donderdag|vrijdag|zaterdag"),
+            ("days", "nl-NL", false, "zo|ma|di|wo|do|vr|za"),
+        ] {
+            let got = if kind == "months" { months(lang, long) } else { days(lang, long) };
+            assert_eq!(got, want, "{kind} {lang} {long}");
+        }
         // The whole picture of the probe, from the document created Monday 2026-01-05 09:07 and
         // saved 21:03, in a Japanese and a Spanish run.
         let jan5 = "2026-01-05T00:07:00Z";

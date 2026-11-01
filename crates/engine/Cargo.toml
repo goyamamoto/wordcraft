@@ -8,8 +8,14 @@ description = "WordCraft engine: session, selection, undo, the command registry 
 [lints]
 workspace = true
 
+[features]
+# Front-end producer tests need to simulate a globally exhausted IME revision allocator. It only
+# ever makes receipt classification fail closed. Never enable this for a production build; the
+# UI's dev-dependencies enable it for its tests.
+test-support = []
+
 [dependencies]
-wordcraft-geom = { workspace = true }
+wordcraft-geom = { workspace = true, features = ["image"] }
 wordcraft-doc = { workspace = true }
 wordcraft-fonts = { workspace = true }
 wordcraft-layout = { workspace = true }
@@ -37,6 +43,10 @@ js-sys = "0.3"
 getrandom = { workspace = true }
 # The local time zone for DATE and TIME fields (MIT OR Apache-2.0); the browser's clock gives it on the web.
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[target.'cfg(unix)'.dependencies]
+# O_NONBLOCK, so a path swapped for a named pipe can't block `open` (#3666).
+libc = { workspace = true }
 
 [dev-dependencies]
 encoding_rs = { workspace = true }

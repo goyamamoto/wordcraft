@@ -6,8 +6,9 @@
 //! (再変換 — the Japanese input method marks the selected text's reading and offers candidates
 //! for it) and live conversion reads the words before the caret. Both go through
 //! `NSTextInputClient`'s `selectedRange` and `attributedSubstringForProposedRange:actualRange:`,
-//! which winit answers with nothing; the vendored winit (`vendor/patches/winit/01-macos-ime-
-//! surrounding-text.md`) answers from what the desktop app reports here, and hands the
+//! which winit answers with nothing (storytold/winit only with the text typed since the caret last
+//! moved); the vendored winit (`vendor/patches/winit/01-macos-ime-surrounding-text.md`) answers
+//! from what the desktop app reports here, and hands the
 //! replacement range of `setMarkedText:selectedRange:replacementRange:` back, which
 //! [`select_range`] turns into the selection the composition then takes the place of
 //! (`Session::set_composition`).

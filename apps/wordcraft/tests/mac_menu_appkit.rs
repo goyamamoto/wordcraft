@@ -15,6 +15,8 @@
 mod mac_menu;
 
 #[cfg(target_os = "macos")]
+// One AppKit session end to end, on the main thread: the steps share the installed menu bar.
+#[allow(clippy::cognitive_complexity)]
 fn main() {
     use objc2::MainThreadMarker;
     use objc2::rc::Retained;
@@ -92,7 +94,7 @@ fn main() {
     let mut menu: NativeMenu = mac_menu::install(&ctx, &app).expect("the menu bar installed");
     let frame = |app: &mut WordApp, menu: &mut NativeMenu, mut raw: egui::RawInput| {
         native_menu::raw_input(menu, app, &mut raw);
-        app.raw_input_hook(&mut raw);
+        app.raw_input_hook(&ctx, &mut raw);
         let mut out = ctx.run_ui(raw, |ui| {
             native_menu::run(menu, app, ui.ctx());
             wordcraft_ui_egui::keys::canvas_events(app, ui.ctx());
@@ -121,7 +123,7 @@ fn main() {
     let names = titles(&window);
     let ours: Vec<&str> = names.iter().map(String::as_str).take(6).collect();
     assert_eq!(ours, ["Minimize", "Zoom", "New Window", "Arrange All", "Split", "Bring All to Front"], "{names:?}");
-    assert!(!window.itemAtIndex(index(&window, "Arrange All")).expect("Arrange All").isEnabled(), "no window host in this test");
+    assert!(window.itemAtIndex(index(&window, "Arrange All")).expect("Arrange All").isEnabled(), "the desktop app arranges its windows");
 
     // State updates keep the installed NSMenu object, including AppKit's added window rows.
     let undo_enabled = |bar: &NSMenu| {
@@ -140,7 +142,7 @@ fn main() {
     assert!(main_menu().performKeyEquivalent(&press), "⌘R is View › Ruler's key equivalent");
     let mut raw = egui::RawInput::default();
     native_menu::raw_input(&mut menu, &mut app, &mut raw);
-    app.raw_input_hook(&mut raw);
+    app.raw_input_hook(&ctx, &mut raw);
     let keys: Vec<_> = raw
         .events
         .iter()

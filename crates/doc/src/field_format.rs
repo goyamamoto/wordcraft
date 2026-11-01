@@ -380,6 +380,13 @@ mod tests {
         assert_eq!(row("KanjiNum2", &v), row("DBNum2", &v));
         assert_eq!(row("KanjiNum3", &v), row("DBNum3", &v));
         assert_eq!(row("dbnum1", &v), row("DBNum1", &v));
+    }
+
+    /// The other sets of the same probe: dashes, circled and Korean numbers, the Chinese sets,
+    /// zodiac, hex, roman, Hebrew and dollar text.
+    #[test]
+    fn other_switches_as_word_for_mac_writes_them() {
+        let v = [1.0, 2.0, 5.0, 12.0, 23.0, 47.0, 101.0, 2024.0, 0.0];
         assert_eq!(row("ArabicDash", &v), "- 1 - | - 2 - | - 5 - | - 12 - | - 23 - | - 47 - | - 101 - | - 2024 - | - 0 -");
         assert_eq!(row("CircleNum", &v), "① | ② | ⑤ | ⑫ | 23 | 47 | 101 | 2024 | 0");
         assert_eq!(row("Ganada", &v), "가 | 나 | 마 | 타 | 자 | 마 | 다 | 아 | 0");

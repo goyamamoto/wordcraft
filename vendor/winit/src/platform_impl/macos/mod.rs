@@ -3,11 +3,16 @@ mod util;
 
 mod app;
 mod app_state;
+mod command_key;
 mod cursor;
 mod event;
 mod event_handler;
 mod event_loop;
 mod ffi;
+mod ime_document;
+// WordCraft patch (vendor/patches/winit/01-macos-ime-surrounding-text.md).
+mod ime_surrounding;
+mod ime_startup;
 mod menu;
 mod monitor;
 mod observer;
@@ -26,11 +31,15 @@ pub(crate) use self::monitor::{MonitorHandle, VideoModeHandle};
 pub(crate) use self::window::WindowId;
 pub(crate) use self::window_delegate::PlatformSpecificWindowAttributes;
 use crate::event::DeviceId as RootDeviceId;
+use crate::platform::macos::ImeDeleteSurrounding;
 
 pub(crate) use self::cursor::CustomCursor as PlatformCustomCursor;
 pub(crate) use self::window::Window;
 // WordCraft patch (vendor/patches/winit/01-macos-ime-surrounding-text.md).
-pub use self::view::{ime_surrounding_text, set_ime_surrounding_text, take_ime_replacement_range, ImeMarked, ImeSurroundingText};
+pub use self::ime_surrounding::{
+    ime_surrounding_text, set_ime_surrounding_text, take_ime_replacement_range, ImeMarked,
+    ImeSurroundingText,
+};
 pub(crate) use crate::cursor::OnlyCursorImageSource as PlatformCustomCursorSource;
 pub(crate) use crate::icon::NoIcon as PlatformIcon;
 pub(crate) use crate::platform_impl::Fullscreen;

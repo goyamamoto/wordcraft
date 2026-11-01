@@ -576,7 +576,8 @@ impl Counters {
             return Some((def.text.clone(), def));
         }
         let mut label = String::new();
-        let mut chars = def.text.chars().peekable();
+        // Word's level text is short; .docx and the lists command already cap it at 64.
+        let mut chars = def.text.chars().take(MAX_LEVEL_TEXT).peekable();
         while let Some(c) = chars.next() {
             if c == '%'
                 && let Some(d) = chars.peek().and_then(|d| d.to_digit(10))
@@ -594,6 +595,9 @@ impl Counters {
                     f => f,
                 };
                 label.push_str(&fmt.format(val));
+                if label.len() > MAX_LABEL_BYTES {
+                    break;
+                }
             } else {
                 label.push(c);
             }
@@ -601,6 +605,11 @@ impl Counters {
         Some((label, def))
     }
 }
+
+/// Longest level text (in characters) expanded into a list label.
+const MAX_LEVEL_TEXT: usize = 64;
+/// Labels stop growing once they pass this many bytes.
+const MAX_LABEL_BYTES: usize = 256;
 
 #[cfg(test)]
 mod tests {
@@ -712,6 +721,22 @@ mod tests {
             let got: Vec<String> = (1..=12).map(|_| c.next_label(&n, id, 0).unwrap().0).collect();
             assert_eq!((got[9].as_str(), got[11].as_str()), (labels[0], labels[1]), "{kind:?}");
         }
+    }
+
+    #[test]
+    fn a_huge_level_text_gives_a_bounded_label() {
+        let mut n = Numbering::default();
+        let id = n.add_list(ListKind::Numbered);
+        // The longest roman numeral Word draws (32 767: roman numerals wrap there, and a value
+        // past 2³¹ reads as negative and draws nothing, as Word for Mac does).
+        let huge = Level { format: NumFormat::UpperRoman, text: "%1".repeat(30_000), start: 32_767, ..Level::default() };
+        if let Some(num) = n.nums.iter_mut().find(|x| x.id == id) {
+            num.level_overrides = vec![(0, huge)];
+        }
+        let mut c = Counters::default();
+        let label = c.next_label(&n, id, 0).unwrap().0;
+        assert!(label.len() <= 512, "label is {} bytes", label.len());
+        assert!(label.starts_with("MMMM"));
     }
 
     #[test]
