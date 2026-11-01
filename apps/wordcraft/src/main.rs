@@ -31,97 +31,138 @@ mod traffic_lights;
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::{
     Services, UiState, WordApp,
-    window_geometry::{WindowGeometry, take_rescue},
-    windows::Host,
+    window_geometry::{RawWindowState, WindowGeometry, take_rescue},
 };
 
-/// The eframe app: a shim over the window host ([`Host`], one `WordApp` per document window,
-/// #322), plus the restored geometry of the first window (or, with none, the default: no position)
-/// until the first frame that knows the monitor has checked it, the control server's key file
-/// (removed on exit), the file dialogs the windows asked for and, on macOS, the documents opened
-/// from Finder.
-struct App(Option<WindowGeometry>, Option<control_server::KeyFile>, file_dialogs::Launcher, #[cfg(target_os = "macos")] fmv_macos_events::Inbox);
+/// The app, the restored window geometry (or, with none, the default: no position) until the
+/// first frame that knows the monitor has checked it, the control server's key file (removed on
+/// exit), the file dialogs the app asked for, this frame's raw host window state and, on macOS,
+/// the documents opened from Finder and the native menu bar (#1396).
+struct App(
+    WordApp,
+    Option<WindowGeometry>,
+    Option<control_server::KeyFile>,
+    file_dialogs::Launcher,
+    // The host's answer for this frame. `InputState` still describes the last painted frame on
+    // a hidden logic tick.
+    RawWindowState,
+    #[cfg(target_os = "macos")] fmv_macos_events::Inbox,
+    #[cfg(target_os = "macos")] Option<wordcraft_ui_egui::native_menu::NativeMenu>,
+);
 
 impl eframe::App for App {
+    /// Advances one desktop frame: polls Finder events on macOS, runs the app and its file dialogs,
+    /// fits or rescues the window and maximizes it after opening, then gates a close or quit request
+    /// on unsaved changes and active printing.
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
-        apple_events::poll(&self.3, ctx);
-        Host::with(|h| h.logic(egui::ViewportId::ROOT, ctx));
-        self.2.show(frame);
+        apple_events::poll(&self.5, &mut self.0, ctx);
+        self.0.logic(ctx);
+        // The menu bar's clicks run in the active window, whose state the app holds between its
+        // windows' frames.
+        #[cfg(target_os = "macos")]
+        if let Some(menu) = &mut self.6 {
+            wordcraft_ui_egui::native_menu::run(menu, &mut self.0, ctx);
+        }
+        self.3.show(frame);
+        let window = self.4;
         // A window that doesn't fit on its screen (the default size on a laptop) shrinks to fit
         // there, so all of the scroll bar can be dragged (#1215). Checked on the frame that first
         // knows the monitor: the off-screen check below takes the pending geometry then.
-        if let Some((pos, size)) = ctx.input(|i| self.0.and_then(|g| g.fit_on_monitor(i.viewport()))) {
+        if let Some((pos, size)) = self.1.and_then(|g| g.fit_on_monitor(&window)) {
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
         }
+        // The geometry saved for the next start is the active window's.
+        let prev = self.0.ui.window;
+        // Another document window's state is the one it last painted with: the host reports only
+        // the root window's for this frame.
+        let active = self.0.active_viewport();
+        let tracked = if active == egui::ViewportId::ROOT {
+            window
+        } else {
+            ctx.input_for(active, |i| RawWindowState::from_viewport(Some(i.viewport()), Some(i.viewport_rect())))
+        };
+        self.0.ui.window = WindowGeometry::track(prev, &tracked);
         // The first frame, once the monitor is known (as `take_rescue` waits for): maximize a
         // window that opened at its normal size so it never flashed on screen half-opened.
-        let maximize = self.0.and_then(|g| g.maximize_after_open()).filter(|_| ctx.input(|i| i.viewport().monitor_size.is_some()));
-        if let Some(pos) = ctx.input(|i| take_rescue(&mut self.0, i.viewport())) {
+        let maximize = self.1.and_then(|g| g.maximize_after_open()).filter(|_| window.monitor_size.is_some());
+        if let Some(pos) = take_rescue(&mut self.1, &window) {
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
         }
         if let Some(command) = maximize {
             ctx.send_viewport_cmd(command);
         }
-        // The last window was allowed to close (the host asked about unsaved changes first,
-        // `WordApp::close_requested`), or every window has: the app ends.
-        if Host::with(|h| h.exit_requested()) == Some(true) {
+        // The window's close button: with other windows open only this window closes (the app
+        // handles that while drawing it); the last one quits, asking first about unsaved changes
+        // (`WordApp::close_requested`).
+        let closing = ctx.input(|i| i.viewport().close_requested());
+        if closing && (self.0.closes_a_window() || !self.0.close_requested()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        } else if (closing || self.0.quit_requested) && !self.0.printing.busy() {
             // On macOS, letting eframe drop the window inside `-[NSApplication run]` aborts in
             // `-[_NSTouchBarFinderObservation invalidate]`. Command-Q calls `terminate:`. Once
             // the close is allowed, take that path instead of dropping the window on this turn.
             #[cfg(target_os = "macos")]
             {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                schedule_macos_terminate(self.1.as_ref());
+                self.0.quit_requested = false;
+                schedule_macos_terminate(&mut self.0, self.2.as_ref());
             }
             #[cfg(not(target_os = "macos"))]
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            if self.0.quit_requested {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
         }
     }
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+    /// Records this frame's native window state before forwarding the hook, so logic never reads a
+    /// stale inner rectangle from a hidden tick.
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // Keep this frame's native window state. `logic` must not read the last painted
+        // `InputState` when a hidden Wayland tick reports no fresh inner rect.
+        self.4 = RawWindowState::from_raw(raw);
         // macOS: the committed text the input method asked to replace with this frame's
-        // composition (再変換), from the vendored winit (`wordcraft_ui_egui::ime`). The input
-        // method talks to the focused window, whose input this is.
+        // composition (再変換), from the vendored winit (`wordcraft_ui_egui::ime`).
         #[cfg(target_os = "macos")]
         if raw.events.iter().any(|e| matches!(e, egui::Event::Ime(egui::ImeEvent::Preedit { .. }))) {
-            let range = winit::platform::macos::take_ime_replacement_range();
-            let vp = raw.viewport_id;
-            Host::with(|h| {
-                if let Some(w) = h.window_of_viewport_mut(vp) {
-                    w.app.canvas.ime_replace = range;
-                }
-            });
+            self.0.canvas.ime_replace = winit::platform::macos::take_ime_replacement_range();
         }
-        Host::with(|h| h.raw_input_hook(raw));
+        // The menu bar's key equivalents become the key presses they were, for the active window.
+        #[cfg(target_os = "macos")]
+        if let Some(menu) = &mut self.6 {
+            wordcraft_ui_egui::native_menu::raw_input(menu, &mut self.0, raw);
+        }
+        self.0.raw_input_hook(ctx, raw);
     }
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        Host::with(|h| h.ui(egui::ViewportId::ROOT, ui));
-        self.2.show(frame);
+        self.0.ui(ui);
+        // After the windows' frames: the menu bar shows the active window's state, and the input
+        // method may read the text around its caret.
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(menu) = &mut self.6 {
+                wordcraft_ui_egui::native_menu::sync(menu, &self.0, ui.ctx());
+            }
+            report_ime_surrounding(&self.0);
+        }
+        self.3.show(frame);
     }
     fn on_exit(&mut self) {
         print::finish_pending_jobs();
-        Host::with(|h| {
-            h.on_exit();
-            if let Some(w) = h.active() {
-                save_prefs(&w.app);
-            }
-        });
-        if let Some(key_file) = &self.1 {
+        self.0.session.finish_recovery();
+        save_prefs(&self.0);
+        if let Some(key_file) = &self.2 {
             key_file.remove();
         }
     }
 }
 
-/// macOS: what the input method may read of the focused document after its frame (the caret's
-/// paragraph and the selection), so it can reconvert committed text as it does in Word. The
-/// store in the vendored winit is one for the process, so only the focused window writes it: the
-/// input method talks to that window alone.
+/// macOS: what the input method may read of the active document after the frame (the caret's
+/// paragraph and the selection), so it can reconvert committed text as it does in Word. The store
+/// in the vendored winit is one for the process; the input method talks to the focused window,
+/// the active one.
 #[cfg(target_os = "macos")]
-fn report_ime_surrounding(app: &WordApp, focused: bool) {
-    if !focused {
-        return;
-    }
+fn report_ime_surrounding(app: &WordApp) {
     winit::platform::macos::set_ime_surrounding_text(
         app.canvas
             .ime_surrounding
@@ -132,14 +173,17 @@ fn report_ime_surrounding(app: &WordApp, focused: bool) {
 
 /// Quit the way Command-Q does, on the next turn of the main queue.
 ///
-/// Called when the last window is closing. Doing it on the next turn lets the close
+/// Called when the window is closing. Doing it on the next turn lets the close
 /// button's display cycle finish while the window still exists; `terminate:`
 /// then ends the process. Preferences are written and the control key file is
 /// removed first, as `on_exit` does, because a fallback [`std::process::exit`]
 /// skips `on_exit`. A second close while a quit is already scheduled is ignored.
 #[cfg(target_os = "macos")]
-fn schedule_macos_terminate(key_file: Option<&control_server::KeyFile>) {
+fn schedule_macos_terminate(app: &mut WordApp, key_file: Option<&control_server::KeyFile>) {
     use std::sync::atomic::{AtomicBool, Ordering};
+    if app.printing.busy() {
+        return;
+    }
     static QUIT: AtomicBool = AtomicBool::new(false);
     if QUIT.swap(true, Ordering::Relaxed) {
         return;
@@ -147,12 +191,8 @@ fn schedule_macos_terminate(key_file: Option<&control_server::KeyFile>) {
     log::info!("window close: quitting");
     // This path can bypass on_exit. Join the owned workers before termination and cleanup.
     print::finish_pending_jobs();
-    Host::with(|h| {
-        h.on_exit();
-        if let Some(w) = h.active() {
-            save_prefs(&w.app);
-        }
-    });
+    app.session.finish_recovery();
+    save_prefs(app);
     if let Some(key_file) = key_file {
         key_file.remove();
     }
@@ -334,6 +374,26 @@ fn text_args() -> (Vec<String>, Vec<std::path::PathBuf>) {
     (args, files)
 }
 
+/// The arguments without the ones macOS adds when it launches an app (#1103): `-psn_0_12345`, and
+/// the `-NS…` / `-Apple…` options (`-AppleLanguages (en)`, `-NSDocumentRevisionsDebugMode YES`) with
+/// the value after each. They are not files, and opening them as files fails.
+fn without_launch_args(args: Vec<String>) -> Vec<String> {
+    let mut kept = Vec::with_capacity(args.len());
+    let mut args = args.into_iter().peekable();
+    while let Some(a) = args.next() {
+        if a.starts_with("-psn_") {
+            continue;
+        }
+        if a.starts_with("-NS") || a.starts_with("-Apple") {
+            // Its value, unless the next argument is another flag.
+            args.next_if(|v| !v.starts_with('-'));
+            continue;
+        }
+        kept.push(a);
+    }
+    kept
+}
+
 /// Open a file whose name isn't valid Unicode (#1440). `file.open` takes its path as text, so it
 /// gets the file's bytes under the lossy name, and the document then keeps the real path to save to.
 /// The bytes are read as `file.open` reads a path: only a regular file, and at most 2 GB.
@@ -342,15 +402,24 @@ fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
     let opened = wordcraft_engine::io::read_document(path)
         .and_then(|bytes| app.run("file.open", serde_json::json!({"path": name, "data": wordcraft_engine::cmd::insert::base64_encode(&bytes)})));
     match opened {
-        // Not when it waits for a password: that open names the document itself. Nor when the
-        // window host takes it to a new window: that window keeps the lossy name (#322).
+        // Not when it waits for a password: that open names the document itself.
         Ok(r) if r.get("pending").is_none() => app.session.path = Some(path.into()),
         Ok(_) => {}
-        Err(e) => log::warn!("{name}: {e}"),
+        Err(e) => {
+            app.report_open_failure(&name, &e);
+        }
     }
 }
 
+/// Parses the command line, installs logging and the panic hook, restores preferences and window
+/// geometry, opens requested documents or the Start screen, starts the control server when
+/// asked, and runs the eframe event loop.
 fn main() -> eframe::Result {
+    // Windows: the update helper is a copy of this program started with `--finish-update`.
+    #[cfg(windows)]
+    if let Some(result) = craft_update::self_update::finish(&wordcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+        std::process::exit(i32::from(result.is_err()));
+    }
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     logging::install_panic_hook();
@@ -360,6 +429,8 @@ fn main() -> eframe::Result {
     let mut files = Vec::new();
     let mut sample = false;
     let (args, other_files) = text_args();
+    // Only macOS (Finder / LaunchServices) adds these; elsewhere `-NS…` could be a real file name.
+    let args = if cfg!(target_os = "macos") { without_launch_args(args) } else { args };
     let mut bad_control: Option<Option<String>> = None;
     let mut args = args.into_iter().peekable();
     while let Some(a) = args.next() {
@@ -429,6 +500,8 @@ fn main() -> eframe::Result {
     #[cfg(target_os = "macos")]
     graphics::configure_indirect_validation(&mut options, graphics::skips_indirect_validation(true, cfg!(target_arch = "x86_64")));
     load_user_fonts();
+    // Windows opened for further documents start like the first one, before its saved place.
+    let window_builder = options.viewport.clone();
     let restored = saved_window();
     if let Some(window) = restored {
         options.viewport = window.apply(options.viewport);
@@ -449,7 +522,6 @@ fn main() -> eframe::Result {
     let apple_events = apple_events::AppleEvents::install();
     #[cfg(target_os = "macos")]
     let apple_events = &apple_events;
-    let template = options.viewport.clone();
     eframe::run_native(
         "WordCraft",
         options,
@@ -460,40 +532,17 @@ fn main() -> eframe::Result {
             // Japanese among the system's languages starts from Word's Japanese Normal template
             // and puts Japanese text in Japanese, as Word for Mac's East Asian Languages does.
             let east_asian = region::east_asian();
-            let (file_dialog, dialogs) = file_dialogs::hook(&cc.egui_ctx);
-            let file_dialog = std::rc::Rc::new(file_dialog);
-            // One `WordApp` per document window (#322): the first one below, the rest as the
-            // host opens windows, each with the same desktop services and a blank session.
-            let new_app = {
-                let (region, east_asian, file_dialog, ctx) = (region.clone(), east_asian.clone(), file_dialog.clone(), cc.egui_ctx.clone());
-                move || {
-                    let doc = wordcraft_engine::blank_document_in(&region, east_asian.as_deref());
-                    let mut session = Session::new(doc);
-                    session.system_region = region.clone();
-                    session.east_asian_editing = east_asian.clone();
-                    let dialog = file_dialog.clone();
-                    let mut app = WordApp::new(session, services(Box::new(move |req| dialog(req)), &ctx));
-                    load_user_dictionary(&mut app);
-                    app.watch_desktop_theme(&ctx);
-                    enable_recovery(&mut app, &ctx);
-                    app.integrated_titlebar = cfg!(target_os = "macos");
-                    #[cfg(target_os = "macos")]
-                    if let Some(bar) = traffic_lights::title_bar() {
-                        app.mac_titlebar = bar;
-                    }
-                    app
-                }
-            };
             let doc = if sample {
                 wordcraft_engine::sample::sample_document()
             } else {
                 wordcraft_engine::blank_document_in(&region, east_asian.as_deref())
             };
+            let (file_dialog, dialogs) = file_dialogs::hook(&cc.egui_ctx);
             let mut session = Session::new(doc);
             session.system_region = region;
             session.east_asian_editing = east_asian;
-            let first_dialog = file_dialog.clone();
-            let mut app = WordApp::new(session, services(Box::new(move |req| first_dialog(req)), &cc.egui_ctx));
+            let mut app = WordApp::new(session, services(file_dialog, &cc.egui_ctx));
+            app.set_startup_update_check(true);
             load_prefs(&mut app);
             load_user_dictionary(&mut app);
             // A region chosen in File › Options replaces the system's for the first blank
@@ -503,13 +552,31 @@ fn main() -> eframe::Result {
                 app.session.set_document(doc);
             }
             app.watch_desktop_theme(&cc.egui_ctx);
-            enable_recovery(&mut app, &cc.egui_ctx);
+            if prefs_enabled()
+                && let Some(dir) = wordcraft_control_key::settings_dir()
+            {
+                let ctx = cc.egui_ctx.clone();
+                if let Err(e) = app.session.enable_recovery(dir.join("recovery"), std::sync::Arc::new(move || ctx.request_repaint())) {
+                    log::warn!("local recovery unavailable: {e}");
+                }
+            }
             app.ui.window = restored;
+            app.set_window_builder(window_builder);
+            // Arrange All and View Side by Side lay windows out within the screen's visible frame.
+            #[cfg(target_os = "macos")]
+            app.set_work_area(Box::new(screens::work_area));
             app.integrated_titlebar = cfg!(target_os = "macos");
             #[cfg(target_os = "macos")]
             if let Some(bar) = traffic_lights::title_bar() {
                 log::info!("title bar: {bar:?}");
                 app.mac_titlebar = bar;
+            }
+            let mut key_file = None;
+            if let Some(port) = control_port
+                && let Some((rx, file)) = control_server::start(port, cc.egui_ctx.clone(), wordcraft_control_key::settings_dir().as_deref())
+            {
+                app = app.with_control(rx);
+                key_file = file;
             }
             // Nothing to open (no files, no sample, no control channel driving the editor): start
             // on File › Home, as Word does (#766), unless the Start screen option is off. Files
@@ -517,60 +584,36 @@ fn main() -> eframe::Result {
             if files.is_empty() && other_files.is_empty() && !sample && control_port.is_none() {
                 app.start_screen();
             }
-            // The native menu bar (macOS, #1396): built from the first window's state, then kept
-            // to the window in use by the host.
+            for f in files {
+                if let Err(e) = app.run("file.open", serde_json::json!({"path": f})) {
+                    app.report_open_failure(&f, &e);
+                }
+            }
+            for f in other_files {
+                open_non_unicode(&mut app, &f);
+            }
+            // The native menu bar (macOS, #1396): built from the active window's state, then kept
+            // to it after every frame.
             #[cfg(target_os = "macos")]
             let menu = mac_menu::install(&cc.egui_ctx, &app);
-            let mut host = Host::new(app, template, Box::new(new_app));
             #[cfg(target_os = "macos")]
             {
-                host.work_area = Some(Box::new(screens::work_area));
-                host.after_ui = Some(Box::new(report_ime_surrounding));
-                if let Some(menu) = menu {
-                    host = host.with_menu(menu);
-                }
+                app.menu_bar_installed = menu.is_some();
             }
-            let mut key_file = None;
-            if let Some(port) = control_port
-                && let Some((rx, file)) = control_server::start(port, cc.egui_ctx.clone(), wordcraft_control_key::settings_dir().as_deref())
-            {
-                host = host.with_control(rx);
-                key_file = file;
-            }
-            // Each file in a window of its own, as Word opens them; the first takes the blank
-            // window (`Host::open_paths`).
-            host.open_paths(files, &cc.egui_ctx);
-            for f in other_files {
-                if let Some(w) = host.active_mut() {
-                    open_non_unicode(&mut w.app, &f);
-                }
-                host.open_paths(Vec::<String>::new(), &cc.egui_ctx);
-            }
-            Host::install(host);
             Ok(Box::new(App(
+                app,
                 // With nothing restored, the window the system placed is checked all the same.
                 Some(restored.unwrap_or_default()),
                 key_file,
                 dialogs,
+                RawWindowState::default(),
                 #[cfg(target_os = "macos")]
                 apple_events.connect(&cc.egui_ctx),
+                #[cfg(target_os = "macos")]
+                menu,
             )))
         }),
     )
-}
-
-/// Local recovery copies for the window's document (`docs/recovery.md`) in the settings folder;
-/// runs without preferences keep none. The worker wakes the root window, which wakes the rest.
-fn enable_recovery(app: &mut WordApp, ctx: &egui::Context) {
-    if prefs_enabled()
-        && let Some(dir) = wordcraft_control_key::settings_dir()
-    {
-        let ctx = ctx.clone();
-        if let Err(e) = app.session.enable_recovery(dir.join("recovery"), std::sync::Arc::new(move || ctx.request_repaint_of(egui::ViewportId::ROOT)))
-        {
-            log::warn!("local recovery unavailable: {e}");
-        }
-    }
 }
 
 // Not on macOS: APFS refuses file names that aren't valid UTF-8, so no such file can exist there.
@@ -636,6 +679,33 @@ mod tests {
             assert!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("kept"), "{p:?}");
         }
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod launch_arg_tests {
+    use super::without_launch_args;
+
+    fn strip(args: &[&str]) -> Vec<String> {
+        without_launch_args(args.iter().map(|a| a.to_string()).collect())
+    }
+
+    #[test]
+    fn macos_launch_arguments_are_not_files() {
+        assert_eq!(strip(&["-psn_0_12345", "a.docx"]), ["a.docx"]);
+        assert_eq!(strip(&["-AppleLanguages", "(en)", "a.docx"]), ["a.docx"]);
+        assert_eq!(strip(&["a.docx", "-NSDocumentRevisionsDebugMode", "YES", "b.docx"]), ["a.docx", "b.docx"]);
+        // A flag with no value after it, or followed by another flag, takes nothing with it.
+        assert_eq!(strip(&["a.docx", "-AppleLocale"]), ["a.docx"]);
+        assert_eq!(strip(&["-NSFoo", "--sample", "a.docx"]), ["--sample", "a.docx"]);
+    }
+
+    #[test]
+    fn real_arguments_are_kept() {
+        assert_eq!(strip(&["--control", "7981", "--sample", "-h"]), ["--control", "7981", "--sample", "-h"]);
+        // Files whose names merely start like a launch argument keep their place when they are paths.
+        assert_eq!(strip(&["./-psn_x.docx", "Apple.docx", "-", "-nsfoo"]), ["./-psn_x.docx", "Apple.docx", "-", "-nsfoo"]);
+        assert!(strip(&[]).is_empty());
     }
 }
 

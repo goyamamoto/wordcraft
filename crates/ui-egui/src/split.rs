@@ -1,11 +1,14 @@
 //! View › Window › Split: two panes on the document in one window, as Word splits it (#322): a
 //! bar across the window, each pane with its own caret, selection, scroll and zoom, the document
-//! one and the same. The active pane (the one with the caret) is the app's own view and canvas;
-//! the other pane's are kept here and swapped in to draw it (`Session::swap_view`). A press in the
-//! other pane makes it the active one. Remove Split keeps the active pane.
+//! one and the same. The active pane (the one with the caret) is the window's own view of the
+//! document (the session's) and canvas; the other pane's are kept here, a second
+//! [`WindowView`] on the document as View › New Window's windows have, and swapped in to draw it
+//! ([`Session::take_view`](wordcraft_engine::Session::take_view) and `put_view`). A press in the
+//! other pane makes it the active one. Remove Split keeps the active pane. A split belongs to its
+//! window ([`crate::window_ui`]); it ends when the window shows another document.
 
 use egui::{CursorIcon, Rect, Sense, Ui, UiBuilder, pos2};
-use wordcraft_engine::ViewSlot;
+use wordcraft_engine::WindowView;
 
 use crate::canvas::{self, CanvasState};
 use crate::theme::Tokens;
@@ -17,8 +20,9 @@ const BAR: f32 = 6.0;
 const MIN_PANE: f32 = 60.0;
 
 pub struct Split {
-    /// The inactive pane's view and canvas (the active pane's are the app's own).
-    slot: ViewSlot,
+    /// The inactive pane's view and canvas (the active pane's are the app's own). `None` only
+    /// while the panes are being exchanged.
+    slot: Option<WindowView>,
     canvas: Box<CanvasState>,
     /// Where the bar is, as a fraction of the panes' height.
     pub fraction: f32,
@@ -33,7 +37,10 @@ pub fn toggle(app: &mut WordApp) {
         app.canvas.want_focus = true;
         return;
     }
-    let slot = app.session.clone_view();
+    if !app.has_document() {
+        return;
+    }
+    let slot = Some(app.session.copy_view());
     let mut canvas = Box::new(CanvasState::default());
     canvas.scroll_to_caret = true;
     app.split = Some(Split { slot, canvas, fraction: 0.5, lower_active: false });
@@ -41,6 +48,11 @@ pub fn toggle(app: &mut WordApp) {
 
 /// Draw the document: one canvas, or the two panes and the bar between them.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
+    // The window shows another document now (the web app's one window): one pane again.
+    let document = app.session.document_id();
+    if app.split.as_ref().is_some_and(|s| s.slot.as_ref().is_none_or(|v| v.document_id() != document)) {
+        app.split = None;
+    }
     if app.split.is_none() {
         canvas::show(app, ui);
         return;
@@ -55,10 +67,12 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let pressed_at = ui.input(|i| if i.pointer.any_pressed() { i.pointer.interact_pos() } else { None });
     let lower_active = app.split.as_ref().is_some_and(|s| s.lower_active);
     let mut flip = false;
+    // Decided once for the frame, so the two exchanges around the other pane match.
+    let views = app.session.composition().is_none();
     for (pane, rect) in [(0u8, upper), (1u8, lower)] {
         let active = (pane == 1) == lower_active;
         if !active {
-            swap(app);
+            swap(app, views);
         }
         // The pane's fixed widget ids (the page, its scroll area) are its own.
         crate::set_pane_salt(pane);
@@ -68,11 +82,17 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         if !active {
             // A press in the other pane makes it the active one: the caret is there now.
             flip = pressed_at.is_some_and(|p| rect.contains(p));
-            swap(app);
+            swap(app, views);
         }
     }
     if flip {
-        swap(app);
+        // The composition belongs to the pane being left: it ends there, and the input method
+        // starts afresh in the other pane.
+        if app.session.composition().is_some() {
+            app.session.clear_composition();
+            app.canvas.ime_interrupt_now = true;
+        }
+        swap(app, true);
         if let Some(s) = app.split.as_mut() {
             s.lower_active = !s.lower_active;
         }
@@ -92,10 +112,18 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     }
 }
 
-/// Exchange the active pane's view and canvas with the other pane's.
-fn swap(app: &mut WordApp) {
+/// Exchange the active pane's view and canvas with the other pane's. While the input method
+/// composes, only the canvases change hands (the other pane is drawn with its own scroll and the
+/// active pane's caret): the composition stays with the active pane's caret and selection.
+fn swap(app: &mut WordApp, views: bool) {
     let Some(s) = app.split.as_mut() else { return };
-    app.session.swap_view(&mut s.slot);
+    if !views {
+        std::mem::swap(&mut app.canvas, &mut *s.canvas);
+        return;
+    }
+    let Some(other) = s.slot.take() else { return };
+    s.slot = Some(app.session.take_view());
+    app.session.put_view(other);
     std::mem::swap(&mut app.canvas, &mut *s.canvas);
 }
 
@@ -151,7 +179,7 @@ mod tests {
         );
         assert!(!app.canvas.page_rects.is_empty() && !s.canvas.page_rects.is_empty(), "both panes draw the page");
         assert_eq!(app.session.sel.focus.off, "Second paragraph".len(), "the caret is where it was");
-        assert_eq!(s.slot.sel.focus, app.session.sel.focus, "the new pane opens at the same place");
+        assert_eq!(s.slot.as_ref().unwrap().selection().focus, app.session.sel.focus, "the new pane opens at the same place");
 
         // A press in the lower pane: that pane is active and the caret is there.
         let at = lower.center();

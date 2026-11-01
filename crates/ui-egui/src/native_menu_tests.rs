@@ -57,7 +57,7 @@ impl Setup {
     fn frame(&mut self, mut raw: egui::RawInput) -> egui::FullOutput {
         let Setup { app, ctx, menu, .. } = self;
         raw_input(menu, app, &mut raw);
-        app.raw_input_hook(&mut raw);
+        app.raw_input_hook(ctx, &mut raw);
         let mut output = ctx.run_ui(raw, |ui| {
             app.ctx = Some(ui.ctx().clone());
             run(menu, app, ui.ctx());
@@ -124,7 +124,7 @@ fn layout_has_mac_roles_and_only_existing_commands() {
         assert_eq!(minimize, Chord::parse("Mod+Ctrl+M"), "Ctrl+M indents there");
     }
     assert!(bar.find(ZOOM).unwrap().shortcut.is_none(), "Zoom has no key, as in Word");
-    assert!(!bar.find("view.arrangeAll").unwrap().enabled, "no window host here: the window commands are off");
+    assert!(bar.find("view.arrangeAll").unwrap().enabled, "the desktop app arranges its windows");
     assert!(bar.find("view.sideBySide").is_none(), "Side by Side is the ribbon's alone, as in Word for Mac");
 }
 
@@ -169,11 +169,21 @@ fn state_changes_keep_structure_and_language_and_keys_refresh_it() {
     assert!(chinese.find(QUIT).unwrap().label.contains("WordCraft"));
 }
 
-/// Quit, New, Open and Close from the menu ask about unsaved changes first, as from the ribbon;
-/// Quit then closes as the window's close button does.
+/// Quit and Close from the menu ask about unsaved changes first, as from the ribbon; Quit then
+/// closes as the window's close button does. New and Open leave the document alone: each opens a
+/// window of its own, as in Word.
 #[test]
 fn quit_new_and_open_keep_the_save_cancel_flow() {
-    for id in [QUIT, "file.new", "file.open", "file.close"] {
+    for id in ["file.new", "file.open"] {
+        let mut s = setup();
+        s.app.services.pick_open = Some(Box::new(|_| Some("/synthetic/chosen.docx".into())));
+        s.app.run("text.insert", json!({"text": "unsaved"})).unwrap();
+        click(&s.state, id);
+        s.frame(Default::default());
+        assert!(!matches!(s.app.dialog, Some(Dialog::SaveChanges { .. })), "{id}: nothing is at stake");
+        assert!(!s.app.quit_requested);
+    }
+    for id in [QUIT, "file.close"] {
         let mut s = setup();
         s.app.services.pick_open = Some(Box::new(|_| Some("/synthetic/chosen.docx".into())));
         s.app.run("text.insert", json!({"text": "unsaved"})).unwrap();
@@ -193,15 +203,18 @@ fn quit_new_and_open_keep_the_save_cancel_flow() {
     assert!(s.app.quit_requested);
 }
 
-/// With a window host, Quit is the host's: every window closes in turn ([`WindowRequest::Quit`]).
+/// Quit asks about every document with unsaved changes in turn, as ⌘Q does, and quits once
+/// none is left: here the one document's prompt, then the answer.
 #[test]
-fn quit_with_a_window_host_asks_the_host() {
+fn quit_asks_about_every_document() {
     let mut s = setup();
-    s.app.session.windows.host = true;
+    s.app.run("text.insert", json!({"text": "unsaved"})).unwrap();
     click(&s.state, QUIT);
     s.frame(Default::default());
     assert!(!s.app.quit_requested);
-    assert_eq!(s.app.window_requests, vec![WindowRequest::Quit]);
+    assert_eq!(s.app.dialog.as_ref().map(Dialog::name), Some("saveChanges"));
+    s.app.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
+    assert!(s.app.quit_requested);
 }
 
 #[test]
@@ -234,7 +247,7 @@ fn key_equivalent_has_one_press_before_its_real_release() {
     let mut raw = egui::RawInput { events: vec![release], ..Default::default() };
     raw_input(&mut s.menu, &mut s.app, &mut raw);
     assert!(matches!(raw.events.as_slice(), [egui::Event::Key { pressed: true, .. }, egui::Event::Key { pressed: false, .. }]));
-    s.app.raw_input_hook(&mut raw);
+    s.app.raw_input_hook(&s.ctx, &mut raw);
     let Setup { app, ctx, menu, .. } = &mut s;
     ctx.run_ui(raw, |ui| {
         run(menu, app, ui.ctx());
@@ -461,10 +474,10 @@ fn text_field_menu_paste_cut_and_undo_never_edit_the_document() {
             let mut raw = egui::RawInput { time: Some(time), ..Default::default() };
             let Setup { app, ctx, menu, .. } = s;
             raw_input(menu, app, &mut raw);
-            app.raw_input_hook(&mut raw);
+            app.raw_input_hook(ctx, &mut raw);
             let mut output = ctx.run_ui(raw, |ui| {
                 run(menu, app, ui.ctx());
-                ui.add(egui::TextEdit::singleline(&mut field).id(egui::Id::new("field"))).request_focus();
+                ui.add(egui::TextEdit::singleline(&mut field).id(egui::Id::unique("field"))).request_focus();
                 sync(menu, app, ui.ctx());
             });
             output.textures_delta.clear();

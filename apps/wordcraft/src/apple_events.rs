@@ -10,7 +10,7 @@
 //! that leaves winit's delegate alone, behind a safe main-thread API.
 
 use fmv_macos_events::{Event, Inbox, Registration};
-use wordcraft_ui_egui::windows::Host;
+use wordcraft_ui_egui::WordApp;
 
 /// Keeps the Apple-event handlers registered; hold it until the event loop returns.
 pub struct AppleEvents {
@@ -35,17 +35,30 @@ impl AppleEvents {
 }
 
 /// Open the documents and act on the quit requests that arrived since the last frame. A document
-/// opens like File › Open: in a window of its own, or the active window when that shows nothing
-/// yet (`Host::open_paths`); quitting closes every window, asking about unsaved changes.
-pub fn poll(inbox: &Inbox, ctx: &egui::Context) {
+/// opens like File › Open: beside the open ones, in place of an untouched blank one, or, when it
+/// is already open, by showing it. Quitting closes the window, which asks about every document
+/// with unsaved changes.
+pub fn poll(inbox: &Inbox, app: &mut WordApp, ctx: &egui::Context) {
     for e in inbox.drain() {
         match e {
             Event::Open(paths) => {
-                let paths: Vec<String> = paths.iter().filter_map(|p| p.to_str()).map(str::to_string).collect();
-                Host::with(|h| h.open_paths(paths, ctx));
+                for p in paths.iter().filter_map(|p| p.to_str()) {
+                    match app.open_file(p, None) {
+                        // Leave Backstage, as opening from the Open dialog does.
+                        Ok(_) => app.ui.backstage = false,
+                        Err(e) => {
+                            app.report_open_failure(p, &e);
+                            // Backstage hides the status bar, so leave it to show the error.
+                            app.ui.backstage = false;
+                        }
+                    }
+                }
             }
+            // Quitting asks about every document with unsaved changes, each in its window; the
+            // app closes once that's done (`quit_requested`).
             Event::Quit => {
-                Host::with(|h| h.request_quit(ctx));
+                app.quit();
+                ctx.request_repaint();
             }
         }
     }

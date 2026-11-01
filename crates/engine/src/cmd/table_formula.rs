@@ -23,7 +23,7 @@
 //! `!Zero Divide`, `!Syntax Error, )`, `!Undefined Bookmark, XYZ`, `!Missing Operator`,
 //! `!Unexpected End of Formula`, `!The Formula Not In Table` …
 
-use wordcraft_doc::field_format::{FieldNumFormat, Switch, UNKNOWN_SWITCH};
+use wordcraft_doc::field_format::{FieldNumFormat, NOT_REPRESENTABLE, Switch, UNKNOWN_SWITCH};
 use wordcraft_doc::locale_number::decimal_separator;
 use wordcraft_doc::table::{MAX_COLS, MAX_ROWS};
 use wordcraft_doc::{Cell, Table};
@@ -275,7 +275,9 @@ pub fn format_result(v: f64) -> String {
 
 /// The text a formula field shows: its result under its `\#` numeric picture when it has one (see
 /// [`format_picture`]) and its `\*` number format, otherwise as Word shows it (see the module
-/// note); a formula Word can't work out shows Word's error text.
+/// note), and then under its capitalization switches (`\* Upper`, `\* Lower`, `\* Caps`,
+/// `\* FirstCap`, in the order they appear); a formula Word can't work out shows Word's error
+/// text. Quoted text, such as a `\#` picture, is not a switch.
 pub fn evaluate_field(t: &Table, r: usize, c: usize, instr: &str) -> Result<String, CmdError> {
     evaluate_field_with(t, None, None, r, c, instr)
 }
@@ -289,11 +291,15 @@ pub fn evaluate_field_with(
     instr: &str,
 ) -> Result<String, CmdError> {
     let (formula, switch) = split_switch(instr);
+    // The switches with each quoted text (a picture) standing as one word: a `\*` inside a
+    // picture is the picture's text.
+    let unquoted: String =
+        switch.unwrap_or("").split('"').enumerate().map(|(i, part)| if i % 2 == 1 { "\u{1}" } else { part }).collect::<Vec<_>>().join("");
     // Word checks the switches before the formula: a picture after a number format, two
     // pictures, a picture with nothing after it and an unknown format each show their error.
     let mut seen_format = false;
     let mut pictures = 0;
-    let mut words = switch.unwrap_or("").split_whitespace().peekable();
+    let mut words = unquoted.split_whitespace().peekable();
     while let Some(w) = words.next() {
         match w {
             "\\#" => {
@@ -312,7 +318,7 @@ pub fn evaluate_field_with(
     if pictures > 1 {
         return Ok("Error! Too many picture switches defined.".into());
     }
-    let number_format = match FieldNumFormat::of_instr(instr) {
+    let number_format = match FieldNumFormat::of_instr(&unquoted) {
         Switch::Format(f) => Some(f),
         Switch::None => None,
         Switch::Unknown => return Ok(UNKNOWN_SWITCH.to_string()),
@@ -322,15 +328,25 @@ pub fn evaluate_field_with(
         Err(Fail::Word(e)) => return Ok(e.text()),
         Err(Fail::Hard(e)) => return Err(e),
     };
+    let cased = |text: String| wordcraft_layout::fields::apply_case_switch(&unquoted, text);
     if let Some(f) = number_format {
-        return Ok(f.format_value(value.v));
+        // DollarText writes the cents over 100 (`= 9.20 + 5.35 \* DollarText` fourteen and
+        // 55/100); a value it can't write shows the format's error.
+        if f == FieldNumFormat::DollarText
+            && value.v >= 0.0
+            && let Some(text) = wordcraft_layout::fields::dollar_text(value.v)
+        {
+            return Ok(cased(text));
+        }
+        let text = f.format_value(value.v);
+        return Ok(if text == NOT_REPRESENTABLE { text } else { cased(text) });
     }
     Ok(match switch.and_then(picture_of) {
         // A picture without a digit place shows as it is (`\# "abc"` abc, `\# ""` nothing).
-        Some(picture) if !picture.contains(['0', '#', 'x']) => picture,
-        Some(picture) => format_picture(value.v, &picture),
+        Some(picture) if !picture.contains(['0', '#', 'x']) => cased(picture),
+        Some(picture) => cased(format_picture(value.v, &picture)),
         None => match show(value, locale(default_lang)) {
-            Ok(text) => text,
+            Ok(text) => cased(text),
             Err(e) => e.text(),
         },
     })
@@ -887,6 +903,72 @@ enum Tok {
     Bad(String),
 }
 
+/// The number token at `chars[i]` (a digit or the locale's decimal sign) and where it ends: digits
+/// with the locale's thousands separators, decimals and a signed exponent, or a bad token for one
+/// Word doesn't read (`1e9`).
+fn number_token(chars: &[char], mut i: usize, loc: Locale) -> (Tok, usize) {
+    let start = i;
+    let mut digits = String::new();
+    let mut thousands = false;
+    while let Some(&c) = chars.get(i) {
+        if c.is_ascii_digit() {
+            digits.push(c);
+            i += 1;
+        } else if loc.groups.contains(&c) && (1..=3).all(|k| chars.get(i + k).is_some_and(|c| c.is_ascii_digit())) {
+            thousands = true;
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    let mut d = 0u8;
+    if chars.get(i) == Some(&loc.dec) {
+        i += 1;
+        while let Some(&c) = chars.get(i) {
+            if !c.is_ascii_digit() {
+                break;
+            }
+            digits.push(c);
+            d = d.saturating_add(1);
+            i += 1;
+        }
+    }
+    let mut exp = 0i32;
+    let mut bad = digits.is_empty();
+    if chars.get(i).is_some_and(|c| matches!(c, 'e' | 'E')) {
+        let sign = chars.get(i + 1).copied();
+        if matches!(sign, Some('+') | Some('-')) && chars.get(i + 2).is_some_and(|c| c.is_ascii_digit()) {
+            i += 2;
+            let mut e = String::new();
+            while let Some(&c) = chars.get(i) {
+                if !c.is_ascii_digit() {
+                    break;
+                }
+                e.push(c);
+                i += 1;
+            }
+            exp = e.parse::<i32>().unwrap_or(400).min(400);
+            if sign == Some('-') {
+                exp = -exp;
+            }
+            d = 0;
+        } else {
+            // `1e9`: Word reads no scientific notation without a sign.
+            while chars.get(i).is_some_and(|c| c.is_ascii_alphanumeric() || *c == loc.dec) {
+                i += 1;
+            }
+            bad = true;
+        }
+    }
+    let text: String = chars.get(start..i).unwrap_or_default().iter().collect::<String>().to_ascii_uppercase();
+    if bad {
+        return (Tok::Bad(text), i);
+    }
+    let digits: String = digits.chars().take(400).collect();
+    let v = format!("0{digits}").parse::<f64>().unwrap_or(0.0) / 10f64.powi(d as i32) * 10f64.powi(exp);
+    (Tok::Num { n: Num::with(v, d, Fmt { thousands, ..Fmt::default() }), text }, i)
+}
+
 fn tokenize(s: &str, loc: Locale) -> Vec<Tok> {
     let chars: Vec<char> = s.chars().collect();
     let mut out = Vec::new();
@@ -895,67 +977,9 @@ fn tokenize(s: &str, loc: Locale) -> Vec<Tok> {
         if ch.is_whitespace() {
             i += 1;
         } else if ch.is_ascii_digit() || ch == loc.dec {
-            let start = i;
-            let mut digits = String::new();
-            let mut thousands = false;
-            while let Some(&c) = chars.get(i) {
-                if c.is_ascii_digit() {
-                    digits.push(c);
-                    i += 1;
-                } else if loc.groups.contains(&c) && (1..=3).all(|k| chars.get(i + k).is_some_and(|c| c.is_ascii_digit())) {
-                    thousands = true;
-                    i += 1;
-                } else {
-                    break;
-                }
-            }
-            let mut d = 0u8;
-            if chars.get(i) == Some(&loc.dec) {
-                i += 1;
-                while let Some(&c) = chars.get(i) {
-                    if !c.is_ascii_digit() {
-                        break;
-                    }
-                    digits.push(c);
-                    d = d.saturating_add(1);
-                    i += 1;
-                }
-            }
-            let mut exp = 0i32;
-            let mut bad = digits.is_empty();
-            if chars.get(i).is_some_and(|c| matches!(c, 'e' | 'E')) {
-                let sign = chars.get(i + 1).copied();
-                if matches!(sign, Some('+') | Some('-')) && chars.get(i + 2).is_some_and(|c| c.is_ascii_digit()) {
-                    i += 2;
-                    let mut e = String::new();
-                    while let Some(&c) = chars.get(i) {
-                        if !c.is_ascii_digit() {
-                            break;
-                        }
-                        e.push(c);
-                        i += 1;
-                    }
-                    exp = e.parse::<i32>().unwrap_or(400).min(400);
-                    if sign == Some('-') {
-                        exp = -exp;
-                    }
-                    d = 0;
-                } else {
-                    // `1e9`: Word reads no scientific notation without a sign.
-                    while chars.get(i).is_some_and(|c| c.is_ascii_alphanumeric() || *c == loc.dec) {
-                        i += 1;
-                    }
-                    bad = true;
-                }
-            }
-            let text: String = chars.get(start..i).unwrap_or_default().iter().collect::<String>().to_ascii_uppercase();
-            if bad {
-                out.push(Tok::Bad(text));
-                continue;
-            }
-            let digits: String = digits.chars().take(400).collect();
-            let v = format!("0{digits}").parse::<f64>().unwrap_or(0.0) / 10f64.powi(d as i32) * 10f64.powi(exp);
-            out.push(Tok::Num { n: Num::with(v, d, Fmt { thousands, ..Fmt::default() }), text });
+            let (tok, end) = number_token(&chars, i, loc);
+            out.push(tok);
+            i = end;
         } else if ch.is_ascii_alphabetic() {
             let mut name = String::new();
             while let Some(&c) = chars.get(i) {
@@ -985,9 +1009,7 @@ fn tokenize(s: &str, loc: Locale) -> Vec<Tok> {
             out.push(Tok::Op(','));
             i += 1;
         } else if matches!(ch, '<' | '>' | '=') {
-            i += 1;
-            let next = chars.get(i).copied();
-            let (op, longer) = match (ch, next) {
+            let (op, longer) = match (ch, chars.get(i + 1).copied()) {
                 ('<', Some('=')) => ("<=", true),
                 ('<', Some('>')) => ("<>", true),
                 ('>', Some('=')) => (">=", true),
@@ -995,9 +1017,7 @@ fn tokenize(s: &str, loc: Locale) -> Vec<Tok> {
                 ('>', _) => (">", false),
                 _ => ("=", false),
             };
-            if longer {
-                i += 1;
-            }
+            i += if longer { 2 } else { 1 };
             out.push(Tok::Cmp(op));
         } else {
             out.push(Tok::Bad(ch.to_string()));
@@ -2544,44 +2564,56 @@ mod tests {
     #[test]
     fn table_references_as_word_for_mac() {
         let t = table(&[&["0", "5", "", ""], &["2", "x", "", ""], &["3", "", "", ""], &["", "", "", ""]]);
-        assert_eq!(shown(&t, 0, 2, "=B1/A1"), "!Zero Divide");
-        assert_eq!(shown(&t, 0, 3, "=SUM(ABOVE)"), "!Table Index Cannot be Zero");
-        assert_eq!(shown(&t, 0, 3, "=COUNT(ABOVE)"), "!Table Index Cannot be Zero");
-        assert_eq!(shown(&t, 0, 0, "=SUM(LEFT)"), "!Table Index Cannot be Zero");
-        assert_eq!(shown(&t, 1, 2, "=A99"), "!A99 Is Not In Table");
-        assert_eq!(shown(&t, 1, 2, "=E1"), "!E1 Is Not In Table");
-        assert_eq!(shown(&t, 1, 3, "=A1:A2"), "!Syntax Error, :");
-        assert_eq!(shown(&t, 2, 2, "=C1"), "0", "an empty cell is 0");
-        assert_eq!(shown(&t, 1, 2, "=B2"), "0", "a cell holding text is 0");
-        assert_eq!(shown(&t, 2, 2, "=SUM(ABOVE)"), "0", "nothing above holds a number");
-        assert_eq!(shown(&t, 3, 1, "=AVERAGE(B1:B3)"), "5", "only the number counts");
-        assert_eq!(shown(&t, 3, 0, "=COUNT(ABOVE)"), "3");
-        assert_eq!(shown(&t, 0, 2, "=DEFINED(A1)"), "1");
-        assert_eq!(shown(&t, 0, 2, "=DEFINED(B2)"), "1", "a text cell is in the table");
-        assert_eq!(shown(&t, 0, 2, "=DEFINED(A9)"), "0");
-        assert_eq!(shown(&t, 1, 2, "=DEFINED(ABOVE)"), "!Syntax Error, ,");
-        assert_eq!(shown(&t, 3, 1, "=SUM(ABOVE,1)"), "6", "the text and the blank are skipped up to the 5");
-        assert_eq!(shown(&t, 3, 0, "=SUM(1,ABOVE)"), "6");
+        for (r, c, f, want, why) in [
+            (0, 2, "=B1/A1", "!Zero Divide", ""),
+            (0, 3, "=SUM(ABOVE)", "!Table Index Cannot be Zero", ""),
+            (0, 3, "=COUNT(ABOVE)", "!Table Index Cannot be Zero", ""),
+            (0, 0, "=SUM(LEFT)", "!Table Index Cannot be Zero", ""),
+            (1, 2, "=A99", "!A99 Is Not In Table", ""),
+            (1, 2, "=E1", "!E1 Is Not In Table", ""),
+            (1, 3, "=A1:A2", "!Syntax Error, :", ""),
+            (2, 2, "=C1", "0", "an empty cell is 0"),
+            (1, 2, "=B2", "0", "a cell holding text is 0"),
+            (2, 2, "=SUM(ABOVE)", "0", "nothing above holds a number"),
+            (3, 1, "=AVERAGE(B1:B3)", "5", "only the number counts"),
+            (3, 0, "=COUNT(ABOVE)", "3", ""),
+            (0, 2, "=DEFINED(A1)", "1", ""),
+            (0, 2, "=DEFINED(B2)", "1", "a text cell is in the table"),
+            (0, 2, "=DEFINED(A9)", "0", ""),
+            (1, 2, "=DEFINED(ABOVE)", "!Syntax Error, ,", ""),
+            (3, 1, "=SUM(ABOVE,1)", "6", "the text and the blank are skipped up to the 5"),
+            (3, 0, "=SUM(1,ABOVE)", "6", ""),
+        ] {
+            assert_eq!(shown(&t, r, c, f), want, "{f}: {why}");
+        }
         let t = table(&[&["1", "2", "3"], &["4", "5", "6"], &["", "", ""], &["", "", ""], &["", "", ""], &["7", "8", "9"]]);
-        assert_eq!(shown(&t, 2, 0, "=SUM(A1:B2)"), "12");
-        assert_eq!(shown(&t, 2, 1, "=SUM(B1:C2)"), "16");
-        assert_eq!(shown(&t, 2, 2, "=SUM(A1:C1)"), "6");
-        assert_eq!(shown(&t, 3, 0, "=SUM(A1:A99)"), "12", "the range stops at the table's edge");
-        assert_eq!(shown(&t, 3, 1, "=SUM(A1:Z1)"), "6");
-        assert_eq!(shown(&t, 3, 2, "=SUM(C1:A1)"), "6", "either way round");
-        assert_eq!(shown(&t, 4, 0, "=SUM(B2:A1)"), "12");
-        assert_eq!(shown(&t, 4, 2, "=SUM(A1:B1,C1)"), "6");
-        assert_eq!(shown(&t, 4, 2, "=AVERAGE(A1:C2)"), "3.5");
-        assert_eq!(shown(&t, 4, 0, "=SUM(LEFT)"), "!Table Index Cannot be Zero");
-        assert_eq!(shown(&t, 4, 1, "=SUM(RIGHT)"), "0");
-        assert_eq!(shown(&t, 4, 2, "=SUM(BELOW)"), "9");
-        assert_eq!(shown(&t, 2, 2, "=A1:B2+1"), "!Syntax Error, :");
+        for (r, c, f, want, why) in [
+            (2, 0, "=SUM(A1:B2)", "12", ""),
+            (2, 1, "=SUM(B1:C2)", "16", ""),
+            (2, 2, "=SUM(A1:C1)", "6", ""),
+            (3, 0, "=SUM(A1:A99)", "12", "the range stops at the table's edge"),
+            (3, 1, "=SUM(A1:Z1)", "6", ""),
+            (3, 2, "=SUM(C1:A1)", "6", "either way round"),
+            (4, 0, "=SUM(B2:A1)", "12", ""),
+            (4, 2, "=SUM(A1:B1,C1)", "6", ""),
+            (4, 2, "=AVERAGE(A1:C2)", "3.5", ""),
+            (4, 0, "=SUM(LEFT)", "!Table Index Cannot be Zero", ""),
+            (4, 1, "=SUM(RIGHT)", "0", ""),
+            (4, 2, "=SUM(BELOW)", "9", ""),
+            (2, 2, "=A1:B2+1", "!Syntax Error, :", ""),
+        ] {
+            assert_eq!(shown(&t, r, c, f), want, "{f}: {why}");
+        }
         let t = table(&[&["x", "y"], &["", ""], &["", ""]]);
-        assert_eq!(shown(&t, 2, 0, "=MAX(ABOVE)"), "0");
-        assert_eq!(shown(&t, 2, 1, "=MIN(ABOVE)"), "0");
-        assert_eq!(shown(&t, 2, 0, "=AVERAGE(ABOVE)"), "0.0");
-        assert_eq!(shown(&t, 2, 0, "=COUNT(ABOVE)"), "0");
-        assert_eq!(shown(&t, 2, 0, "=PRODUCT(ABOVE)"), "0");
+        for (r, c, f, want, why) in [
+            (2, 0, "=MAX(ABOVE)", "0", ""),
+            (2, 1, "=MIN(ABOVE)", "0", ""),
+            (2, 0, "=AVERAGE(ABOVE)", "0.0", ""),
+            (2, 0, "=COUNT(ABOVE)", "0", ""),
+            (2, 0, "=PRODUCT(ABOVE)", "0", ""),
+        ] {
+            assert_eq!(shown(&t, r, c, f), want, "{f}: {why}");
+        }
     }
 
     #[test]
@@ -2709,6 +2741,49 @@ mod tests {
         assert_eq!(shown(&t, 1, 0, "=A1 \\* MERGEFORMAT \\# 0"), "Error! Picture switch must be first formatting switch.");
         assert_eq!(shown(&t, 1, 0, "=A1 \\# \"\""), "", "an empty picture shows nothing");
         assert_eq!(shown(&t, 1, 0, "=A1 \\* DBNum2"), "千二百三十五");
+    }
+
+    #[test]
+    fn a_format_switch_writes_the_result_as_text_and_sets_its_capitals() {
+        let t = table(&[&["790"], &["1.5"], &[""]]);
+        assert_eq!(split_switch("=A1 \\* Caps \\# 0"), ("=A1", Some("\\* Caps \\# 0")));
+        let shown = |f: &str| evaluate_field(&t, 2, 0, f).unwrap_or_else(|e| panic!("{f}: {e}"));
+        assert_eq!(shown("=A1 \\* CardText"), "seven hundred ninety");
+        assert_eq!(shown("=A1 \\* CardText \\* Caps"), "Seven Hundred Ninety");
+        assert_eq!(shown("=A1 \\* OrdText \\* FirstCap"), "Seven hundred ninetieth");
+        assert_eq!(shown("=A1 \\* roman"), "dccxc");
+        assert_eq!(shown("=A1 \\* roman \\* Upper"), "DCCXC");
+        assert_eq!(shown("=A1 \\* MERGEFORMAT"), "790", "a switch that formats nothing");
+        assert_eq!(shown("=A1 \\# \"#,##0.00\" \\* MERGEFORMAT"), "790.00");
+        // (A picture's `x` is a digit place, so the words here have none.)
+        assert_eq!(shown("=A1 \\# \"0 \\* Upper items\""), "790 \\* Upper items", "a switch inside the picture is text");
+        // Word for Mac rounds a fraction, half away from zero, and shows its error text for a
+        // value the format can't draw (a negative, past CardText's 999,999, roman's 32,767 or
+        // alphabetic's 780); see `FieldNumFormat::format_value`.
+        assert_eq!(shown("=A2 \\* CardText"), "two");
+        assert_eq!(shown("=A1-800 \\* CardText"), NOT_REPRESENTABLE);
+        assert_eq!(shown("=A1*1266 \\* CardText"), NOT_REPRESENTABLE);
+        assert_eq!(shown("=A1*1266 \\* OrdText \\* Upper"), NOT_REPRESENTABLE, "the error text keeps its case");
+        assert_eq!(shown("=A1*64 \\* roman"), NOT_REPRESENTABLE);
+        assert_eq!(shown("=A1 \\* alphabetic"), NOT_REPRESENTABLE);
+    }
+
+    #[test]
+    fn dollar_text_and_hex_switches_write_the_result() {
+        let t = table(&[&["9.20", "5.35"], &["458", "-1"], &["", ""]]);
+        let shown = |f: &str| evaluate_field(&t, 2, 0, f).unwrap_or_else(|e| panic!("{f}: {e}"));
+        assert_eq!(shown("= 9.20 + 5.35 \\* DollarText \\* Upper"), "FOURTEEN AND 55/100");
+        assert_eq!(shown("=A1+B1 \\* DollarText"), "fourteen and 55/100");
+        assert_eq!(shown("=A2 \\* DollarText \\* FirstCap"), "Four hundred fifty-eight and 00/100");
+        assert_eq!(shown("=0.999 \\* DollarText"), "one and 00/100");
+        assert_eq!(shown("=A2 \\* Hex"), "1CA");
+        assert_eq!(shown("=A2 \\* Hex \\* Lower"), "1ca");
+        assert_eq!(shown("=A2*0 \\* Hex"), "0");
+        assert_eq!(shown("=B2 \\* DollarText"), NOT_REPRESENTABLE, "a negative number");
+        assert_eq!(shown("=B2 \\* Hex"), NOT_REPRESENTABLE);
+        assert_eq!(shown("=A2/4 \\* Hex"), "73", "a fraction is rounded");
+        assert_eq!(shown("=A2*2200 \\* DollarText"), NOT_REPRESENTABLE, "a number past DollarText");
+        assert_eq!(shown("=A2 \\* ArabicDash"), "- 458 -");
     }
 
     #[test]

@@ -49,7 +49,7 @@ impl MacMenu {
             let mods = [NSEventModifierFlags::Command, NSEventModifierFlags::Control, NSEventModifierFlags::Option, NSEventModifierFlags::Shift]
                 .map(|m| flags.contains(m));
             let _ = tx.send(Chosen { id: e.id.0, key, mods });
-            // The root viewport's frame passes the event on to the window in use (`windows::Host`).
+            // The root viewport's frame takes the event in for the active window (`native_menu::raw_input`).
             repaint.request_repaint_of(egui::ViewportId::ROOT);
         }));
         Self { menu: None, entries: HashMap::new(), submenus: Vec::new(), rx, structure: 0 }

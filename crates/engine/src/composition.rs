@@ -160,6 +160,15 @@ impl Session {
         }
     }
 
+    /// Take the input method's provisional text out before command `id` runs, if it edits,
+    /// moves, selects, saves or replaces the document; queries (format.state for the ribbon, every
+    /// frame) leave it.
+    pub(crate) fn end_composition_for(&mut self, id: &str, mutates: bool) {
+        if self.composition.is_some() && (mutates || ["select.", "caret.", "file.", "edit.", "text.", "table."].iter().any(|p| id.starts_with(p))) {
+            self.clear_composition();
+        }
+    }
+
     fn remove_composition(&mut self, c: &Composition) {
         let _ = self.doc.delete_range(&c.start, &c.end);
         if let Some(frag) = &c.replaced {

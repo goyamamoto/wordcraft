@@ -8,9 +8,11 @@
 //! 67e4b8a499b55ef728b1da700005382c45e4677d; its key-equivalent ordering and modal/clipboard
 //! fixes are kept here. See NOTICE.
 //!
-//! The menu is one for the process while the app has a window per document (`windows::Host`):
-//! it shows the state of the window in use, its items run in that window, and the Window menu's
-//! list of documents is AppKit's own (the host registers the menu as the windows menu).
+//! The menu is one for the process while the app has a native window per document
+//! ([`crate::windows`]): it shows the state of the active window (the one focused last), its
+//! items run there, its key equivalents reach that window's viewport, and the Window menu's list
+//! of windows is AppKit's own (the backend registers the menu as the windows menu), titled as the
+//! windows are (`Name:1`, `Name:2` for two windows on one document).
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 
@@ -18,7 +20,7 @@ use egui::{Context, Key, Modifiers};
 use serde_json::{Value, json};
 use wordcraft_layout::ViewMode;
 
-use crate::{WordApp, i18n, widgets, windows::WindowRequest};
+use crate::{WordApp, i18n, widgets};
 
 /// Row ids of the app menu's own entries (not commands of the registry).
 pub const QUIT: &str = "app.quit";
@@ -282,8 +284,8 @@ pub fn menu_bar(app: &WordApp, ctx: &Context) -> MenuBar {
         Node::Item(it)
     };
     let submenu = |label: &str, children: Vec<Node>| Node::Submenu { label: tr(label), children };
-    // Quit asks about unsaved changes as the window's close button does (every window, with a
-    // window host) and never terminates through AppKit's own Quit, which would ask nothing.
+    // Quit asks about unsaved changes as ⌘Q does (every document, each in its window)
+    // and never terminates through AppKit's own Quit, which would ask nothing.
     let mut quit = item("file.close");
     quit.id = QUIT.into();
     quit.label = named("Quit {app}");
@@ -629,9 +631,22 @@ fn insert_press(raw: &mut egui::RawInput, event: egui::Event, key: Key) {
     raw.events.insert(at, event);
 }
 
-/// Before the window in use begins its frame: the menu's key equivalents become the key presses
-/// egui would have seen, clicks queue for [`run`].
+/// Before the root viewport begins its frame (a menu event wakes it): the menu's key
+/// equivalents become the key presses egui would have seen, clicks queue for [`run`]. The key
+/// presses go to the active window: into `raw` when that window draws in the root viewport, else
+/// to its own viewport's next pass ([`WordApp::send_menu_input`]).
 pub fn raw_input(menu: &mut NativeMenu, app: &mut WordApp, raw: &mut egui::RawInput) {
+    let ctx = menu.ctx.clone();
+    if app.control_input_is_roots(&ctx) {
+        take_events(menu, app, raw);
+        return;
+    }
+    let mut elsewhere = egui::RawInput::default();
+    take_events(menu, app, &mut elsewhere);
+    app.send_menu_input(&ctx, elsewhere.events);
+}
+
+fn take_events(menu: &mut NativeMenu, app: &mut WordApp, raw: &mut egui::RawInput) {
     menu.pull();
     let ctx = menu.ctx.clone();
     for event in std::mem::take(&mut menu.pending) {
@@ -728,15 +743,19 @@ pub fn run(menu: &mut NativeMenu, app: &mut WordApp, ctx: &Context) {
         let Some(it) = bar.find(&id).filter(|it| it.enabled && !it.native_text) else { continue };
         match id.as_str() {
             HIDE | HIDE_OTHERS | SHOW_ALL => menu.backend.system_action(&id),
-            MINIMIZE => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+            // The active window's, as the menu acts on it.
+            MINIMIZE => ctx.send_viewport_cmd_to(app.active_viewport(), egui::ViewportCommand::Minimized(true)),
             // Zoom toggles, as the Mac's does (winit zooms the window on macOS).
             ZOOM => {
-                let zoomed = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!zoomed));
+                let viewport = app.active_viewport();
+                let zoomed = ctx.input_for(viewport, |i| i.viewport().maximized.unwrap_or(false));
+                ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Maximized(!zoomed));
             }
-            // With a window host every window closes in turn, each asking about its changes;
-            // alone, the window asks and closes, as its close button does.
-            QUIT if app.session.windows.host => app.window_requests.push(WindowRequest::Quit),
+            // Every document with unsaved changes is asked about in its window in turn, as ⌘Q
+            // does; the host quits once they all may close.
+            QUIT => {
+                app.quit();
+            }
             _ => {
                 // Like choosing a ribbon/backstage action, return to the page when editing
                 // it. Otherwise New or Insert from the start screen appears to do nothing.

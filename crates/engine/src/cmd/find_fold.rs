@@ -273,48 +273,29 @@ mod tests {
     /// あいまい検索's classes, as Word matched them.
     #[test]
     fn fuzzy_classes_match_word() {
-        for t in ["ツ", "ッ", "ｯ", "っ", "つ"] {
-            assert!(has('っ', false, true, t), "{t}");
-        }
-        for t in ["は", "ハ", "ﾊ"] {
-            assert!(has('は', false, true, t), "{t}");
-        }
-        assert!(!has('は', false, true, "ば"));
-        assert!(!has('は', false, true, "ぱ"));
-        for t in ["ば", "バ", "ﾊﾞ", "ヴァ", "ヴぁ"] {
-            assert!(has('ば', false, true, t), "{t}");
-        }
-        assert!(has('ブ', false, true, "ヴ"));
-        assert!(has('ヴ', false, true, "ブ"));
-        for t in ["ヤ", "ャ", "や", "ゃ"] {
-            assert!(has('ゃ', false, true, t), "{t}");
-        }
-        for t in ["あ", "ぁ", "ア", "ァ", "ｱ"] {
-            assert!(has('ぁ', false, true, t), "{t}");
-        }
-        for t in ["ヱ", "ゑ", "え", "エ"] {
-            assert!(has('ヱ', false, true, t), "{t}");
-        }
-        for t in ["ゐ", "ヰ", "い", "イ"] {
-            assert!(has('い', false, true, t), "{t}");
-        }
-        for t in ["ヲ", "を", "ｦ"] {
-            assert!(has('ｦ', false, true, t), "{t}");
-        }
-        for t in ["か", "ｶ", "ヵ", "カ"] {
-            assert!(has('ヵ', false, true, t), "{t}");
-        }
-        for t in ["ヶ", "け", "ケ"] {
-            assert!(has('け', false, true, t), "{t}");
-        }
-        for t in ["々", "ゝ", "ゞ", "ヽ", "ヾ"] {
-            assert!(has('々', false, true, t), "{t}");
-        }
-        for t in ["ー", "－", "ｰ", "―", "‐", "-"] {
-            assert!(has('-', false, true, t), "{t}");
-        }
-        for t in ["–", "−", "—", "‒", "〜"] {
-            assert!(!has('-', false, true, t), "{t}");
+        // (the query's character, texts it matches, whether it does).
+        let cases: &[(char, &[&str], bool)] = &[
+            ('っ', &["ツ", "ッ", "ｯ", "っ", "つ"], true),
+            ('は', &["は", "ハ", "ﾊ"], true),
+            ('は', &["ば", "ぱ"], false),
+            ('ば', &["ば", "バ", "ﾊﾞ", "ヴァ", "ヴぁ"], true),
+            ('ブ', &["ヴ"], true),
+            ('ヴ', &["ブ"], true),
+            ('ゃ', &["ヤ", "ャ", "や", "ゃ"], true),
+            ('ぁ', &["あ", "ぁ", "ア", "ァ", "ｱ"], true),
+            ('ヱ', &["ヱ", "ゑ", "え", "エ"], true),
+            ('い', &["ゐ", "ヰ", "い", "イ"], true),
+            ('ｦ', &["ヲ", "を", "ｦ"], true),
+            ('ヵ', &["か", "ｶ", "ヵ", "カ"], true),
+            ('け', &["ヶ", "け", "ケ"], true),
+            ('々', &["々", "ゝ", "ゞ", "ヽ", "ヾ"], true),
+            ('-', &["ー", "－", "ｰ", "―", "‐", "-"], true),
+            ('-', &["–", "−", "—", "‒", "〜"], false),
+        ];
+        for &(c, texts, matches) in cases {
+            for t in texts {
+                assert_eq!(has(c, false, true, t), matches, "{c} {t}");
+            }
         }
         assert_eq!(class('〜', false, true), vec!["〜".to_string()]);
         assert_eq!(class('é', false, true), vec!["é".to_string()]);
