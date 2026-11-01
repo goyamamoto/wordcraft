@@ -92,7 +92,22 @@ pub struct Services {
     /// used while File › Options names none. File › New lists personal templates from it and Save
     /// as Word Template starts in it. `None` (web) hides personal templates.
     pub templates_dir: Option<std::path::PathBuf>,
+    /// macOS: the range of the text around the caret (UTF-16 code units of what
+    /// `ime_surrounding` reported) the input method asked to replace with the composition of the
+    /// `Preedit` just received, taken once (reconversion, 再変換: [`crate::ime`]). Asked when a
+    /// viewport's input carries a `Preedit`, whichever viewport the window draws in, and given to
+    /// the window drawn there (eframe's raw-input hook sees only the root viewport's input).
+    pub ime_replacement: Option<ImeReplacementFn>,
+    /// macOS: what the input method may read of the active window's document (the caret's
+    /// paragraph and the selection in it), told after each frame's drawing; `None` while the
+    /// page doesn't have the keyboard. The input method talks to the focused window, the active
+    /// one.
+    pub ime_surrounding: Option<Box<dyn Fn(Option<&crate::ime::ImeSurrounding>)>>,
 }
+
+/// [`Services::ime_replacement`]: shared with the per-viewport input hook, which runs outside the
+/// app's drawing.
+pub type ImeReplacementFn = std::sync::Arc<dyn Fn() -> Option<std::ops::Range<usize>> + Send + Sync>;
 
 /// Files delivered asynchronously.
 pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;

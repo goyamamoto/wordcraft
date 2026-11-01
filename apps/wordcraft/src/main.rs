@@ -121,12 +121,6 @@ impl eframe::App for App {
         // Keep this frame's native window state. `logic` must not read the last painted
         // `InputState` when a hidden Wayland tick reports no fresh inner rect.
         self.4 = RawWindowState::from_raw(raw);
-        // macOS: the committed text the input method asked to replace with this frame's
-        // composition (再変換), from the vendored winit (`wordcraft_ui_egui::ime`).
-        #[cfg(target_os = "macos")]
-        if raw.events.iter().any(|e| matches!(e, egui::Event::Ime(egui::ImeEvent::Preedit { .. }))) {
-            self.0.canvas.ime_replace = winit::platform::macos::take_ime_replacement_range();
-        }
         // The menu bar's key equivalents become the key presses they were, for the active window.
         #[cfg(target_os = "macos")]
         if let Some(menu) = &mut self.6 {
@@ -135,15 +129,13 @@ impl eframe::App for App {
         self.0.raw_input_hook(ctx, raw);
     }
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        // The input method reads the active window's text around its caret once the windows have
+        // drawn (`Services::ime_surrounding`).
         self.0.ui(ui);
-        // After the windows' frames: the menu bar shows the active window's state, and the input
-        // method may read the text around its caret.
+        // After the windows' frames: the menu bar shows the active window's state.
         #[cfg(target_os = "macos")]
-        {
-            if let Some(menu) = &mut self.6 {
-                wordcraft_ui_egui::native_menu::sync(menu, &self.0, ui.ctx());
-            }
-            report_ime_surrounding(&self.0);
+        if let Some(menu) = &mut self.6 {
+            wordcraft_ui_egui::native_menu::sync(menu, &self.0, ui.ctx());
         }
         self.3.show(frame);
     }
@@ -160,15 +152,22 @@ impl eframe::App for App {
 /// macOS: what the input method may read of the active document after the frame (the caret's
 /// paragraph and the selection), so it can reconvert committed text as it does in Word. The store
 /// in the vendored winit is one for the process; the input method talks to the focused window,
-/// the active one.
+/// the active one, whose state the app holds once its windows have drawn
+/// (`Services::ime_surrounding`).
 #[cfg(target_os = "macos")]
-fn report_ime_surrounding(app: &WordApp) {
+fn report_ime_surrounding(surrounding: Option<&wordcraft_ui_egui::ime::ImeSurrounding>) {
     winit::platform::macos::set_ime_surrounding_text(
-        app.canvas
-            .ime_surrounding
-            .as_ref()
-            .map(|s| winit::platform::macos::ImeSurroundingText { text: s.text.clone(), selected: s.selected.clone() }),
+        surrounding.map(|s| winit::platform::macos::ImeSurroundingText { text: s.text.clone(), selected: s.selected.clone() }),
     );
+}
+
+/// macOS: the committed text the input method asked to replace with the composition of the
+/// `Preedit` just received (再変換), from the vendored winit (`wordcraft_ui_egui::ime`). The app
+/// asks in the pass of whichever viewport got the `Preedit` and gives it to the window drawn
+/// there (`Services::ime_replacement`); eframe's raw-input hook would see the root's alone.
+#[cfg(target_os = "macos")]
+fn take_ime_replacement() -> Option<std::ops::Range<usize>> {
+    winit::platform::macos::take_ime_replacement_range()
 }
 
 /// Quit the way Command-Q does, on the next turn of the main queue.
@@ -323,6 +322,10 @@ fn services(file_dialog: file_dialogs::Hook, ctx: &egui::Context) -> Services {
         set_clipboard_html: Some(Box::new(clipboard::set_html)),
         clipboard_rtf: Some(Box::new(clipboard::rtf)),
         clipboard_formats: Some(Box::new(clipboard::formats)),
+        #[cfg(target_os = "macos")]
+        ime_replacement: Some(std::sync::Arc::new(take_ime_replacement)),
+        #[cfg(target_os = "macos")]
+        ime_surrounding: Some(Box::new(report_ime_surrounding)),
         ..Default::default()
     }
 }

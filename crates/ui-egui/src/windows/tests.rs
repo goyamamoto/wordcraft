@@ -783,3 +783,66 @@ fn menu_keys_reach_the_active_window() {
     let got = got.lock().unwrap().clone();
     assert!(got.contains(&press), "{got:?}");
 }
+
+/// Reconversion (再変換) in a window drawn in a viewport of its own: eframe's raw-input hook sees
+/// only the root viewport's input, so the range the input method names
+/// ([`crate::Services::ime_replacement`]) is taken in that viewport's own pass and the
+/// composition takes the place of the committed text it names there. The text the input method
+/// may read ([`crate::Services::ime_surrounding`]) is the active (focused) window's, whichever
+/// window drew last.
+#[test]
+fn reconversion_works_in_a_window_with_its_own_viewport() {
+    use std::sync::{Arc, Mutex};
+
+    use crate::ime::ImeSurrounding;
+
+    let ctx = backend();
+    let mut a = app("First");
+    let pending: Arc<Mutex<Option<std::ops::Range<usize>>>> = Arc::new(Mutex::new(None));
+    let source = pending.clone();
+    a.services.ime_replacement = Some(Arc::new(move || source.lock().ok().and_then(|mut r| r.take())));
+    let reported: std::rc::Rc<RefCell<Vec<Option<ImeSurrounding>>>> = Default::default();
+    let sink = reported.clone();
+    a.services.ime_surrounding = Some(Box::new(move |s| sink.borrow_mut().push(s.cloned())));
+    let last = || reported.borrow().last().cloned().flatten();
+    frames(&ctx, &mut a, 2);
+    a.run("file.new", json!({})).unwrap();
+    a.run("text.insert", json!({"text": "a日本語b"})).unwrap();
+    let child = a.active_viewport();
+    assert_ne!(child, ViewportId::ROOT, "the second window has a viewport of its own");
+    focus(child);
+    frames(&ctx, &mut a, 8);
+    assert!(a.canvas.focused, "the second window's page has the keyboard");
+    assert_eq!(DRAWN.with(|d| d.borrow().clone()), [child, ViewportId::ROOT], "the root's window draws last");
+    assert_eq!(last(), Some(ImeSurrounding { text: "a日本語b".into(), selected: 5..5 }), "the active window's paragraph and caret");
+
+    // The input method marks 日本語 (1..4) again with its reading: in this window's viewport.
+    *pending.lock().unwrap() = Some(1..4);
+    let preedit = |text: &str, range: Option<std::ops::Range<usize>>| {
+        egui::Event::Ime(egui::ImeEvent::Preedit { text: text.into(), active_range_chars: range })
+    };
+    EVENTS.with(|e| e.borrow_mut().entry(child).or_default().push(preedit("にほんご", Some(0..4))));
+    frames(&ctx, &mut a, 2);
+    assert!(pending.lock().unwrap().is_none(), "taken in the second window's pass");
+    assert_eq!(text(&a), "aにほんごb", "the composition takes the place of the committed text");
+    assert!(a.canvas.ime_replace.is_none());
+    assert_eq!(last().map(|s| s.text), Some("aにほんごb".into()), "the input method reads the composition in place");
+    EVENTS.with(|e| e.borrow_mut().entry(child).or_default().extend([preedit("", None), egui::Event::Ime(egui::ImeEvent::Commit("二本後".into()))]));
+    frames(&ctx, &mut a, 2);
+    assert_eq!(text(&a), "a二本後b", "reconverted");
+
+    // The root's window comes forward: the input method reads its document, and a range named
+    // there reaches it, not the other window.
+    focus(ViewportId::ROOT);
+    frames(&ctx, &mut a, 4);
+    assert_eq!(a.active_viewport(), ViewportId::ROOT);
+    assert_eq!(text(&a), "First");
+    assert_eq!(last(), Some(ImeSurrounding { text: "First".into(), selected: 5..5 }));
+    *pending.lock().unwrap() = Some(0..5);
+    EVENTS.with(|e| e.borrow_mut().entry(ViewportId::ROOT).or_default().push(preedit("ふぁ", None)));
+    frames(&ctx, &mut a, 2);
+    assert_eq!(text(&a), "ふぁ", "the root's window replaced its own text");
+    let other = a.windows.open.iter().find_map(|w| w.ui.as_ref());
+    assert!(other.is_some_and(|w| w.canvas.ime_replace.is_none()), "the other window got no range");
+    assert_eq!(last().map(|s| s.text), Some("ふぁ".into()));
+}
